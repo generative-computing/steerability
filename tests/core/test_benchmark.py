@@ -16,8 +16,10 @@ the loader classes used by `SteeringPipeline`); the benchmark, pipeline, and spe
 test are the package implementations.
 """
 import json
+from pathlib import Path
 from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
 
 from aisteer360.algorithms.core.specs import ControlSpec
@@ -118,8 +120,6 @@ class TestBenchmarkInitialization:
         assert isinstance(benchmark.num_trials, int)
 
     def test_save_dir_coerced_to_path(self, sample_evaluation_data, tmp_path):
-        from pathlib import Path
-
         benchmark = Benchmark(
             use_case=_make_use_case(sample_evaluation_data),
             base_model_name_or_path="test-model",
@@ -438,6 +438,32 @@ class TestBenchmarkSpecs:
 # Checkpointing Tests
 class TestBenchmarkCheckpointing:
     """Tests for incremental checkpointing and resume."""
+
+    def test_checkpoint_converts_nested_numpy_objects(self, sample_evaluation_data, tmp_path):
+        benchmark = Benchmark(
+            use_case=_make_use_case(sample_evaluation_data),
+            base_model_name_or_path="test-model",
+            steering_pipelines={"baseline": []},
+            save_dir=tmp_path,
+        )
+        profiles = {
+            "baseline": [
+                {
+                    "params": np.array(
+                        [Path("models/base"), {"layers": {1, 2}}],
+                        dtype=object,
+                    )
+                }
+            ]
+        }
+
+        benchmark._save_checkpoint(profiles)
+
+        with (tmp_path / "checkpoint.json").open(encoding="utf-8") as handle:
+            saved = json.load(handle)
+        saved_params = saved["baseline"][0]["params"]
+        assert saved_params[0] == "models/base"
+        assert sorted(saved_params[1]["layers"]) == [1, 2]
 
     def test_checkpoint_written(self, sample_evaluation_data, mock_base_model, tmp_path):
         use_case = _make_use_case(sample_evaluation_data)

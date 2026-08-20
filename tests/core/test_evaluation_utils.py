@@ -7,6 +7,9 @@ Tests cover:
 - Visualization utilities (plot functions)
 """
 
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -149,8 +152,6 @@ class TestToJsonable:
 
     def test_path_to_string(self):
         """Test that Path objects become strings."""
-        from pathlib import Path
-
         result = to_jsonable(Path("/some/path"))
         assert result == "/some/path"
         assert isinstance(result, str)
@@ -167,6 +168,20 @@ class TestToJsonable:
         result = to_jsonable(arr)
         assert result == [1, 2, 3]
         assert isinstance(result, list)
+
+    def test_numpy_object_array_recurses(self):
+        """Test nested objects in numpy arrays become JSON-safe."""
+        arr = np.array(
+            [Path("models/base"), {"layers": {1, 2}}],
+            dtype=object,
+        )
+
+        result = to_jsonable(arr)
+        encoded = json.dumps(result)
+
+        assert result[0] == "models/base"
+        assert sorted(result[1]["layers"]) == [1, 2]
+        assert json.loads(encoded) == result
 
     def test_nested_dict(self):
         """Test nested dict conversion."""

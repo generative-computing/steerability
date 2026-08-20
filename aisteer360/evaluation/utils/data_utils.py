@@ -13,7 +13,7 @@ def to_jsonable(obj: Any) -> Any:
     - Path: str(path)
     - mappings: recurse, stringify keys
     - sequences: recurse on elements
-    - numpy scalars/arrays: convert to Python / list
+    - numpy scalars/arrays: convert to Python / list, then recurse
     - everything else: repr(obj)
     """
     from pathlib import Path as _Path
@@ -28,7 +28,7 @@ def to_jsonable(obj: Any) -> Any:
         return obj.item()
 
     if isinstance(obj, np.ndarray):
-        return obj.tolist()
+        return to_jsonable(obj.tolist())
 
     if isinstance(obj, Mapping):
         return {str(k): to_jsonable(v) for k, v in obj.items()}
@@ -38,7 +38,7 @@ def to_jsonable(obj: Any) -> Any:
 
     if callable(obj):
         return f"callable:{getattr(obj, '__qualname__', type(obj).__name__)}"
-    
+
     return repr(obj)
 
 
