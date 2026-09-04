@@ -1,4 +1,4 @@
-"""Probe-driven steering tests: ProbeSumGate semantics, adapter equivalence, and the guards.
+"""Probe-driven steering tests: `Probe.as_gate` semantics, adapter equivalence, and the guards.
 
 Runs hub-free on a tiny randomly-initialized Llama. Probes are hand-built with fixed weights;
 biases derived from a preliminary `ProbeSet.read` split a batch into open and closed rows, so
@@ -11,14 +11,15 @@ from aisteer360.algorithms.core.internals.fingerprint import model_fingerprint
 from aisteer360.algorithms.core.internals.probes.probe import Probe
 from aisteer360.algorithms.core.internals.probes.probe_set import ProbeSet
 from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.state_control._common.gates import MultiKeyThresholdGate
-from aisteer360.algorithms.state_control._common.gates.cache_once import CacheOnceGate
-from aisteer360.algorithms.state_control._common.condition_scorers import (
-    ProbeContributionScorer,
-    probe_condition,
-)
-from aisteer360.algorithms.state_control._common.gates.probe_sum import ProbeSumGate
 from aisteer360.algorithms.state_control.activation_adapter.control import ActivationAdapter
+from aisteer360.algorithms.state_control.common.gating import (
+    AffineReadout,
+    CallableReadout,
+    Evidence,
+    Gate,
+    PerKeyThreshold,
+    SumThreshold,
+)
 from tests.utils.runtime_helpers import RecordingTransform
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
@@ -55,9 +56,7 @@ def _model_and_tokenizer(seed: int = 0):
 
 
 def _steered_pipeline(model, tokenizer, controls) -> SteeringPipeline:
-    pipeline = SteeringPipeline(controls=controls, lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=controls, model=model, tokenizer=tokenizer)
     pipeline.steer()
     return pipeline
 
@@ -72,87 +71,25 @@ def _splitting_probe(model, layer_ids, seed=7):
     return _probe(layer_ids, bias=-midpoint, seed=seed)
 
 
-class TestProbeSumGate:
-    def _gate(self, layer_ids=(1, 2), bias=-1.0):
-        return ProbeSumGate(_probe(layer_ids, bias=bias))
-
-    def test_not_ready_until_every_layer_reports(self):
-        gate = self._gate()
-        gate.reset(2)
-        assert not gate.is_ready()
-        gate.update(torch.tensor([0.6, 0.1]), key=1)
-        assert not gate.is_ready()
-        gate.update(torch.tensor([0.5, 0.2]), key=2)
-        assert gate.is_ready()
-
-    def test_open_rows_sums_contributions_and_applies_bias(self):
-        gate = self._gate(bias=-1.0)
-        gate.reset(2)
-        gate.update(torch.tensor([0.6, 0.1]), key=1)
-        gate.update(torch.tensor([0.5, 0.2]), key=2)
-        # row 0: 1.1 - 1.0 >= 0 opens; row 1: 0.3 - 1.0 stays closed
-        assert gate.open_rows().tolist() == [True, False]
-
-    def test_all_closed_before_any_evidence(self):
-        gate = self._gate()
-        gate.reset(3)
-        assert gate.open_rows().tolist() == [False, False, False]
-
-    def test_ties_open(self):
-        gate = self._gate(layer_ids=(1,), bias=-1.0)
-        gate.reset(1)
-        gate.update(torch.tensor([1.0]), key=1)
-        assert gate.open_rows().tolist() == [True]
-
-    def test_reset_clears_evidence(self):
-        gate = self._gate()
-        gate.reset(1)
-        gate.update(torch.tensor([5.0]), key=1)
-        gate.update(torch.tensor([5.0]), key=2)
-        assert gate.is_ready()
-        gate.reset(2)
-        assert not gate.is_ready()
-        assert gate.open_rows().tolist() == [False, False]
-
-    def test_scalar_score_allowed_single_row_only(self):
-        gate = self._gate(layer_ids=(1,), bias=0.0)
-        gate.reset(1)
-        gate.update(0.5, key=1)
-        assert gate.open_rows().tolist() == [True]
-        gate.reset(2)
-        with pytest.raises(ValueError, match="scalar"):
-            gate.update(0.5, key=1)
-
-
-class TestProbeCondition:
-    def test_returns_adapter_ports(self):
+class TestAsGate:
+    def test_returns_gate_with_probe_evidence_and_bias(self):
         probe = _probe([1, 2], bias=0.5)
-        ports = probe_condition(probe)
-        assert set(ports) == {"score_fn", "gate", "condition_layer_ids"}
-        assert isinstance(ports["score_fn"], ProbeContributionScorer)
-        assert isinstance(ports["gate"], CacheOnceGate)
-        assert isinstance(ports["gate"].inner, ProbeSumGate)
-        assert ports["condition_layer_ids"] == [1, 2]
+        gate = probe.as_gate()
+        assert isinstance(gate, Gate)
+        assert gate.evidence.layer_ids == (1, 2)
+        assert gate.evidence.pooling == "mean"
+        assert isinstance(gate.evidence.readout, AffineReadout)
+        assert isinstance(gate.rule, SumThreshold)
+        assert gate.rule.bias == 0.5
 
-    def test_cache_once_false_returns_bare_gate(self):
-        ports = probe_condition(_probe([1]), cache_once=False)
-        assert isinstance(ports["gate"], ProbeSumGate)
-
-    def test_allow_model_mismatch_disarms_scorer_fingerprint(self):
+    def test_allow_model_mismatch_disarms_readout_fingerprint(self):
         probe = _probe([1], meta={"model_fingerprint": "abcd"})
-        assert probe_condition(probe)["score_fn"].model_fingerprint == "abcd"
-        assert probe_condition(probe, allow_model_mismatch=True)["score_fn"].model_fingerprint is None
+        assert probe.as_gate().evidence.readout.model_fingerprint == "abcd"
+        assert probe.as_gate(allow_model_mismatch=True).evidence.readout.model_fingerprint is None
 
-    def test_as_condition_is_sugar_over_probe_condition(self):
-        probe = _probe([1, 2])
-        ports = probe.as_condition(cache_once=False)
-        assert isinstance(ports["score_fn"], ProbeContributionScorer)
-        assert isinstance(ports["gate"], ProbeSumGate)
-        assert ports["condition_layer_ids"] == [1, 2]
-
-    def test_scorer_zero_for_absent_layer(self):
-        scorer = ProbeContributionScorer(_probe([1]))
-        assert scorer(torch.randn(2, 3, HIDDEN), layer_id=3).tolist() == [0.0, 0.0]
+    def test_readout_zero_for_absent_layer(self):
+        gate = _probe([1]).as_gate()
+        assert gate.evidence.readout(torch.randn(2, HIDDEN), 3).tolist() == [0.0, 0.0]
 
 
 class TestAdapterEquivalence:
@@ -170,36 +107,38 @@ class TestAdapterEquivalence:
             transform=RecordingTransform(value=0.5),
             layer_ids=[3],
             hook_point="layer_input",
-            **probe_condition(probe),
+            gate=probe.as_gate(),
         )
         pipeline = _steered_pipeline(model, tokenizer, [adapter])
         pipeline.generate(input_ids=PROMPTS, max_new_tokens=2, **GEN_KWARGS)
 
         assert adapter._gate.open_rows().tolist() == expected.tolist()
 
-    def test_cache_once_scores_prompt_once_and_freezes(self):
+    def test_prompt_scored_once_and_decision_freezes(self):
         model, tokenizer = _model_and_tokenizer()
         probe = _probe([1], bias=1e9)  # always open
 
-        ports = probe_condition(probe)
         calls: list[tuple] = []
-        inner_scorer = ports["score_fn"]
+        inner_readout = probe.as_gate().evidence.readout
 
-        class _SpyScorer:
-            location = inner_scorer.location
-            model_fingerprint = inner_scorer.model_fingerprint
+        class _SpyReadout:
+            wire_kind = None
+            location = inner_readout.location
+            model_fingerprint = inner_readout.model_fingerprint
 
-            def __call__(self, hidden, layer_id, *, prompt_mask=None):
-                calls.append(tuple(hidden.shape))
-                return inner_scorer(hidden, layer_id, prompt_mask=prompt_mask)
+            def __call__(self, pooled, layer_id):
+                calls.append(tuple(pooled.shape))
+                return inner_readout(pooled, layer_id)
 
+            def export(self, layer_ids):
+                return None
+
+        gate = Gate(Evidence((1,), _SpyReadout()), SumThreshold(bias=probe.bias))
         adapter = ActivationAdapter(
             transform=RecordingTransform(value=0.5),
             layer_ids=[3],
             hook_point="layer_input",
-            score_fn=_SpyScorer(),
-            gate=ports["gate"],
-            condition_layer_ids=ports["condition_layer_ids"],
+            gate=gate,
         )
         pipeline = _steered_pipeline(model, tokenizer, [adapter])
         pipeline.generate(input_ids=PROMPTS[:1], max_new_tokens=4, **GEN_KWARGS)
@@ -217,7 +156,7 @@ class TestLocationGuard:
         adapter = ActivationAdapter(
             transform=RecordingTransform(),
             layer_ids=[3],
-            **probe_condition(_probe([1])),  # probe location "layer_input"; default hook_point "layer_output"
+            gate=_probe([1]).as_gate(),  # probe location "layer_input"; default hook_point "layer_output"
         )
         with pytest.raises(ValueError, match="expects features at 'layer_input'.*hooks 'layer_output'"):
             adapter.steer(model, tokenizer)
@@ -232,7 +171,7 @@ class TestLocationGuard:
             transform=RecordingTransform(),
             layer_ids=[3],
             hook_point="layer_input",
-            **probe_condition(probe),
+            gate=probe.as_gate(),
         )
         with pytest.raises(ValueError, match="expects features at 'layer_output'.*hooks 'layer_input'"):
             adapter.steer(model, tokenizer)
@@ -243,7 +182,7 @@ class TestLocationGuard:
             transform=RecordingTransform(),
             layer_ids=[3],
             hook_point="layer_input",
-            **probe_condition(_probe([1])),
+            gate=_probe([1]).as_gate(),
         )
         adapter.steer(model, tokenizer)
 
@@ -258,7 +197,7 @@ class TestFingerprintGuard:
             transform=RecordingTransform(),
             layer_ids=[3],
             hook_point="layer_input",
-            **probe_condition(probe),
+            gate=probe.as_gate(),
         )
         with pytest.raises(ValueError, match="different model"):
             adapter.steer(model_b, tokenizer)
@@ -267,7 +206,7 @@ class TestFingerprintGuard:
             transform=RecordingTransform(),
             layer_ids=[3],
             hook_point="layer_input",
-            **probe_condition(probe, allow_model_mismatch=True),
+            gate=probe.as_gate(allow_model_mismatch=True),
         )
         disarmed.steer(model_b, tokenizer)
 
@@ -278,7 +217,7 @@ class TestFingerprintGuard:
             transform=RecordingTransform(),
             layer_ids=[3],
             hook_point="layer_input",
-            **probe_condition(probe),
+            gate=probe.as_gate(),
         )
         adapter.steer(model, tokenizer)
 
@@ -289,23 +228,21 @@ class TestFingerprintGuard:
             transform=RecordingTransform(),
             layer_ids=[3],
             hook_point="layer_input",
-            **probe_condition(_probe([1])),
+            gate=_probe([1]).as_gate(),
         )
         adapter.steer(model_b, tokenizer)
 
 
-class TestLegacyScorers:
-    def test_scorer_without_optional_attributes_passes_steer(self):
+class TestCallableReadoutGate:
+    def test_readout_without_validation_metadata_passes_steer(self):
         model, tokenizer = _model_and_tokenizer()
-
-        def scorer(hidden, layer_id, *, prompt_mask=None):
-            return torch.zeros(hidden.size(0))
-
+        gate = Gate(
+            Evidence((1,), CallableReadout(lambda pooled, layer_id: torch.zeros(pooled.size(0)))),
+            PerKeyThreshold(threshold=0.5, comparator="ge"),
+        )
         adapter = ActivationAdapter(
             transform=RecordingTransform(),
             layer_ids=[3],
-            gate=MultiKeyThresholdGate(threshold=0.5, comparator="larger", expected_keys={1}),
-            condition_layer_ids=[1],
-            score_fn=scorer,
+            gate=gate,
         )
         adapter.steer(model, tokenizer)

@@ -8,6 +8,7 @@ from typing import Any
 
 from aisteer360.evaluation.use_cases.base import UseCase
 from aisteer360.evaluation.utils.generation_utils import (
+    DEFAULT_EVAL_BATCH_SIZE,
     batch_retry_generate,
     log_truncation_count,
     output_record_fields,
@@ -69,7 +70,8 @@ class CommonsenseMCQA(UseCase):
         model_or_pipeline,
         tokenizer,
         gen_kwargs: dict | None = None,
-        runtime_overrides: dict[tuple[str, str], str] | None = None,
+        runtime_overrides: dict[str, dict[str, Any]] | None = None,
+        batch_size: int = DEFAULT_EVAL_BATCH_SIZE,
         **kwargs
     ) -> list[dict[str, Any]]:
         """Generates model responses for multiple-choice questions with shuffled answer orders.
@@ -82,8 +84,12 @@ class CommonsenseMCQA(UseCase):
             model_or_pipeline: Either a HuggingFace model or SteeringPipeline instance to use for generation.
             tokenizer: Tokenizer for encoding/decoding text.
             gen_kwargs: Optional generation parameters.
-            runtime_overrides: Optional runtime parameter overrides for steering controls, structured as {(pipeline_name, param_name): value}.
-            kwargs: Optional keyword arguments.
+            runtime_overrides: Optional runtime parameter overrides for steering controls, keyed by control class name
+                as ``{control_class_name: {variable: column_name}}``; each column resolves against the prompt rows.
+            batch_size: Generation batch size.
+            kwargs: Optional keyword arguments. A `trial_seed` value seeds a private
+                `random.Random` for choice shuffling, so a trial's answer orderings are
+                reproducible; without it, shuffling uses the module-global `random`.
 
         Returns:
             List of generation dictionaries, each containing:
@@ -92,6 +98,8 @@ class CommonsenseMCQA(UseCase):
                 - "prompt": Full prompt text sent to the model
                 - "question_id": Identifier from the original evaluation data
                 - "reference_answer": Correct letter choice for this shuffled ordering
+                - "thinking": Reasoning segment split from the continuation, or None if no think tag
+                    is present. This constructed key shadows any same-named instance column.
 
         Note:
 
@@ -102,12 +110,13 @@ class CommonsenseMCQA(UseCase):
             logger.warning("No evaluation data provided.")
             return []
         gen_kwargs = dict(gen_kwargs or {})
-        batch_size: int = int(kwargs["batch_size"])
 
-        # form prompt data
+        trial_seed = kwargs.get("trial_seed")
+        rng = random.Random(trial_seed) if trial_seed is not None else random
+
+        # form prompt data; each shuffled copy inherits its instance's columns
         prompt_data = []
         for instance in self.evaluation_data:
-            data_id = instance['id']
             question = instance['question']
             answer = instance['answer']
             choices = instance['choices']
@@ -119,31 +128,29 @@ class CommonsenseMCQA(UseCase):
 
                 # shuffle
                 choice_order = list(range(len(choices)))
-                random.shuffle(choice_order)
+                rng.shuffle(choice_order)
                 for i, old_idx in enumerate(choice_order):
                     lines.append(f"{_LETTERS[i]}. {choices[old_idx]}")
 
                 lines += ["\nPlease only print the letter corresponding to your choice."]
                 lines += ["\nAnswer:"]
 
-                prompt_data.append(
-                    {
-                        "id": data_id,
-                        "prompt": "\n".join(lines),
-                        "reference_answer": _LETTERS[choice_order.index(choices.index(answer))]
-                    }
-                )
+                prompt_data.append({
+                    **instance,
+                    "prompt": "\n".join(lines),
+                    "reference_answer": _LETTERS[choice_order.index(choices.index(answer))],
+                })
 
         # batch template/generate/decode
-        choices, _, outputs = batch_retry_generate(
+        choices, _, outputs, thinking = batch_retry_generate(
             prompt_data=prompt_data,
             model_or_pipeline=model_or_pipeline,
             tokenizer=tokenizer,
             parse_fn=self._parse_letter,
             gen_kwargs=gen_kwargs,
             runtime_overrides=runtime_overrides,
-            evaluation_data=self.evaluation_data,
             return_outputs=True,
+            return_thinking=True,
             batch_size=batch_size
         )
 
@@ -156,9 +163,10 @@ class CommonsenseMCQA(UseCase):
                 "prompt": prompt_dict["prompt"],
                 "question_id": prompt_dict["id"],
                 "reference_answer": prompt_dict["reference_answer"],
+                "thinking": think,
                 **output_record_fields(output, tokenizer),
             }
-            for prompt_dict, choice, output in zip(prompt_data, choices, outputs)
+            for prompt_dict, choice, output, think in zip(prompt_data, choices, outputs, thinking)
         ]
 
         return generations

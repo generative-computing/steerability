@@ -9,14 +9,8 @@ import os
 
 import pytest
 
-from aisteer360.algorithms.input_control.prewrite.utils.reward import (
-    _completion_text,
-    make_metric_reward_func,
-)
-from aisteer360.algorithms.structural_control.wrappers.trl.grpotrainer import (
-    GRPO,
-    GRPOArgs,
-)
+from aisteer360.algorithms.input_control.prewrite.utils.reward import _completion_text, make_metric_reward_func
+from aisteer360.algorithms.structural_control.wrappers.trl.grpotrainer import GRPO, GRPOArgs
 
 
 def _reward_stub(prompts, completions, **kwargs):

@@ -5,12 +5,10 @@ from peft import LoraConfig, PeftType
 from transformers import PreTrainedModel, PreTrainedTokenizer
 from trl import GRPOConfig, GRPOTrainer
 
-from aisteer360.utils.tokenization import ensure_pad_token
 from aisteer360.algorithms.structural_control.base import StructuralControl
 from aisteer360.algorithms.structural_control.wrappers.trl.base_mixin import TRLMixin
-from aisteer360.algorithms.structural_control.wrappers.trl.utils.prompt_schema import (
-    standardize_prompt_dataset,
-)
+from aisteer360.algorithms.structural_control.wrappers.trl.utils.prompt_schema import standardize_prompt_dataset
+from aisteer360.utils.tokenization import ensure_pad_token
 
 
 class GRPOTrainerMixin(TRLMixin, StructuralControl):
@@ -34,9 +32,8 @@ class GRPOTrainerMixin(TRLMixin, StructuralControl):
         tokenizer: PreTrainedTokenizer | None = None,
         **_,
     ) -> torch.nn.Module:
-        self.model = model
         self.tokenizer = tokenizer or (getattr(model, "tokenizer", None) if model is not None else None)
-        self._resolve_model_tokenizer(self.model, self.tokenizer)
+        model, self.tokenizer = self._resolve_model_tokenizer(model, self.tokenizer)
         self.tokenizer = ensure_pad_token(self.tokenizer)
 
         if self.reward_funcs is None:
@@ -58,7 +55,7 @@ class GRPOTrainerMixin(TRLMixin, StructuralControl):
 
         if train_dataset is not None:
             trainer = GRPOTrainer(
-                model=self.model,
+                model=model,
                 reward_funcs=reward_funcs,
                 args=training_config,
                 train_dataset=train_dataset,
@@ -70,8 +67,8 @@ class GRPOTrainerMixin(TRLMixin, StructuralControl):
 
             # recover the trained policy so it can be used for generation (GRPO has no .policy wrapper)
             trained_model = trainer.accelerator.unwrap_model(trainer.model)
-            self.model = getattr(trained_model, "policy", trained_model)
+            model = getattr(trained_model, "policy", trained_model)
             self._maybe_save_trained_artifacts(trainer)
-            self._maybe_merge_lora_in_place()
+            model = self._maybe_merge_lora_in_place(model)
 
-        return self._post_train_freeze()
+        return self._post_train_freeze(model)

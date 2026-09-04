@@ -5,19 +5,16 @@ import warnings
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
 
-import torch
-
 from aisteer360.algorithms.core.base_args import BaseArgs
-from aisteer360.algorithms.state_control._common.gates import AlwaysOpenGate
-from aisteer360.algorithms.state_control._common.gates.base import BaseGate
-from aisteer360.algorithms.state_control._common.selectors.base import BaseSelector
-from aisteer360.algorithms.state_control._common.token_scope import TokenScope
-from aisteer360.algorithms.state_control._common.transforms.base import BaseTransform
-from aisteer360.algorithms.state_control._common.transforms.context import TransformContext
+from aisteer360.algorithms.state_control.common.gating import Gate, GateSource
+from aisteer360.algorithms.state_control.common.selectors.base import BaseSelector
+from aisteer360.algorithms.state_control.common.token_scope import ScopeKind
+from aisteer360.algorithms.state_control.common.transforms.base import BaseTransform
+from aisteer360.algorithms.state_control.common.transforms.context import TransformContext
 
 _ARTIFACT_KWARG_HINTS = {
     "steering_vector": "pass it to the transform, e.g. AdditiveTransform(sv, strength=...) "
-                       "or DirectionalAblationTransform(sv, alpha=...)",
+                       "or ProjectionTransform(sv, alpha=...)",
     "data": "wrap it in a source on the transform: AdditiveTransform(ContrastiveFit(data=...), ...)",
     "train_spec": "its fields are ContrastiveFit kwargs "
                   "(method / accumulate / batch_size / prompt_format / location)",
@@ -33,14 +30,15 @@ class ActivationAdapterArgs(BaseArgs):
     """Arguments for `ActivationAdapter`.
 
     The adapter is the single-behavior atom for activation steering: one transform (which carries
-    its own artifact), one selector, one gate, one token scope. It exposes the `_common` component
+    its own artifact), one selector, one gate, one token scope. It exposes the `common` component
     families as constructor slots so a recipe can be assembled without writing a new control class.
 
     The transform is the sole artifact carrier. It holds a concrete `SteeringVector`/directions
     mapping, or an `ArtifactSource` (e.g. `ContrastiveFit(data=...)`) resolved at `steer()` time.
     Artifact kwargs passed to the adapter (`steering_vector`, `data`, `train_spec`, `estimator`,
     `estimator_kwargs`, `strength`, `normalize_vector`) raise a `TypeError` naming the
-    transform-based equivalent.
+    transform-based equivalent. The gate is likewise self-describing: it carries its own evidence
+    (condition layers, pooling, readout) and rule.
 
     Attributes:
         transform: A `BaseTransform` instance (bound, or source-carrying and bound at `steer()`), or
@@ -49,16 +47,11 @@ class ActivationAdapterArgs(BaseArgs):
             `layer_selector` must be supplied.
         layer_selector: A `BaseSelector` resolving the behavior layer(s) from `num_layers`.
         hook_point: `"layer_output"` (forward hooks) or `"layer_input"` (pre-hooks).
-        gate: A `BaseGate`. A stateful gate requires the condition path (or `gate_driven_externally`);
-            None defaults to always-open.
-        gate_driven_externally: Follower mode. Set True when another control drives this (shared) gate
-            instance; suppresses the stateful-gate condition-path requirement for this adapter.
-        condition_layer_ids: Layers to score for the gate (requires `score_fn` and a stateful `gate`).
-        score_fn: Per-row condition scorer with signature
-            `(hidden [B, T, H], layer_id, *, prompt_mask [B, T] | None) -> Tensor[B] | float`
-            (see `condition_scorers.ConditionScorer`). Must return one score per row for batched
-            generation; a float is accepted only for single-prompt calls. `prompt_mask` is the
-            pad-aware prompt attention mask, supplied on the prefill pass only.
+        gate: A `Gate` (evidence plus rule), a `GateSource` resolved at `steer()` time, or None
+            for unconditional application.
+        gate_driven_externally: Follower mode. Set True when another control drives this (shared)
+            `Gate` instance; this adapter then builds no condition hooks and skips the readout
+            compatibility checks, reading only the shared decision.
         token_scope: Which positions to steer (see `make_token_mask`).
         last_k: Required when `token_scope == "last_k"`.
         from_position: Required when `token_scope == "from_position"`.
@@ -74,14 +67,12 @@ class ActivationAdapterArgs(BaseArgs):
     # hook site
     hook_point: str = "layer_output"
 
-    # gating (optional; all-or-nothing)
-    gate: BaseGate | None = None
+    # gating (optional)
+    gate: Gate | GateSource | None = None
     gate_driven_externally: bool = False  # follower mode: another control drives this gate instance
-    condition_layer_ids: Sequence[int] | None = None
-    score_fn: Callable[..., "torch.Tensor | float"] | None = None  # ConditionScorer: (hidden, layer_id, *, prompt_mask) -> Tensor[B] | float
 
     # token scope
-    token_scope: TokenScope = "after_prompt"
+    token_scope: ScopeKind = "after_prompt"
     last_k: int | None = None
     from_position: int | None = None
 
@@ -114,9 +105,6 @@ class ActivationAdapterArgs(BaseArgs):
                 f"got {type(self.transform).__name__}."
             )
 
-        has_condition = self.condition_layer_ids is not None or self.score_fn is not None
-        stateful_gate = self.gate is not None and not isinstance(self.gate, AlwaysOpenGate)
-
         # layer selection (exactly one of layer_ids / layer_selector)
         if (self.layer_ids is None) == (self.layer_selector is None):
             raise ValueError("Provide exactly one of layer_ids or layer_selector.")
@@ -129,44 +117,23 @@ class ActivationAdapterArgs(BaseArgs):
             if len(set(ids)) != len(ids):
                 raise ValueError("layer_ids must not contain duplicates.")
 
-        # condition-path completeness
-        has_cond_layers = self.condition_layer_ids is not None
-        has_score_fn = self.score_fn is not None
-
-        # need both condition_layer_ids and score_fn
-        if has_cond_layers != has_score_fn:
-            raise ValueError(
-                "A condition path requires both condition_layer_ids and score_fn; provide both or neither."
+        # gate type
+        if self.gate is not None and not isinstance(self.gate, (Gate, GateSource)):
+            raise TypeError(
+                f"gate must be a Gate, a GateSource, or None; got {type(self.gate).__name__}."
             )
 
-        # a stateful gate with no condition path never receives evidence, unless another control
-        # drives this (shared) gate instance
-        if stateful_gate and not has_condition and not self.gate_driven_externally:
-            raise ValueError(
-                "a stateful gate requires condition_layer_ids and score_fn — or gate_driven_externally"
-                "=True if another control drives this gate instance — otherwise it never receives "
-                "evidence."
-            )
-
-        # condition path but no gate to consume the scores
-        if has_condition and not stateful_gate:
-            raise ValueError(
-                "A condition path (condition_layer_ids + score_fn) requires a stateful gate; scores "
-                "would otherwise be computed and ignored."
-            )
-
-        # a follower does not drive the gate, so it must not carry a condition path
-        if self.gate_driven_externally and has_condition:
-            raise ValueError(
-                "gate_driven_externally=True marks a follower that does not drive the gate; drop the "
-                "flag or the condition path."
-            )
-
-        # follower flag is inert without a stateful gate to follow
-        if self.gate_driven_externally and not stateful_gate:
-            warnings.warn(
-                "gate_driven_externally is inert without a stateful gate to follow.", UserWarning
-            )
+        # a follower reads a shared concrete instance; a source would resolve a private gate
+        if self.gate_driven_externally and not isinstance(self.gate, Gate):
+            if self.gate is None:
+                warnings.warn(
+                    "gate_driven_externally is inert without a gate to follow.", UserWarning
+                )
+            else:
+                raise ValueError(
+                    "gate_driven_externally=True marks a follower of a shared Gate instance; "
+                    "pass the driver's Gate, not a GateSource."
+                )
 
         # token scope requirements
         if self.token_scope == "last_k" and (self.last_k is None or self.last_k < 1):

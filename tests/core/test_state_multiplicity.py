@@ -1,29 +1,37 @@
 """State-control multiplicity in `SteeringPipeline` (design PR 1).
 
 Covers the relaxed one-per-category rule for the state category: `merge_controls` returns an ordered
-`state_controls` list, the pipeline registers every control's hooks in list order, same-module hooks
-chain (so composition is order-sensitive by design), `ExitStack` unwinds cleanly on a failed entry,
-`supports_batching` is the AND across all controls, and `compute_logprobs` composes edits.
+`state_controls` list, the session registers every entry's hooks in list order, same-module hooks
+chain (so composition is order-sensitive by design), a failed registration removes prior entries'
+hooks, `supports_batching` is the AND across all controls, and `compute_logprobs` composes edits.
 
 Runs hub-free on a tiny randomly-initialized Llama.
 """
-import contextlib
-
 import pytest
 import torch
 
 from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
+from aisteer360.algorithms.core.utils.assembly import collect_state_entries
 from aisteer360.algorithms.core.utils.controls import merge_controls
-from aisteer360.algorithms.input_control.base import NoInputControl
-from aisteer360.algorithms.state_control.base import NoStateControl, StateControl
+from aisteer360.algorithms.input_control.base import InputControl
+from aisteer360.algorithms.state_control.base import HookControl
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
+
+
+class _IdentityInputControl(InputControl):
+    """Concrete input control with an identity `adapt`."""
+
+    supports_batching = True
+
+    def adapt(self, input_ids, runtime_kwargs=None):
+        return input_ids
 
 HIDDEN = 32
 HEADS = 4
 LAYERS = 4
 
 
-class _ConstantAddControl(StateControl):
+class _ConstantAddControl(HookControl):
     """Adds a constant vector to a layer's output at every position via a forward hook.
 
     A minimal concrete state control (no Args) used to observe hook composition and ordering. The
@@ -35,8 +43,6 @@ class _ConstantAddControl(StateControl):
 
     def __init__(self, layer_id: int, value: float, recorder: list | None = None):
         super().__init__()
-        self.hooks = {"pre": [], "forward": [], "backward": []}
-        self.registered = []
         self._layer_id = layer_id
         self._value = value
         self._recorder = recorder
@@ -57,7 +63,7 @@ class _ConstantAddControl(StateControl):
         }
 
 
-class _AblateControl(StateControl):
+class _AblateControl(HookControl):
     """Zeros a layer's output at every position (a non-commuting counterpart to additive)."""
 
     Args = None
@@ -65,8 +71,6 @@ class _AblateControl(StateControl):
 
     def __init__(self, layer_id: int):
         super().__init__()
-        self.hooks = {"pre": [], "forward": [], "backward": []}
-        self.registered = []
         self._layer_id = layer_id
 
     def get_hooks(self, input_ids, runtime_kwargs, **kwargs):
@@ -82,16 +86,11 @@ class _AblateControl(StateControl):
         }
 
 
-class _BadModuleControl(StateControl):
-    """Registers a hook on a non-existent module so `register_hooks` raises on entry."""
+class _BadModuleControl(HookControl):
+    """Names a non-existent module so the session's registration raises."""
 
     Args = None
     supports_batching = True
-
-    def __init__(self):
-        super().__init__()
-        self.hooks = {"pre": [], "forward": [], "backward": []}
-        self.registered = []
 
     def get_hooks(self, input_ids, runtime_kwargs, **kwargs):
         def _hook(module, args, kwargs_, output):
@@ -109,9 +108,7 @@ def _pipeline(controls, model=None):
     if model is None:
         model = tiny_llama(num_layers=LAYERS, hidden=HIDDEN, heads=HEADS)
     tokenizer = wordlevel_tokenizer()
-    pipeline = SteeringPipeline(controls=controls, lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=controls, model=model, tokenizer=tokenizer)
     pipeline.steer()
     return pipeline, model
 
@@ -124,7 +121,7 @@ class TestMergeControlsMultiplicity:
         assert result["state_controls"] == [a, b]
 
     def test_two_input_controls_encounter_order(self):
-        a, b = NoInputControl(), NoInputControl()
+        a, b = _IdentityInputControl(), _IdentityInputControl()
         result = merge_controls([a, b])
         assert result["input_controls"] == [a, b]
 
@@ -132,14 +129,10 @@ class TestMergeControlsMultiplicity:
         with pytest.raises(TypeError, match="Unknown control type"):
             merge_controls([object()])
 
-    def test_empty_yields_fresh_no_state_control(self):
-        r1 = merge_controls([])
-        r2 = merge_controls([])
-        assert len(r1["state_controls"]) == 1
-        assert isinstance(r1["state_controls"][0], NoStateControl)
-        assert isinstance(r1["input_controls"][0], NoInputControl)
-        # fresh instance per call
-        assert r1["state_controls"][0] is not r2["state_controls"][0]
+    def test_empty_yields_empty_categories(self):
+        result = merge_controls([])
+        assert result["state_controls"] == []
+        assert result["input_controls"] == []
 
 
 # hook composition + ordering
@@ -168,13 +161,14 @@ class TestHookComposition:
 
         def _final_hidden(controls):
             pipeline, model = _pipeline(controls)
-            pipeline._setup_state_controls(input_ids, {})  # sets _model_ref on each control
+            entries = collect_state_entries(
+                pipeline.state_controls, input_ids, {},
+                hooks_in_process=True, lowered_state=pipeline._lowered_state, model=pipeline.model,
+            )
+            backend = pipeline._backend_for(pipeline._resolve_backend_spec(None))
             captured = {}
 
-            with contextlib.ExitStack() as stack:
-                for control in pipeline.state_controls:
-                    stack.enter_context(control)
-
+            with backend.open_session() as session, session.entries_applied(entries):
                 # register the capture hook AFTER the control hooks so it observes the composed edit
                 def _capture(module, args, kwargs_, output):
                     captured["h"] = (output[0] if isinstance(output, tuple) else output).detach().clone()
@@ -196,9 +190,9 @@ class TestHookComposition:
         assert torch.allclose(ablate_then_add, torch.full_like(ablate_then_add, 5.0), atol=1e-5)
 
 
-# ExitStack unwind
-class TestExitStackUnwind:
-    def test_failed_entry_removes_prior_control_hooks(self):
+# registration unwind
+class TestRegistrationUnwind:
+    def test_failed_registration_removes_prior_entries_hooks(self):
         good = _ConstantAddControl(1, 1.0)
         bad = _BadModuleControl()
         pipeline, model = _pipeline([good, bad])
@@ -207,9 +201,8 @@ class TestExitStackUnwind:
         with pytest.raises(AttributeError):
             pipeline.generate(input_ids=input_ids, max_new_tokens=1, do_sample=False, eos_token_id=None)
 
-        # the good control's handles must not leak onto the model
-        assert good.registered == []
-        assert bad.registered == []
+        # the good control's hooks must not leak onto the model
+        assert len(model.model.layers[1]._forward_hooks) == 0
 
         # a subsequent plain forward pass is unaffected by any leaked hook
         with torch.no_grad():
@@ -223,12 +216,12 @@ class TestSupportsBatching:
             supports_batching = False
 
         pipeline_all_ok = SteeringPipeline(
-            controls=[_ConstantAddControl(1, 1.0), _ConstantAddControl(2, 1.0)], lazy_init=True
+            model_name_or_path="m",controls=[_ConstantAddControl(1, 1.0), _ConstantAddControl(2, 1.0)]
         )
         assert pipeline_all_ok.supports_batching is True
 
         pipeline_mixed = SteeringPipeline(
-            controls=[_ConstantAddControl(1, 1.0), _NonBatch(2, 1.0)], lazy_init=True
+            model_name_or_path="m",controls=[_ConstantAddControl(1, 1.0), _NonBatch(2, 1.0)]
         )
         assert pipeline_mixed.supports_batching is False
 
@@ -241,14 +234,9 @@ class TestComputeLogprobsComposition:
         input_ids = torch.arange(3, 7, dtype=torch.long).unsqueeze(0)
         ref = torch.tensor([[7, 8, 9]], dtype=torch.long)
 
-        class _FusedControl(StateControl):
+        class _FusedControl(HookControl):
             Args = None
             supports_batching = True
-
-            def __init__(self):
-                super().__init__()
-                self.hooks = {"pre": [], "forward": [], "backward": []}
-                self.registered = []
 
             def get_hooks(self, ids, rk, **kw):
                 def _mk(val):

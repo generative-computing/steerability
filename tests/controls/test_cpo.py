@@ -132,9 +132,7 @@ class TestCPOSteer:
             retained_per_round=2,
             proposer_gen_kwargs={"max_new_tokens": 4, "do_sample": True, "temperature": 0.9},
         )
-        pipeline = SteeringPipeline(controls=[cpo], lazy_init=True)
-        pipeline.model = model
-        pipeline.tokenizer = tokenizer
+        pipeline = SteeringPipeline(controls=[cpo], model=model, tokenizer=tokenizer)
         pipeline.steer()
 
         assert isinstance(cpo.memory, CPOMemory)
@@ -159,9 +157,7 @@ class TestCPOTreeSearchAndCache:
             retained_per_round=2,
             proposer_gen_kwargs={"max_new_tokens": 4, "do_sample": True, "temperature": 0.9},
         )
-        pipeline = SteeringPipeline(controls=[cpo], lazy_init=True)
-        pipeline.model = model
-        pipeline.tokenizer = tokenizer
+        pipeline = SteeringPipeline(controls=[cpo], model=model, tokenizer=tokenizer)
         pipeline.steer()
 
         # first call populates the cache
@@ -192,9 +188,7 @@ class TestCPOTreeSearchAndCache:
             cache_queries=False,
             proposer_gen_kwargs={"max_new_tokens": 4, "do_sample": True, "temperature": 0.9},
         )
-        pipeline = SteeringPipeline(controls=[cpo], lazy_init=True)
-        pipeline.model = model
-        pipeline.tokenizer = tokenizer
+        pipeline = SteeringPipeline(controls=[cpo], model=model, tokenizer=tokenizer)
         pipeline.steer()
         cpo.adapt_messages([[{"role": "user", "content": "hello"}]])
         assert cpo.memory.query_cache == {}
@@ -223,9 +217,7 @@ class TestCPOCacheKeyNormalizer:
         model, tokenizer = tiny_lm
         normalize = lambda q: " ".join(q.split()).lower()
         cpo = self._build(normalize, offline_rows)
-        pipeline = SteeringPipeline(controls=[cpo], lazy_init=True)
-        pipeline.model = model
-        pipeline.tokenizer = tokenizer
+        pipeline = SteeringPipeline(controls=[cpo], model=model, tokenizer=tokenizer)
         pipeline.steer()
 
         calls = {"n": 0}
@@ -247,9 +239,7 @@ class TestCPOCacheKeyNormalizer:
     def test_default_keeps_near_duplicates_distinct(self, tiny_lm, offline_rows, monkeypatch):
         model, tokenizer = tiny_lm
         cpo = self._build(None, offline_rows)  # default: raw-query hashing
-        pipeline = SteeringPipeline(controls=[cpo], lazy_init=True)
-        pipeline.model = model
-        pipeline.tokenizer = tokenizer
+        pipeline = SteeringPipeline(controls=[cpo], model=model, tokenizer=tokenizer)
         pipeline.steer()
 
         calls = {"n": 0}
@@ -339,9 +329,7 @@ class TestCPOMemoryRoundTrip:
             retained_per_round=2,
             proposer_gen_kwargs={"max_new_tokens": 4, "do_sample": True, "temperature": 0.9},
         )
-        pipeline = SteeringPipeline(controls=[cpo], lazy_init=True)
-        pipeline.model = model
-        pipeline.tokenizer = tokenizer
+        pipeline = SteeringPipeline(controls=[cpo], model=model, tokenizer=tokenizer)
         pipeline.steer()
 
         cpo.adapt_messages([[{"role": "user", "content": "hi"}]])
@@ -359,3 +347,64 @@ class TestCPOTrustRemoteCode:
     def test_args_opt_out_false(self, offline_rows):
         args = CPOArgs(seed_prompt="x", offline_data=offline_rows, trust_remote_code=False)
         assert args.trust_remote_code is False
+
+
+class TestCPOBackendPosture:
+    """D12: the proposer binds once at steer; the module configuration is declared."""
+
+    def test_unset_prompt_lm_never_reads_a_pipeline_attribute_at_adapt(self, tiny_lm, offline_rows):
+        model, tokenizer = tiny_lm
+        cpo = CPO(
+            seed_prompt="be helpful",
+            offline_data=offline_rows,
+            embedding_model=TINY_BERT,
+            pca_query_dim=4,
+            pca_prompt_dim=4,
+            rounds=1,
+            candidates_per_parent=1,
+            retained_per_round=1,
+            proposer_gen_kwargs={"max_new_tokens": 4, "do_sample": True, "temperature": 0.9},
+        )
+        pipeline = SteeringPipeline(controls=[cpo], model=model, tokenizer=tokenizer)
+        pipeline.steer()
+
+        # the proposer bound the model at steer; adaptation consults no pipeline attribute
+        pipeline.model = None
+        del pipeline
+        adapted = cpo.adapt_messages([[{"role": "user", "content": "what is 2+2"}]])
+        assert adapted is not None
+        assert adapted[0][0]["role"] == "system"
+
+    def test_module_configuration_verdict_on_engine(self):
+        from aisteer360.algorithms.core.execution import BackendSpec, ModelAccess
+
+        cpo = CPO(
+            seed_prompt="be helpful",
+            offline_data=[{"query": "q", "prompt": "p", "score": 1.0}],
+            embedding_model=TINY_BERT,
+        )
+        assert cpo.steer_access() is ModelAccess.MODULE
+        pipeline = SteeringPipeline(model_name_or_path="m", controls=[cpo])
+        report = pipeline.check(backend=BackendSpec(kind="vllm", model="m"))
+        (failure,) = report.failures_for("generate")
+        assert failure.message == (
+            "CPO is unsupported at generate on backend kind 'vllm': missing IN_PROCESS_TORCH; "
+            "set prompt_lm to run CPO's per-query search off the pipeline model."
+        )
+
+    def test_aux_prompt_lm_configuration_is_supported_on_engines(self, tiny_lm):
+        from aisteer360.algorithms.core.execution import BackendSpec, ModelAccess
+
+        model, _ = tiny_lm
+        cpo = CPO(
+            seed_prompt="be helpful",
+            offline_data=[{"query": "q", "prompt": "p", "score": 1.0}],
+            embedding_model=TINY_BERT,
+            prompt_lm=model,
+        )
+        assert cpo.steer_access() is ModelAccess.ROLLOUTS
+        pipeline = SteeringPipeline(model_name_or_path="m", controls=[cpo])
+        report = pipeline.check(backend=BackendSpec(kind="vllm", model="m"))
+        assert report.supported("generate")
+        (step,) = report.plan.steps
+        assert step.venue == "session"

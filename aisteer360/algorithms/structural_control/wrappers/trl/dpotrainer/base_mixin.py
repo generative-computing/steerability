@@ -5,9 +5,7 @@ from trl import DPOConfig, DPOTrainer
 
 from aisteer360.algorithms.structural_control.base import StructuralControl
 from aisteer360.algorithms.structural_control.wrappers.trl.base_mixin import TRLMixin
-from aisteer360.algorithms.structural_control.wrappers.trl.utils.preference_schema import (
-    standardize_preference_dataset,
-)
+from aisteer360.algorithms.structural_control.wrappers.trl.utils.preference_schema import standardize_preference_dataset
 
 
 class DPOTrainerMixin(TRLMixin, StructuralControl):
@@ -31,12 +29,10 @@ class DPOTrainerMixin(TRLMixin, StructuralControl):
         **_,
     ) -> torch.nn.Module:
 
-        self.model = model
         self.tokenizer = tokenizer or (getattr(model, "tokenizer", None) if model is not None else None)
-        self.device = next(model.parameters()).device if model is not None else None
 
         # resolve or load model/tokenizer
-        self._resolve_model_tokenizer(self.model, self.tokenizer)
+        model, self.tokenizer = self._resolve_model_tokenizer(model, self.tokenizer)
 
         # clean
         if self.train_dataset is not None:
@@ -63,7 +59,7 @@ class DPOTrainerMixin(TRLMixin, StructuralControl):
         # train if a dataset is provided
         if self.train_dataset is not None:
             trainer = DPOTrainer(
-                model=self.model,
+                model=model,
                 ref_model=ref_model,
                 args=training_config,
                 train_dataset=self.train_dataset,
@@ -72,8 +68,8 @@ class DPOTrainerMixin(TRLMixin, StructuralControl):
                 peft_config=peft_config,
             )
             trainer.train(resume_from_checkpoint=self.training_args.get("resume_from_checkpoint"))
-            self.model = trainer.model
+            model = trainer.model
             self._maybe_save_trained_artifacts(trainer)
-            self._maybe_merge_lora_in_place()
+            model = self._maybe_merge_lora_in_place(model)
 
-        return self._post_train_freeze()
+        return self._post_train_freeze(model)

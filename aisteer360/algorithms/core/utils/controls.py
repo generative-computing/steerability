@@ -3,20 +3,12 @@ import warnings
 from collections import defaultdict
 from typing import Iterable, Type
 
-from aisteer360.algorithms.input_control.base import InputControl, NoInputControl
+from aisteer360.algorithms.input_control.base import InputControl
 from aisteer360.algorithms.output_control.base import DecodingDriver, OutputControl
-from aisteer360.algorithms.state_control.base import NoStateControl, StateControl
-from aisteer360.algorithms.structural_control.base import (
-    NoStructuralControl,
-    StructuralControl,
-)
+from aisteer360.algorithms.state_control.base import StateControl
+from aisteer360.algorithms.structural_control.base import StructuralControl
 
-_DEFAULT_FACTORIES: dict[Type, callable] = {
-    InputControl: NoInputControl,
-    StructuralControl: NoStructuralControl,
-    StateControl: NoStateControl,
-    OutputControl: None,  # output has no phantom no-op; the pipeline owns a default driver
-}
+_CATEGORIES: tuple[Type, ...] = (InputControl, StructuralControl, StateControl, OutputControl)
 
 
 def merge_controls(
@@ -26,9 +18,9 @@ def merge_controls(
 
     Every category admits any number of controls, returned as ordered lists (in encounter order)
     under `"input_controls"`, `"structural_controls"`, `"state_controls"`, and `"output_controls"`.
-    Omitted input/structural/state categories fall back to a single fresh no-op; an omitted output
-    category stays an empty list (the pipeline supplies the default decoding driver as
-    infrastructure, not a control entry).
+    An omitted category is an empty list; every application of a category is a fold over its
+    list, whose identity element is the empty sequence (the prompt threads through the adapt
+    chain, the model threads through structural steers, state and output entries accumulate).
 
     The output category additionally admits at most one enabled `DecodingDriver`; the decode loop
     does not compose. Input controls chain in two phases (message-level, then token-level); see
@@ -39,9 +31,7 @@ def merge_controls(
 
     Returns:
        Dict with keys `"input_controls"`, `"structural_controls"`, `"state_controls"`, and
-       `"output_controls"`, each an ordered list of controls, with a single default no-op for
-       unspecified input/structural/state categories and an empty list for an unspecified output
-       category.
+       `"output_controls"`, each an ordered list of controls (empty for unspecified categories).
 
     Raises:
        ValueError: If the same control instance is supplied more than once, or if more than one
@@ -62,7 +52,7 @@ def merge_controls(
 
     bucket: dict[type, list] = defaultdict(list)
     for control in supplied:
-        for category in _DEFAULT_FACTORIES:
+        for category in _CATEGORIES:
             if isinstance(control, category):
                 bucket[category].append(control)
                 break
@@ -81,12 +71,12 @@ def merge_controls(
             "keep one DecodingDriver and express the rest as logits processors or stopping criteria."
         )
 
-    out: dict[str, object] = {}
-    out["state_controls"] = bucket.get(StateControl) or [NoStateControl()]
-    out["output_controls"] = list(bucket.get(OutputControl, []))  # empty stays empty
-    out["input_controls"] = bucket.get(InputControl) or [NoInputControl()]
-    out["structural_controls"] = bucket.get(StructuralControl) or [NoStructuralControl()]
-    return out
+    return {
+        "input_controls": list(bucket.get(InputControl, [])),
+        "structural_controls": list(bucket.get(StructuralControl, [])),
+        "state_controls": list(bucket.get(StateControl, [])),
+        "output_controls": list(bucket.get(OutputControl, [])),
+    }
 
 
 def warn_if_adapt_messages_bypassed(input_controls: list[InputControl], already_warned: bool) -> bool:

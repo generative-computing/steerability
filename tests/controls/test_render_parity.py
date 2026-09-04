@@ -10,8 +10,8 @@ import logging
 import pytest
 from transformers import AutoTokenizer
 
-from aisteer360.algorithms.core.internals.render import render_contrastive
 from aisteer360.algorithms.core.internals.data import ContrastivePairs
+from aisteer360.algorithms.core.internals.render import render_contrastive
 from aisteer360.utils.rendering import encode_for_model, render_for_model
 from tests.utils.load_ci_models import get_models
 

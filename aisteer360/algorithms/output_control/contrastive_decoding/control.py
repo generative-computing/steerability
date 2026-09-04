@@ -6,9 +6,10 @@ import logging
 import torch
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
-from aisteer360.algorithms.output_control._common.logit_sources import AuxModelSource
-from aisteer360.algorithms.output_control._common.processors.contrastive_mixture import ContrastiveMixtureProcessor
+from aisteer360.algorithms.core.execution.access import ModelAccess
 from aisteer360.algorithms.output_control.base import OutputControl
+from aisteer360.algorithms.output_control.common.logit_sources import AuxModelSource
+from aisteer360.algorithms.output_control.common.processors.contrastive_mixture import ContrastiveMixtureProcessor
 from aisteer360.algorithms.output_control.contrastive_decoding.args import ContrastiveDecodingArgs
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,11 @@ class ContrastiveDecoding(OutputControl):
     # placeholders (filled by steer)
     tokenizer: PreTrainedTokenizer | None = None
     _amateur_source: AuxModelSource | None = None
+
+    def steer_access(self) -> ModelAccess:
+        """`ModelAccess.MODULE`; the amateur's placement follows the live model, whose
+        vocabulary the shared-vocab check reads (the generate phase is in-process)."""
+        return ModelAccess.MODULE
 
     def steer(
         self,

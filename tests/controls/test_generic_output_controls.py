@@ -3,7 +3,7 @@
 
 Covers the shared spec resolver and the five generics (`ValueGuidance`, `ContrastiveGuidance`,
 `SearchDecoding`, `PhasedDecoding`, `StoppingRules`), including equivalence with the named methods
-they generalize (RAD, SASA, DeAL, ThinkingIntervention).
+they generalize (RAD, SASA, DeAL).
 
 Hub-free: tiny classifier / aux LMs are built via config classes saved to `tmp_path`, on the shared
 `tests/utils/tiny_models.py` fixtures.
@@ -15,25 +15,20 @@ import torch
 from transformers import LlamaConfig, LlamaForSequenceClassification
 
 from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.output_control._common.estimators.linear_probe import LinearProbe
-from aisteer360.algorithms.output_control._common.logit_sources import (
-    AuxModelSource,
-    CallableSource,
+from aisteer360.algorithms.output_control.common.logit_sources import AuxModelSource, CallableSource
+from aisteer360.algorithms.output_control.common.processors.contrastive_mixture import ContrastiveMixtureProcessor
+from aisteer360.algorithms.output_control.common.processors.value_guided import ValueGuidedProcessor
+from aisteer360.algorithms.output_control.common.resolve import resolve_scorer, resolve_source, resolve_value
+from aisteer360.algorithms.output_control.common.scorers.majority_vote import MajorityVoteScorer
+from aisteer360.algorithms.output_control.common.scorers.reward_model import RewardModelScorer
+from aisteer360.algorithms.output_control.common.values.base import BaseCandidateValue, StepContext
+from aisteer360.algorithms.output_control.common.values.callable import CallableValue
+from aisteer360.algorithms.output_control.common.values.classifier import ClassifierValue
+from aisteer360.algorithms.output_control.common.values.reward_model import RewardModelValue
+from aisteer360.algorithms.output_control.common.values.subspace_margin import (
+    SubspaceMarginValue,
+    load_single_file_probe,
 )
-from aisteer360.algorithms.output_control._common.processors.contrastive_mixture import ContrastiveMixtureProcessor
-from aisteer360.algorithms.output_control._common.processors.value_guided import ValueGuidedProcessor
-from aisteer360.algorithms.output_control._common.resolve import (
-    resolve_scorer,
-    resolve_source,
-    resolve_value,
-)
-from aisteer360.algorithms.output_control._common.scorers.majority_vote import MajorityVoteScorer
-from aisteer360.algorithms.output_control._common.scorers.reward_model import RewardModelScorer
-from aisteer360.algorithms.output_control._common.values.base import BaseCandidateValue, StepContext
-from aisteer360.algorithms.output_control._common.values.callable import CallableValue
-from aisteer360.algorithms.output_control._common.values.classifier import ClassifierValue
-from aisteer360.algorithms.output_control._common.values.reward_model import RewardModelValue
-from aisteer360.algorithms.output_control._common.values.subspace_margin import SubspaceMarginValue
 from aisteer360.algorithms.output_control.contrastive_guidance.control import ContrastiveGuidance
 from aisteer360.algorithms.output_control.deal.control import DeAL
 from aisteer360.algorithms.output_control.phased_decoding.control import PhasedDecoding
@@ -41,11 +36,19 @@ from aisteer360.algorithms.output_control.rad.control import RAD
 from aisteer360.algorithms.output_control.sasa.control import SASA
 from aisteer360.algorithms.output_control.search_decoding.control import SearchDecoding
 from aisteer360.algorithms.output_control.stopping_rules.control import StoppingRules
-from aisteer360.algorithms.output_control.thinking_intervention.control import ThinkingIntervention
 from aisteer360.algorithms.output_control.value_guidance.control import ValueGuidance
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 VOCAB = 100
+
+
+def _write_probe_json(path, hidden=16):
+    """Write a `.probe` JSON checkpoint (direction and midpoint lists); returns the tensors."""
+    direction = torch.randn(hidden)
+    midpoint = torch.randn(hidden)
+    with open(path, "w") as f:
+        json.dump({"direction": direction.tolist(), "midpoint": midpoint.tolist()}, f)
+    return direction, midpoint
 
 
 def _pipeline(controls, model=None, tokenizer=None):
@@ -53,9 +56,7 @@ def _pipeline(controls, model=None, tokenizer=None):
         model = tiny_llama(num_layers=2, hidden=16, heads=2, vocab=VOCAB)
     if tokenizer is None:
         tokenizer = wordlevel_tokenizer()
-    pipeline = SteeringPipeline(controls=controls, lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=controls, model=model, tokenizer=tokenizer)
     pipeline.steer()
     return pipeline, model, tokenizer
 
@@ -120,6 +121,16 @@ class TestResolveValue:
                             model=model, tokenizer=wordlevel_tokenizer(), device="cpu")
         assert isinstance(out, RewardModelValue)
 
+    def test_reward_model_dict_score_transform(self, tmp_path):
+        path = _make_tiny_classifier(tmp_path)
+        model = tiny_llama(num_layers=2, hidden=16, heads=2, vocab=VOCAB)
+        out = resolve_value({"kind": "reward_model", "model_id": path, "score_index": 1,
+                             "score_transform": "softmax"},
+                            model=model, tokenizer=wordlevel_tokenizer(), device="cpu")
+        assert isinstance(out, RewardModelValue)
+        assert out.score_index == 1
+        assert out.score_transform == "softmax"
+
     def test_classifier_dict_from_model(self, tmp_path):
         path = _make_tiny_classifier(tmp_path)
         model = tiny_llama(num_layers=2, hidden=16, heads=2, vocab=VOCAB)
@@ -134,9 +145,8 @@ class TestResolveValue:
         assert isinstance(out, ClassifierValue)
 
     def test_subspace_margin_from_probe_path(self, tmp_path):
-        probe = LinearProbe(direction=torch.randn(16), midpoint=torch.randn(16))
         probe_path = str(tmp_path / "p.probe")
-        probe.save(probe_path)
+        _write_probe_json(probe_path)
         model = tiny_llama(num_layers=2, hidden=16, heads=2, vocab=VOCAB)
         out = resolve_value({"kind": "subspace_margin", "probe_path": probe_path},
                             model=model, tokenizer=wordlevel_tokenizer(), device="cpu")
@@ -234,17 +244,22 @@ class TestValueGuidanceValidation:
 
 class TestValueGuidanceEquivalence:
     def test_rad_equivalence_fixed_scores(self, tmp_path):
-        """RAD and the RAD-equivalent ValueGuidance config produce the same shift on fixed scores."""
+        """RAD and the RAD-equivalent ValueGuidance config produce the same shift on fixed scores.
+
+        Both sides use the stateless shared-vocab reward value (`RAD(efficient=False)` and a
+        `RewardModelValue(shared_vocab=True)` instance), so the comparison isolates the processor
+        shift math (top-k, clamp, mask).
+        """
         rm_path = _make_tiny_classifier(tmp_path)
         model = tiny_llama(num_layers=2, hidden=16, heads=2, vocab=VOCAB)
         tokenizer = wordlevel_tokenizer()
 
-        rad = RAD(beta=7.0, reward_model_id=rm_path)
+        rad = RAD(beta=7.0, reward_model_id=rm_path, efficient=False)
         _pipeline([rad], model=model, tokenizer=tokenizer)
 
         vg = ValueGuidance(
-            value={"kind": "reward_model", "model_id": rm_path},
-            policy="top_k", k=20, beta=7.0, normalize="minmax", mask_non_candidates=True,
+            value=rad._value,
+            policy="top_k", k=20, beta=7.0, normalize="clamp", mask_non_candidates=True,
         )
         _pipeline([vg], model=model, tokenizer=tokenizer)
 
@@ -261,15 +276,14 @@ class TestValueGuidanceEquivalence:
         """SASA and the SASA-equivalent ValueGuidance config produce the same shift on fixed scores."""
         model = tiny_llama(num_layers=2, hidden=16, heads=2, vocab=VOCAB)
         tokenizer = wordlevel_tokenizer()
-        probe = LinearProbe(direction=torch.randn(16), midpoint=torch.randn(16))
         probe_path = str(tmp_path / "sasa.probe")
-        probe.save(probe_path)
+        _write_probe_json(probe_path)
+        probe = load_single_file_probe(probe_path, layer_id=1)
 
         sasa = SASA(beta=3.0)
         sasa.model = model
         sasa.tokenizer = tokenizer
         sasa.probe = probe
-        sasa.probe.to(next(model.parameters()).device)
 
         vg = ValueGuidance(
             value={"kind": "subspace_margin", "probe_path": probe_path},
@@ -311,9 +325,8 @@ class TestValueGuidanceBehavior:
         assert vg.supports_batching is False  # CallableValue defaults supports_batching=False
 
     def test_model_forward_scoring_warns(self, tmp_path):
-        probe = LinearProbe(direction=torch.randn(16), midpoint=torch.randn(16))
         probe_path = str(tmp_path / "p.probe")
-        probe.save(probe_path)
+        _write_probe_json(probe_path)
         vg = ValueGuidance(
             value={"kind": "subspace_margin", "probe_path": probe_path},
             policy="surviving", mask_non_candidates=False, normalize="softmax",
@@ -521,8 +534,9 @@ class TestPhasedDecodingBehavior:
         # prompt(2 or 3) + <=3 generated + 1 fixed ("sat") + <=2 generated: bounded well under 50
         assert out.size(1) <= prompt.size(1) + 3 + 2 + 2
 
-    def test_ti_equivalence(self):
-        """ThinkingIntervention and the TI-equivalent PhasedDecoding produce identical ids."""
+    def test_replacing_fixed_with_tail_extraction(self):
+        """The thinking-intervention config: a replacing Fixed rewrite + Generated, with
+        extract_after stripping the reasoning span (Wu et al., 2025, arXiv:2503.24370)."""
         def intervention(prompt, params):
             return f"the dog </think> {prompt}"
 
@@ -530,21 +544,17 @@ class TestPhasedDecodingBehavior:
         tokenizer = wordlevel_tokenizer()
         prompt = tokenizer("the cat", return_tensors="pt").input_ids
 
-        ti = ThinkingIntervention(intervention=intervention)
-        p_ti, _, _ = _pipeline([ti], model=model, tokenizer=tokenizer)
-        torch.manual_seed(0)
-        out_ti = p_ti.generate(input_ids=prompt, max_new_tokens=6, do_sample=False, eos_token_id=None)
-
         pd = PhasedDecoding(
             plan=[{"fixed": intervention, "replace": True, "add_special_tokens": True}, {"generate": {}}],
             extract_after="</think>",
         )
-        p_pd, _, _ = _pipeline([pd], model=model, tokenizer=tokenizer)
+        pipeline, model, tokenizer = _pipeline([pd], model=model, tokenizer=tokenizer)
         torch.manual_seed(0)
-        out_pd = p_pd.generate(input_ids=prompt, max_new_tokens=6, do_sample=False, eos_token_id=None)
+        out = pipeline.generate(input_ids=prompt, max_new_tokens=6, do_sample=False, eos_token_id=None)
 
-        assert out_ti.shape == out_pd.shape
-        assert torch.equal(out_ti, out_pd)
+        decoded = tokenizer.decode(out[0])
+        assert "</think>" not in decoded  # reasoning span stripped by the tail rule
+        assert "the cat" in decoded       # extract_after keeps the post-marker remainder
 
     def test_serializable_plan_round_trips(self):
         plan = [
@@ -570,9 +580,9 @@ class TestStoppingRules:
 
     def test_stop_texts_without_tokenizer_raises(self):
         sr = StoppingRules(stop_texts=["\n"])
-        pipeline = SteeringPipeline(controls=[sr], lazy_init=True)
-        pipeline.model = tiny_llama(num_layers=2, hidden=16, heads=2, vocab=VOCAB)
-        pipeline.tokenizer = None
+        pipeline = SteeringPipeline(
+            controls=[sr], model=tiny_llama(num_layers=2, hidden=16, heads=2, vocab=VOCAB), tokenizer=None,
+        )
         with pytest.raises(RuntimeError, match="tokenizer"):
             pipeline.steer()
 
@@ -611,41 +621,6 @@ class TestStoppingRules:
         sr = StoppingRules(budget=4)
         _pipeline([sr])
         assert sr.get_logits_processors(torch.tensor([[0, 3]]), {}) == []
-
-
-# LinearProbe.load_any (§3.3.1) — the loader SASA and resolve_value now delegate to
-class TestLinearProbeLoadAny:
-    def test_probe_json_round_trip(self, tmp_path):
-        probe = LinearProbe(direction=torch.randn(16), midpoint=torch.randn(16))
-        path = str(tmp_path / "p.probe")
-        probe.save(path)
-        loaded = LinearProbe.load_any(path)
-        assert torch.allclose(loaded.direction, probe.direction)
-
-    def test_legacy_wv_torch_checkpoint(self, tmp_path):
-        wv = {"wv": torch.randn(16), "mu_mu": torch.randn(16)}
-        path = str(tmp_path / "steer_wv.pt")
-        torch.save(wv, path)
-        loaded = LinearProbe.load_any(path)
-        assert torch.allclose(loaded.direction, wv["wv"])
-        assert torch.allclose(loaded.midpoint, wv["mu_mu"])
-
-    def test_unrecognized_raises(self, tmp_path):
-        path = str(tmp_path / "junk.pt")
-        torch.save(torch.randn(3), path)
-        with pytest.raises(ValueError, match="Unrecognized probe checkpoint"):
-            LinearProbe.load_any(path)
-
-    def test_sasa_accepts_probe_json(self, tmp_path):
-        """SASA's args gate now accepts the canonical .probe format its loader supports."""
-        probe = LinearProbe(direction=torch.randn(16), midpoint=torch.randn(16))
-        path = str(tmp_path / "sasa.probe")
-        probe.save(path)
-        model = tiny_llama(num_layers=2, hidden=16, heads=2, vocab=VOCAB)
-        sasa = SASA(beta=1.0, wv_path=path)  # previously raised ValueError on the .probe extension
-        _pipeline([sasa], model=model)
-        assert sasa.probe is not None
-        assert torch.allclose(sasa.probe.direction.cpu(), probe.direction, atol=1e-4)
 
 
 # registry

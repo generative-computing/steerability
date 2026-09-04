@@ -25,11 +25,11 @@ given \( x \), control for each category is exerted as follows.
     - Facilitated through a *prompt adapter* \( \sigma(x) \) applied to the original prompt \( x \).
 
 - **Structural control:** \( y \sim p_{\theta'}(x) \)
-    - Methods that modify the model’s underlying parameters or augment the model’s architecture.
+    - Methods that modify the model's underlying parameters or augment the model's architecture.
     - Facilitated through fine-tuning, adapter layers, or architectural interventions to yield weights \( \theta' \).
 
 - **State control:** \( y \sim p_{\theta}^a(x) \)
-    - Methods that modify the model’s internal states (e.g., activations, attentions) at inference time.
+    - Methods that modify the model's internal states (e.g., activations, attentions) at inference time.
     - Facilitated through hooks that are inserted into the model to manipulate internal variables during the forward pass.
 
 - **Output control:** \( y \sim d(p_\theta)(x) \)

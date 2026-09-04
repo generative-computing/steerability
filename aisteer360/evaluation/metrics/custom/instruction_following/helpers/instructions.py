@@ -24,9 +24,7 @@ from typing import Dict, Optional, Sequence, Union
 import langdetect
 from absl import logging
 
-from aisteer360.evaluation.metrics.custom.instruction_following.helpers import (
-    instructions_util,
-)
+from aisteer360.evaluation.metrics.custom.instruction_following.helpers import instructions_util
 
 _InstructionArgsDtype = Optional[Dict[str, Union[int, str, Sequence[str]]]]
 

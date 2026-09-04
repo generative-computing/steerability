@@ -7,13 +7,13 @@ Covers `measure_residual_norms` (composition over `render_for_model` + `tokenize
 import pytest
 import torch
 
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.state_control._common import measure_residual_norms
 from aisteer360.algorithms.core.internals.capture import layerwise_tokenwise_hidden
-from aisteer360.algorithms.state_control._common.steering_vector import SteeringVector
-from aisteer360.algorithms.state_control._common.transforms import AdditiveTransform
+from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
 from aisteer360.algorithms.state_control.activation_adapter.control import ActivationAdapter
 from aisteer360.algorithms.state_control.cast.control import CAST
+from aisteer360.algorithms.state_control.common import measure_residual_norms
+from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
+from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform
 from aisteer360.utils.rendering import render_for_model
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
@@ -43,17 +43,35 @@ def _chat_tokenizer():
 
 
 def _manual_norms(model, tokenizer, prompts, layer_ids, location, stat, prompt_format="chat_prompt"):
-    """Reference computation via a direct output_hidden_states forward, per prompt."""
+    """Reference computation via a direct output_hidden_states forward, per prompt.
+
+    For `location="layer_output"`, the final layer's entry in `output_hidden_states` carries the
+    model's final norm already applied, so the raw boundary (the one a forward hook observes and
+    the one `measure_residual_norms` reports) is re-captured with a forward hook on the last
+    decoder layer.
+    """
     device = next(model.parameters()).device
     per_layer_values = {lid: [] for lid in layer_ids}
     for p in prompts:
         text = render_for_model(tokenizer, prompt=p, mode=prompt_format)
         template_applied = getattr(tokenizer, "chat_template", None) is not None and prompt_format != "raw"
         enc = tokenizer(text, return_tensors="pt", add_special_tokens=not template_applied).to(device)
-        with torch.no_grad():
-            out = model(input_ids=enc["input_ids"], attention_mask=enc.get("attention_mask"),
-                        output_hidden_states=True, return_dict=True)
-        states = out.hidden_states[1:] if location == "layer_output" else out.hidden_states[:-1]
+        final_raw = []
+        handle = None
+        if location == "layer_output":
+            handle = model.model.layers[-1].register_forward_hook(
+                lambda module, args, output: final_raw.append(output[0] if isinstance(output, tuple) else output)
+            )
+        try:
+            with torch.no_grad():
+                out = model(input_ids=enc["input_ids"], attention_mask=enc.get("attention_mask"),
+                            output_hidden_states=True, return_dict=True)
+        finally:
+            if handle is not None:
+                handle.remove()
+        states = list(out.hidden_states[1:]) if location == "layer_output" else list(out.hidden_states[:-1])
+        if location == "layer_output":
+            states[-1] = final_raw[0]  # hidden_states[-1] is post-final-norm; the hook sees the raw boundary
         for lid in layer_ids:
             norms = states[lid].to(torch.float32).norm(dim=-1).flatten()
             per_layer_values[lid].append(norms)
@@ -213,9 +231,7 @@ class TestDosedVectorEndToEnd:
             behavior_vector_strength=1.0,
             token_scope="all",
         )
-        pipeline = SteeringPipeline(controls=[control], lazy_init=True)
-        pipeline.model = model
-        pipeline.tokenizer = tokenizer
+        pipeline = SteeringPipeline(controls=[control], model=model, tokenizer=tokenizer)
         pipeline.steer()
 
         out = pipeline.generate(messages=[{"role": "user", "content": "the cat sat"}], max_new_tokens=3, do_sample=False)
@@ -232,9 +248,7 @@ class TestDosedVectorEndToEnd:
             layer_ids=behavior_layers,
             hook_point="layer_input",
         )
-        pipeline = SteeringPipeline(controls=[control], lazy_init=True)
-        pipeline.model = model
-        pipeline.tokenizer = tokenizer
+        pipeline = SteeringPipeline(controls=[control], model=model, tokenizer=tokenizer)
         pipeline.steer()
 
         out = pipeline.generate(messages=[{"role": "user", "content": "the cat sat"}], max_new_tokens=3, do_sample=False)

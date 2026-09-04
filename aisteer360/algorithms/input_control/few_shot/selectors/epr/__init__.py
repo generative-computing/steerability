@@ -6,8 +6,6 @@ Reference:
     Ohad Rubin, Jonathan Herzig, Jonathan Berant
     [https://arxiv.org/abs/2112.08633](https://arxiv.org/abs/2112.08633)
 """
-from aisteer360.algorithms.input_control.few_shot.selectors.epr.selector import (
-    EPRSelector,
-)
+from aisteer360.algorithms.input_control.few_shot.selectors.epr.selector import EPRSelector
 
 __all__ = ["EPRSelector"]

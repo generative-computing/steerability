@@ -8,12 +8,12 @@ import pytest
 import torch
 import torch.nn as nn
 
-from aisteer360.algorithms.state_control._common.hook_utils import (
+from aisteer360.algorithms.state_control.common.hook_utils import (
     extract_hidden_states,
     get_model_layer_list,
     get_norm_module_names,
 )
-from aisteer360.algorithms.state_control._common.model_layout import resolve_model_layout
+from aisteer360.algorithms.state_control.common.model_layout import resolve_model_layout
 from tests.utils.tiny_models import tiny_gpt2, tiny_llama
 
 LAYERS = 4

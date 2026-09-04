@@ -6,16 +6,17 @@ import warnings
 import torch
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
-from aisteer360.algorithms.output_control._common.processors.value_guided import ValueGuidedProcessor
-from aisteer360.algorithms.output_control._common.resolve import resolve_value
+from aisteer360.algorithms.core.execution.access import ModelAccess
 from aisteer360.algorithms.output_control.base import OutputControl
+from aisteer360.algorithms.output_control.common.processors.value_guided import ValueGuidedProcessor
+from aisteer360.algorithms.output_control.common.resolve import resolve_value
 from aisteer360.algorithms.output_control.value_guidance.args import ValueGuidanceArgs
 
 
 class ValueGuidance(OutputControl):
     """Value-guided decoding as configuration: score candidate tokens with a value function and shift their logits.
 
-    `ValueGuidance` is the generic over the step shape. It exposes the `_common` value slot through
+    `ValueGuidance` is the generic over the step shape. It exposes the `common` value slot through
     flat `Args`: a candidate policy selects a small set of next tokens, a per-candidate value scores
     them, the values are normalized per row, and the selected candidates' logits are shifted by
     `beta * value` (optionally masking non-candidates to `-inf`). A method from the literature is an
@@ -24,7 +25,7 @@ class ValueGuidance(OutputControl):
         - FUDGE: `value={"kind": "classifier", ...}, policy="top_k", beta=1.0, normalize="none"`.
         - ARGS: `value={"kind": "reward_model", ...}, policy="top_k", normalize="none"`.
         - RAD-equivalent: `value={"kind": "reward_model", ...}, policy="top_k", k=20,
-          normalize="minmax", mask_non_candidates=True`.
+          normalize="clamp", invert=True, mask_non_candidates=True`.
         - SASA-equivalent: `value={"kind": "subspace_margin", ...}, policy="surviving",
           normalize="softmax", mask_non_candidates=False, include_in_scoring=False`.
 
@@ -40,8 +41,8 @@ class ValueGuidance(OutputControl):
         k (int | None): Candidate count for `policy="top_k"`. Defaults to 20.
         p (float | None): Nucleus threshold for `policy="top_p"`. Defaults to None.
         beta (float): Shift scale. Defaults to 1.0.
-        normalize (str): Per-row value normalization (`"none"`, `"minmax"`, `"softmax"`). Defaults to
-            `"none"`.
+        normalize (str): Per-row value normalization (`"none"`, `"minmax"`, `"softmax"`, `"clamp"`).
+            Defaults to `"none"`.
         invert (bool): Post-normalization `v <- 1 - v`. Defaults to False.
         mask_non_candidates (bool): Mask non-candidate logits to `-inf`. Defaults to True.
         max_candidates (int | None): Clamp on the candidate set (top-N by score). Defaults to None.
@@ -65,6 +66,11 @@ class ValueGuidance(OutputControl):
     model: PreTrainedModel | None = None
     tokenizer: PreTrainedTokenizer | None = None
     _value = None
+
+    def steer_access(self) -> ModelAccess:
+        """`ModelAccess.MODULE`; the value spec resolves against the live model (probe fits,
+        placement), which is retained past steer (the generate phase is in-process)."""
+        return ModelAccess.MODULE
 
     def steer(
         self,

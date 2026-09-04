@@ -116,11 +116,11 @@ def encode_for_model(
 ):
     """Render then tokenize with the correct `add_special_tokens`.
 
-    Convenience for single-prompt call sites (e.g. judges). 
-    
-    A template is applied iff `has_chat_template(tokenizer)` and 
-    (for the `prompt` path) `mode != "raw"`; in that case the 
-    rendered string already contains the special tokens, so it is 
+    Convenience for single-prompt call sites (e.g. judges).
+
+    A template is applied iff `has_chat_template(tokenizer)` and
+    (for the `prompt` path) `mode != "raw"`; in that case the
+    rendered string already contains the special tokens, so it is
     tokenized with `add_special_tokens=False`, otherwise `True`.
 
     Args:

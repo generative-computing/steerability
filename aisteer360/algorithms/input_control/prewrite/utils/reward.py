@@ -14,9 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from aisteer360.algorithms.input_control._common.scorers.task_evaluation import (
-    TaskEvaluationScorer,
-)
+from aisteer360.algorithms.input_control.common.scorers.task_evaluation import TaskEvaluationScorer
 
 
 def _completion_text(completion: Any) -> str:

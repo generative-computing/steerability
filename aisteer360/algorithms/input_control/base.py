@@ -5,7 +5,6 @@ This module provides the abstract base class for methods that modify prompts bef
 Two base classes are provided:
 
 - `InputControl`: Base class for all input control methods.
-- `NoInputControl`: Identity (null) control; used when no input control is defined in steering pipeline.
 
 Input controls implement steering through prompt transformation σ(x), enabling behavior modification without altering
 model parameters or architecture. These methods transform inputs before they reach the model, resulting in generations
@@ -34,9 +33,10 @@ from transformers import PreTrainedTokenizerBase
 
 from aisteer360.algorithms.core.base_args import BaseArgs
 from aisteer360.algorithms.core.base_control import BaseControl
+from aisteer360.algorithms.core.execution.contracts import Requirements
 
 if TYPE_CHECKING:
-    from aisteer360.algorithms.input_control._common.memory.base import Memory
+    from aisteer360.algorithms.input_control.common.memory.base import Memory
 
 
 class InputControl(BaseControl):
@@ -57,7 +57,7 @@ class InputControl(BaseControl):
         cleanup() -> None: Release resources allocated during steer (optional).
 
     Subclasses that produce an artifact in `steer()` (instructions, demonstrations, learned weights, ...) may expose it
-    via the `memory` attribute, e.g., see `TextMemory`. 
+    via the `memory` attribute, e.g., see `TextMemory`.
     """
 
     Args: type[BaseArgs] | None = None
@@ -112,34 +112,24 @@ class InputControl(BaseControl):
         self,
         model=None,
         tokenizer=None,
+        session=None,
         **kwargs,
     ) -> None:
-        """Optional offline preparation. Default is no-op."""
+        """Optional offline preparation. Default is no-op.
+
+        `session` is a `SteeringSession` on the steering backend, provided by the pipeline.
+        """
         pass
 
+    def requirements(self) -> Requirements:
+        """Backend requirements computed from this instance's configuration, per phase.
 
-class NoInputControl(InputControl):
-    """Identity input control.
+        Input controls transform the prompt client-side, so the generate phase requires nothing
+        beyond the session contract on any backend. A control whose `steer()` reads the live
+        pipeline model (e.g. for rollouts or scoring) overrides this with a steer-phase
+        `Capability.IN_PROCESS_TORCH` requirement.
 
-    Used as the default when no input control is needed. Returns input_ids unchanged.
-    """
-    enabled: bool = False
-    supports_batching: bool = True
-    tokenizer: PreTrainedTokenizerBase | None = None
-
-    def adapt(
-        self,
-        input_ids: list[int] | torch.Tensor,
-        runtime_kwargs: dict | None = None,
-    ) -> list[int] | torch.Tensor:
-        """Identity adapter; returns input_ids unchanged."""
-        return input_ids
-
-    def steer(
-        self,
-        model=None,
-        tokenizer: PreTrainedTokenizerBase | None = None,
-        **kwargs,
-    ) -> None:
-        """Null steer operation; attaches tokenizer."""
-        self.tokenizer = tokenizer
+        Returns:
+            The control's phase-keyed requirements.
+        """
+        return Requirements()

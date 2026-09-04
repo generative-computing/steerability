@@ -6,7 +6,7 @@ import pytest
 import torch
 from transformers import LlamaForCausalLM
 
-from aisteer360.algorithms.core.internals.fingerprint import model_fingerprint
+from aisteer360.algorithms.core.internals.fingerprint import is_absent_chat_template_fingerprint, model_fingerprint
 from tests.utils.tiny_models import tiny_llama
 
 
@@ -63,3 +63,28 @@ class TestSensitivity:
         torch.manual_seed(0)
         b = tiny_llama(num_layers=2)
         assert model_fingerprint(a) != model_fingerprint(b)
+
+
+class TestAbsentChatTemplateFingerprint:
+    def test_recipe_digests_of_missing_and_empty_templates_are_absent(self):
+        pytest.importorskip("vllm_hook_plugins")
+        from vllm_hook_plugins.core.fingerprints import chat_template_fingerprint
+
+        assert is_absent_chat_template_fingerprint(chat_template_fingerprint(None))
+        assert is_absent_chat_template_fingerprint(chat_template_fingerprint(""))
+
+    def test_real_template_fingerprint_is_not_absent(self):
+        pytest.importorskip("vllm_hook_plugins")
+        from vllm_hook_plugins.core.fingerprints import chat_template_fingerprint
+
+        assert not is_absent_chat_template_fingerprint(chat_template_fingerprint("{{ messages }}"))
+
+    def test_missing_fingerprint_is_absent(self):
+        assert is_absent_chat_template_fingerprint(None)
+        assert is_absent_chat_template_fingerprint("")
+
+    def test_wire_digest_of_an_unexposed_template_is_absent(self):
+        # the value a server reports when it exposes no chat template
+        assert is_absent_chat_template_fingerprint(
+            "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        )

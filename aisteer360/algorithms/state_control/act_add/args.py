@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 
 from aisteer360.algorithms.core.base_args import BaseArgs
-from aisteer360.algorithms.state_control._common.steering_vector import SteeringVector
+from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
 
 
 @dataclass
@@ -13,16 +13,17 @@ class ActAddArgs(BaseArgs):
     If prompts are provided, the vector is extracted during steer().
 
     Attributes:
-        steering_vector: Pre-computed steering vector (positional, [T, H]).
-            If provided, skip extraction.
+        steering_vector: Pre-computed steering vector (positional, [T, H] per layer).
+            If provided, skip extraction. The vector must be extracted at the layer-input
+            boundary of the target layer, the boundary the control injects at.
         positive_prompt: Prompt representing the desired direction (e.g., "Love").
         negative_prompt: Prompt representing the opposite (e.g., "Hate").
         layer_id: Layer to inject at. If None, uses a depth-based heuristic.
         multiplier: Scaling coefficient (called ``c`` in the paper). Typical
             values range from 1 to 15 depending on model size and behavior.
-        alignment: Token position at which to begin injecting the steering
-            vector into the user's prompt (called ``a`` in the paper).
-            Default: 1 (start after the BOS token).
+        alignment: Absolute token position at which injection begins (called ``a`` in the
+            paper); row ``t`` of the vector is added at position ``alignment + t``. Use 1
+            to skip a BOS token when the prompt tokenization prepends one. Default: 0.
         normalize_vector: If True, L2-normalize each token position's
             direction vector independently before applying.
         use_norm_preservation: If True, wrap the transform in
@@ -37,7 +38,7 @@ class ActAddArgs(BaseArgs):
     # inference configuration
     layer_id: int | None = None
     multiplier: float = 1.0
-    alignment: int = 1
+    alignment: int = 0
     normalize_vector: bool = False
     use_norm_preservation: bool = False
 

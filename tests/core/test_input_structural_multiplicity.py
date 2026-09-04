@@ -23,7 +23,16 @@ from aisteer360.algorithms.input_control.base import InputControl
 from aisteer360.algorithms.state_control.base import StateControl
 from aisteer360.algorithms.structural_control.base import StructuralControl
 from aisteer360.evaluation.benchmark import Benchmark
+from tests.conftest import MockAccuracyMetric, MockUseCase
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
+
+
+def _mock_use_case() -> MockUseCase:
+    """A minimal real use case (the benchmark constructor rejects non-`UseCase` objects)."""
+    return MockUseCase(
+        evaluation_data=[{"id": "q1", "question": "Q?", "answer": "A", "choices": ["A", "B"]}],
+        evaluation_metrics=[MockAccuracyMetric()],
+    )
 
 # renders message contents joined by spaces so WordLevel vocab words map to stable ids
 CHAT_TEMPLATE = "{% for message in messages %}{{ message['content'] }} {% endfor %}"
@@ -120,9 +129,7 @@ def _pipeline(controls, model=None, tokenizer=None):
     if tokenizer is None:
         tokenizer = wordlevel_tokenizer()
         tokenizer.chat_template = CHAT_TEMPLATE
-    pipeline = SteeringPipeline(controls=controls, lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=controls, model=model, tokenizer=tokenizer)
     pipeline.steer()
     return pipeline
 
@@ -218,9 +225,7 @@ class TestStructuralThreading:
     def test_model_threads_through_stages_in_list_order(self):
         base_model = tiny_llama()
         stage1, stage2 = _StageStructuralControl(), _StageStructuralControl()
-        pipeline = SteeringPipeline(controls=[stage1, stage2], lazy_init=True)
-        pipeline.model = base_model
-        pipeline.tokenizer = wordlevel_tokenizer()
+        pipeline = SteeringPipeline(controls=[stage1, stage2], model=base_model, tokenizer=wordlevel_tokenizer())
         pipeline.steer()
 
         assert stage1.received_model is base_model
@@ -230,9 +235,7 @@ class TestStructuralThreading:
     def test_order_matters(self):
         base_model = tiny_llama()
         stage1, stage2 = _StageStructuralControl(), _StageStructuralControl()
-        pipeline = SteeringPipeline(controls=[stage2, stage1], lazy_init=True)
-        pipeline.model = base_model
-        pipeline.tokenizer = wordlevel_tokenizer()
+        pipeline = SteeringPipeline(controls=[stage2, stage1], model=base_model, tokenizer=wordlevel_tokenizer())
         pipeline.steer()
 
         assert stage2.received_model is base_model
@@ -246,7 +249,7 @@ class TestOutPathBackwardsScan:
         first = _OutPathStructuralControl(out_path="path/one")
         second = _OutPathStructuralControl(out_path="path/two")
         third = _OutPathStructuralControl(out_path=None)
-        pipeline = SteeringPipeline(controls=[first, second, third], lazy_init=True)
+        pipeline = SteeringPipeline(controls=[first, second, third])
 
         with caplog.at_level(logging.INFO, logger="aisteer360.algorithms.core.steering_pipeline"):
             resolved = pipeline._structural_out_path()
@@ -255,12 +258,11 @@ class TestOutPathBackwardsScan:
         assert "Multiple structural controls define out_path" in caplog.text
 
     def test_no_out_path_returns_none(self):
-        pipeline = SteeringPipeline(controls=[_OutPathStructuralControl()], lazy_init=True)
+        pipeline = SteeringPipeline(controls=[_OutPathStructuralControl()])
         assert pipeline._structural_out_path() is None
 
     def test_unresolvable_tokenizer_raises(self):
-        pipeline = SteeringPipeline(lazy_init=True)
-        pipeline.model = tiny_llama()  # blank name_or_path, no out_path, no tokenizer
+        pipeline = SteeringPipeline(model=tiny_llama())  # blank name_or_path, no out_path, no tokenizer
         with pytest.raises(RuntimeError, match="Failed to resolve tokenizer"):
             pipeline.steer()
 
@@ -323,9 +325,7 @@ class _DistinctSchemaStateControl(_SchemaStateControl):
 class TestRuntimeKwargsOverlapWarning:
     def test_shared_name_warns_once_naming_both_controls(self):
         controls = [_SchemaInputControl(THE), _SchemaStateControl()]
-        pipeline = SteeringPipeline(controls=controls, lazy_init=True)
-        pipeline.model = tiny_llama()
-        pipeline.tokenizer = wordlevel_tokenizer()
+        pipeline = SteeringPipeline(controls=controls, model=tiny_llama(), tokenizer=wordlevel_tokenizer())
 
         with warnings.catch_warnings(record=True) as recorded:
             warnings.simplefilter("always")
@@ -340,9 +340,7 @@ class TestRuntimeKwargsOverlapWarning:
 
     def test_distinct_names_do_not_warn(self):
         controls = [_SchemaInputControl(THE), _DistinctSchemaStateControl()]
-        pipeline = SteeringPipeline(controls=controls, lazy_init=True)
-        pipeline.model = tiny_llama()
-        pipeline.tokenizer = wordlevel_tokenizer()
+        pipeline = SteeringPipeline(controls=controls, model=tiny_llama(), tokenizer=wordlevel_tokenizer())
 
         with warnings.catch_warnings(record=True) as recorded:
             warnings.simplefilter("always")
@@ -354,9 +352,7 @@ class TestRuntimeKwargsOverlapWarning:
         disabled = _SchemaStateControl()
         disabled.enabled = False
         controls = [_SchemaInputControl(THE), disabled]
-        pipeline = SteeringPipeline(controls=controls, lazy_init=True)
-        pipeline.model = tiny_llama()
-        pipeline.tokenizer = wordlevel_tokenizer()
+        pipeline = SteeringPipeline(controls=controls, model=tiny_llama(), tokenizer=wordlevel_tokenizer())
 
         with warnings.catch_warnings(record=True) as recorded:
             warnings.simplefilter("always")
@@ -373,7 +369,7 @@ class TestBenchmarkSpecNameCollision:
             ControlSpec(control_cls=_AppendTokenControl, params={"marker_id": CAT}),
         ]
         benchmark = Benchmark(
-            use_case=MagicMock(),
+            use_case=_mock_use_case(),
             base_model_name_or_path="unused",
             steering_pipelines={"sweep": specs},
         )
@@ -386,16 +382,20 @@ class TestBenchmarkSpecNameCollision:
             ControlSpec(control_cls=_AppendTokenControl, params={"marker_id": CAT}, name="second"),
         ]
         benchmark = Benchmark(
-            use_case=MagicMock(),
+            use_case=_mock_use_case(),
             base_model_name_or_path="unused",
             steering_pipelines={"sweep": specs},
         )
 
         captured = []
 
-        def fake_run_pipeline(self, controls, params=None, existing_runs=None):
+        def fake_run_pipeline(self, controls, *, specs=None, params=None, existing_runs=None, record=None):
             captured.append((list(controls), dict(params or {})))
-            return [{"trial_id": 0, "generations": [], "evaluations": {}, "params": params or {}}]
+            run = {"trial_id": 0, "generations": [], "evaluations": {}, "params": params or {},
+                   "config_id": "stub", "seed": None, "provenance": {}}
+            if record is not None:
+                record(run)
+            return [run]
 
         monkeypatch.setattr(Benchmark, "_run_pipeline", fake_run_pipeline)
         profiles = benchmark.run()

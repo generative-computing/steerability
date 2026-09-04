@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
-from aisteer360.algorithms.output_control._common.resolve import resolve_scorer
-from aisteer360.algorithms.output_control._common.drivers.search import SearchDriver
 from aisteer360.algorithms.output_control.base import OutputControl
+from aisteer360.algorithms.output_control.common.drivers.search import SearchDriver
+from aisteer360.algorithms.output_control.common.resolve import resolve_scorer
 from aisteer360.algorithms.output_control.search_decoding.args import SearchDecodingArgs
 
 
@@ -12,7 +12,7 @@ class SearchDecoding(SearchDriver):
     """Config-first segment-shape driver: propose -> score -> keep -> iterate.
 
     `SearchDecoding` is the generic over the segment shape, a thin `Args`-configured preset of the
-    `_common` `SearchDriver`. Its defaults are best-of-N: with no arguments beyond a scorer, it
+    `common` `SearchDriver`. Its defaults are best-of-N: with no arguments beyond a scorer, it
     samples `num_candidates` full-budget continuations once and returns the scorer's argmax. A
     method from the literature is an assignment of a config:
 
@@ -26,7 +26,7 @@ class SearchDecoding(SearchDriver):
     `SearchDecoding` is a decoding driver: at most one enabled driver runs per pipeline, and the
     driver forwards the composed logits/stopping stacks into every rollout, so a step-level
     control (e.g. `ValueGuidance`) steers every proposed continuation. Batch size 1 and the runtime
-    pass-throughs (`base_generate`, `reward_params`) are inherited from `SearchDriver` unchanged.
+    pass-throughs (`reward_params`) are inherited from `SearchDriver` unchanged.
 
     Args:
         scorer: A `SequenceScorer` (callable / instance) or a dict spec with a `"kind"` key.
@@ -64,9 +64,10 @@ class SearchDecoding(SearchDriver):
         # already mirrored from SearchDecodingArgs; the driver reads them under the same names
         self.tokenizer = None
 
-    def steer(self, model: PreTrainedModel, tokenizer: PreTrainedTokenizer | None = None, **_) -> PreTrainedModel:
+    def steer(self, model: PreTrainedModel | None = None, tokenizer: PreTrainedTokenizer | None = None,
+              **_) -> PreTrainedModel | None:
         """Attach the tokenizer and resolve the scorer spec (a device is needed for reward models)."""
         self.tokenizer = tokenizer or getattr(model, "tokenizer", None)
-        device = next(model.parameters()).device
+        device = next(model.parameters()).device if model is not None else None
         self.scorer = resolve_scorer(self.scorer, device=device)
         return model

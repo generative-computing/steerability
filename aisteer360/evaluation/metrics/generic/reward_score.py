@@ -3,12 +3,7 @@ from typing import Any, Literal
 
 import torch
 import torch.nn.functional as F
-from transformers import (
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
-    PreTrainedModel,
-    PreTrainedTokenizerBase,
-)
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
 
 from aisteer360.evaluation.metrics.base import Metric
 

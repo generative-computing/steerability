@@ -8,14 +8,10 @@ import torch
 from transformers import PreTrainedTokenizer
 
 from aisteer360.algorithms.input_control.base import InputControl
-from aisteer360.algorithms.input_control._common.formatters.few_shot_block import (
-    FewShotBlockFormatter,
-)
-from aisteer360.algorithms.input_control._common.memory.pool import PoolMemory
-from aisteer360.algorithms.input_control._common.memory.text import TextMemory
-from aisteer360.algorithms.input_control._common.selectors.base import (
-    BaseSelector,
-)
+from aisteer360.algorithms.input_control.common.formatters.few_shot_block import FewShotBlockFormatter
+from aisteer360.algorithms.input_control.common.memory.pool import PoolMemory
+from aisteer360.algorithms.input_control.common.memory.text import TextMemory
+from aisteer360.algorithms.input_control.common.selectors.base import BaseSelector
 from aisteer360.algorithms.input_control.few_shot.args import FewShotArgs
 from aisteer360.algorithms.input_control.few_shot.selectors import selector_from_arg
 from aisteer360.utils.rendering import has_chat_template, render_messages

@@ -3,9 +3,9 @@ from dataclasses import dataclass, field
 
 from aisteer360.algorithms.core.base_args import BaseArgs
 from aisteer360.algorithms.core.internals.data import ContrastivePairs, as_contrastive_pairs
-from aisteer360.algorithms.state_control._common.specs import VectorTrainSpec
-from aisteer360.algorithms.state_control._common.steering_vector import SteeringVector
-from aisteer360.algorithms.state_control._common.token_scope import TokenScope
+from aisteer360.algorithms.state_control.common.fit_specs import VectorTrainSpec
+from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
+from aisteer360.algorithms.state_control.common.token_scope import ScopeKind
 
 
 @dataclass
@@ -51,7 +51,7 @@ class DirectionalAblationArgs(BaseArgs):
     layer_range: tuple[int, int] | None = None  # optional half-open [start, end) filter
 
     # inference configuration
-    token_scope: TokenScope = "all"
+    token_scope: ScopeKind = "all"
     last_k: int | None = None
     from_position: int | None = None
     use_norm_preservation: bool = False

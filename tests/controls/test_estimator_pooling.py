@@ -9,7 +9,7 @@ import torch
 
 from aisteer360.algorithms.core.internals.pooling import pool_over_spans as _pool_over_spans
 from aisteer360.algorithms.core.internals.pooling import select_spans as _select_spans
-from aisteer360.algorithms.state_control._common.estimators.mean_difference import _masked_mean
+from aisteer360.algorithms.state_control.common.estimators.mean_difference import _masked_mean
 
 
 def _poison_pads(hidden: torch.Tensor, attention_mask: torch.Tensor, value: float = 1e6) -> torch.Tensor:

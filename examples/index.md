@@ -1,10 +1,10 @@
 # Examples
 
-We have prepared a collection of example notebooks for expressing the toolkit's 
-functionality.  
+We have prepared a collection of example notebooks for expressing the toolkit's
+functionality.
 
 - `algorithms/` contain demonstrations of the toolkit's built-in algorithms, including wrappers around existing libraries (e.g., `trl`, `mergekit`).
-- `generics/` illustrate config-based generic controls and demonstate how modular controls can be constructed.
+- `generics/` illustrate config-based generic controls and demonstrate how modular controls can be constructed.
 - `recipes/` are worked examples that compose existing toolkit components into something new.
 - `benchmarks/` demonstrate more extensive studies that compare methods on a given use case.
 
@@ -78,22 +78,32 @@ Algorithm notebooks demonstrate how each method (i.e., control) operates. The me
 
     :octicons-arrow-right-24: [SASA](./notebooks/algorithms/sasa.ipynb)
 
-    :octicons-arrow-right-24: [ThinkingIntervention](./notebooks/algorithms/thinking_intervention.ipynb)
-
 </div>
 
 
 ## Generic controls
 
 Several of the methods above are specific settings of a smaller number of generic controls. As part
-of the toolkit, we have prepared a collection of such config-based controls, which we call `generics`, 
-to enable custom construction of (modular) controls. 
+of the toolkit, we have prepared a collection of such config-based controls, which we call `generics`,
+to enable custom construction of (modular) controls.
 
 The notebooks below show how to configure each generic and recover named methods from it.
 
 <div class="grid cards" markdown>
 
+-   __State control__
+
+    ---
+
+    The composable activation-steering atom; each adapter wires a transform, layer selection, and optionally a gate and token scope into one single-behavior control. Current notebooks cover:
+
     :octicons-arrow-right-24: [ActivationAdapter](./notebooks/generics/activation_adapter.ipynb)
+
+-   __Output control__
+
+    ---
+
+    The output analogues, one generic per shape: per-candidate value shifts, mixed log-prob sources, segment search, phased splicing, and stop rules. Current notebooks cover:
 
     :octicons-arrow-right-24: [ValueGuidance](./notebooks/generics/value_guidance.ipynb)
 

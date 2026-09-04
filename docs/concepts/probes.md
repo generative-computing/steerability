@@ -8,9 +8,11 @@
 
 Some steering workflows depend on detection, i.e., reading the model's internal state to decide whether a concept is
 present in a prompt, e.g., recognizing that a question asks for medical advice so it can be routed to a referral
-instead of answered. The toolkit implements detection with probes and keeps a small vocabulary. Probes read
-internals, gates admit interventions, and rules route. This page covers probes and rules; gates belong to the
-steering runtime and are covered under [state control](controls.md#state-control).
+instead of answered. The toolkit implements detection with probes and keeps a small vocabulary that forms a ladder:
+probes measure (hidden states become scores and boolean decisions), gates decide (a binary admit/deny inside a
+steered intervention, covered under [state control](controls.md#state-control)), and routers compose named decisions
+into a categorical choice of action (inside [routed decoding](controls.md#output-control)). This page covers the
+measurement rung.
 
 
 ## Probes and probe sets
@@ -28,8 +30,8 @@ Two properties define the artifact:
   it can be saved, loaded, and applied to cached activations offline.
 
 Reads over a live model go through a `ProbeSet`, which scores every named probe in one read-only forward and returns
-a `Readout` of per-prompt signed scores and boolean decisions. The read never edits hidden states, so probing leaves
-generation untouched.
+a `ProbeReadings` of per-prompt signed scores and boolean decisions. The read never edits hidden states, so probing
+leaves generation untouched.
 
 
 ## Fitting and calibration
@@ -60,29 +62,15 @@ readout = probes.read(model, input_ids, attention_mask)
 ```
 
 
-## Routing
+## From measurement to decisions and routes
 
-Predicates over probe names turn decisions into routing logic. `P(name)` reads one probe's decision, and `&`, `|`,
-and `~` compose predicates. An ordered `RoutingRules` list assigns each prompt an action by first match, evaluated
-independently per row of a batch:
-
-```python
-from aisteer360.algorithms.core.internals.probes import P, Rule, RoutingRules
-
-rules = RoutingRules(
-    rules=[
-        Rule("medical_advice", when=P("medical") & P("advice"), action=...),
-        Rule("medical_info", when=P("medical") & ~P("advice"), action=...),
-    ],
-    default_action=...,
-)
-```
-
-The [`RoutedDecoding`](controls.md#output-control) driver connects the pieces at generation time. It reads the probes
-on the prompt, routes each row through the rules, and executes the matched action (a canned response, a prefix
-followed by generation, or plain generation). Probes can also drive steering directly, since `Probe.as_condition()`
-returns the condition ports of an [`ActivationAdapter`](controls.md#state-control), so an intervention applies only
-when the probe fires.
+A probe's boolean decisions feed the two decision layers above it. For binary gating, `Probe.as_gate()` returns a
+steering gate that reproduces the probe's decision, so an intervention (e.g. an
+[`ActivationAdapter`](controls.md#state-control)) applies only when the probe fires. For categorical routing, the
+[`RoutedDecoding`](controls.md#output-control) driver evaluates a `Router` (ordered routes with predicates over
+decision names, first match wins, per row) against a probe set's decisions and executes the matched action (a canned
+response, a prefix followed by generation, or plain generation). The routing vocabulary lives with that control; see
+the [routed decoding notebook](../examples/notebooks/recipes/routed_decoding.ipynb) for a worked example.
 
 
 ## Detection versus steering

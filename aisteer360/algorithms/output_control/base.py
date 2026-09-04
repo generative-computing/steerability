@@ -20,17 +20,20 @@ Examples of output controls:
 See Also:
 
 - `aisteer360.algorithms.output_control`: Implementations of output control methods
-- `aisteer360.algorithms.output_control._common`: Shared component library
+- `aisteer360.algorithms.output_control.common`: Shared component library
 - `aisteer360.algorithms.core.steering_pipeline`: Integration with steering pipeline
 """
 from abc import abstractmethod
-from typing import Type
+from collections.abc import Mapping
+from typing import Any, Type
 
 import torch
 from transformers import LogitsProcessorList, PreTrainedModel, StoppingCriteriaList
 
 from aisteer360.algorithms.core.base_args import BaseArgs
 from aisteer360.algorithms.core.base_control import BaseControl
+from aisteer360.algorithms.core.execution.contracts import Capability, Requirements, needs
+from aisteer360.algorithms.core.execution.session_utils import session_generate
 
 
 def stack_generate_kwargs(logits_processors, stopping_criteria) -> dict:
@@ -46,6 +49,33 @@ def stack_generate_kwargs(logits_processors, stopping_criteria) -> dict:
     if stopping_criteria is not None and len(stopping_criteria):
         extra["stopping_criteria"] = stopping_criteria
     return extra
+
+
+def resolve_generate_callable(model, runtime_kwargs: dict | None, session=None):
+    """Resolve the generate callable a driver rolls out with.
+
+    Drivers generate through the pipeline's session (a `SteeredSession` carrying this
+    generation's control entries), so a driver runs on any backend whose session serves its
+    rollout parameters.
+
+    Args:
+        model: The pipeline model, or None on backends without a live model; unused.
+        runtime_kwargs: Per-call parameters; unused.
+        session: The `SteeringSession` for this generation.
+
+    Returns:
+        A callable with the `model.generate` calling convention returning full sequences.
+
+    Raises:
+        ValueError: If no session was provided.
+    """
+    if session is None:
+        raise ValueError("No generate callable available: the driver received no session.")
+
+    def _generate(input_ids, attention_mask=None, **gen_kwargs):
+        return session_generate(session, input_ids, attention_mask, **gen_kwargs)
+
+    return _generate
 
 
 class OutputControl(BaseControl):
@@ -86,7 +116,7 @@ class OutputControl(BaseControl):
         A processor must behave as a function of `(prefix_ids, scores)`. Internal state is
         permitted only as memoization keyed on the prefix and must re-derive on a prefix mismatch,
         since drivers may restart, rewind, or reorder sequences, and scoring replays prefixes
-        teacher-forced (subclass `_common.processors.base.PrefixKeyedProcessor` to satisfy this
+        teacher-forced (subclass `common.processors.base.PrefixKeyedProcessor` to satisfy this
         mechanically). Return fresh processor instances from this hook; it is invoked once per call
         precisely so that per-generation state is isolated.
 
@@ -116,9 +146,79 @@ class OutputControl(BaseControl):
         """
         return []
 
-    def steer(self, model: PreTrainedModel, tokenizer=None, **kwargs) -> None:
-        """Optional one-time preparation (e.g., load a reward model, fit a probe)."""
+    def export_generation_params(self, runtime_kwargs: dict | None = None) -> Mapping[str, Any] | None:
+        """The control's sampling-expressible contribution, or None.
+
+        A control whose behavior is expressible as normalized generation parameters returns a
+        mapping over a subset of `stop_strings`, `stop_token_ids`, `max_new_tokens`, and
+        `min_new_tokens`; the pipeline merges it into the call's `GenerationParams` (stop rules
+        union with the caller's; token bounds only tighten) and does not additionally collect
+        the control's live processors and criteria for that call, so the control executes on
+        every backend through the session's composed stop rules. The default returns None, which
+        keeps the control on the live processor/criteria mechanism.
+
+        Args:
+            runtime_kwargs: Per-call parameters supplied to `generate()`.
+
+        Returns:
+            The parameter contribution, or None.
+        """
+        return None
+
+    def export_processor_spec(self, runtime_kwargs: dict | None = None):
+        """The control's engine-hosted processor form, or None.
+
+        A control whose per-step logit math is expressible in an engine's served processor
+        vocabulary returns a `ProcessorSpec`; on a backend advertising
+        `Capability.PER_STEP_LOGIT_SPECS` with the spec's kind, the pipeline submits it as a
+        `ProcessorSpecEntry` in place of the control's live processor. The default returns
+        None, which keeps the control on the live processor mechanism.
+
+        Args:
+            runtime_kwargs: Per-call parameters supplied to `generate()`.
+
+        Returns:
+            The processor spec, or None.
+        """
+        return None
+
+    def export_constraint(self, runtime_kwargs: dict | None = None):
+        """The control's declarative constrained-decoding source, or None.
+
+        A control whose per-step masking compiles from a declarative source returns a
+        `ConstraintSource`; on a backend advertising `Capability.GUIDED_DECODING` the pipeline
+        renders it onto the engine's native structured-output parameters in place of the
+        control's live processor. The default returns None, which keeps the control on the live
+        processor mechanism.
+
+        Args:
+            runtime_kwargs: Per-call parameters supplied to `generate()`.
+
+        Returns:
+            The constraint source, or None.
+        """
+        return None
+
+    def steer(self, model: PreTrainedModel, tokenizer=None, session=None, **kwargs) -> None:
+        """Optional one-time preparation (e.g., load a reward model, fit a probe).
+
+        `session` is a `SteeringSession` on the steering backend, provided by the pipeline.
+        """
         pass
+
+    def requirements(self) -> Requirements:
+        """Backend requirements computed from this instance's configuration, per phase.
+
+        The default requires `Capability.IN_PROCESS_TORCH` at generate and, when
+        `include_in_scoring` is True, at score as well, since remote prompt-logprob computation
+        applies neither live processors nor engine-registered sampling processors to prefill
+        logits. Setting `include_in_scoring=False` removes the score-phase requirement.
+
+        Returns:
+            The control's phase-keyed requirements.
+        """
+        score = needs(Capability.IN_PROCESS_TORCH) if self.include_in_scoring else ()
+        return Requirements(generate=needs(Capability.IN_PROCESS_TORCH), score=score)
 
 
 class DecodingDriver(OutputControl):
@@ -134,6 +234,11 @@ class DecodingDriver(OutputControl):
     A driver is also an `OutputControl`: it may additionally contribute processors or
     criteria of its own via the `get_*` hooks, which the pipeline composes like any other
     control's.
+
+    The pipeline passes `session=`, the `SteeringSession` for this generation. Drivers issue
+    their rollouts through it (`resolve_generate_callable` returns the right callable), so a
+    driver runs on any backend whose session serves its rollout parameters; `model` is None on
+    backends without a live model.
     """
 
     @abstractmethod
@@ -141,23 +246,11 @@ class DecodingDriver(OutputControl):
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
-        model: PreTrainedModel,
+        model: PreTrainedModel | None,
         logits_processors: LogitsProcessorList,
         stopping_criteria: StoppingCriteriaList,
         runtime_kwargs: dict | None,
+        session=None,
         **gen_kwargs,
     ) -> torch.Tensor:
         """Run the decoding procedure; return full sequence ids (prompt + continuation)."""
-
-
-class HFGenerateDriver(DecodingDriver):
-    """Default decoding driver: delegate the loop to the model's own `generate`."""
-
-    supports_batching: bool = True
-
-    def decode(self, input_ids, attention_mask, model, logits_processors,
-               stopping_criteria, runtime_kwargs, **gen_kwargs) -> torch.Tensor:
-        extra = stack_generate_kwargs(logits_processors, stopping_criteria)
-        return model.generate(
-            input_ids=input_ids, attention_mask=attention_mask, **extra, **gen_kwargs
-        )

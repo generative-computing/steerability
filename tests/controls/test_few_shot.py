@@ -5,8 +5,8 @@ import pytest
 import torch
 
 from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.input_control._common.formatters.few_shot_block import FewShotBlockFormatter
-from aisteer360.algorithms.input_control._common.memory.text import TextMemory
+from aisteer360.algorithms.input_control.common.formatters.few_shot_block import FewShotBlockFormatter
+from aisteer360.algorithms.input_control.common.memory.text import TextMemory
 from aisteer360.algorithms.input_control.few_shot.control import FewShot
 from tests.utils.sweep import build_param_grid
 
@@ -83,9 +83,7 @@ def test_few_shot(model_and_tokenizer, device: torch.device, conf: dict):
     fewshot = FewShot(**kwargs)
 
     # pipeline
-    pipeline = SteeringPipeline(controls=[fewshot], lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=[fewshot], model=model, tokenizer=tokenizer)
     pipeline.steer()
 
     # prepare inputs & runtime kwargs
@@ -138,9 +136,7 @@ def test_few_shot_batch_formats(model_and_tokenizer, device: torch.device, input
         k_positive=1,
     )
 
-    pipeline = SteeringPipeline(controls=[fewshot], lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=[fewshot], model=model, tokenizer=tokenizer)
     pipeline.steer()
 
 
@@ -198,9 +194,7 @@ def test_few_shot_1d_tensor_bug_regression(model_and_tokenizer, device: torch.de
         k_positive=1,
     )
 
-    pipeline = SteeringPipeline(controls=[fewshot], lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=[fewshot], model=model, tokenizer=tokenizer)
     pipeline.steer()
 
 
@@ -226,9 +220,7 @@ def test_adapt_messages_inserts_single_system_block(model_and_tokenizer, device:
         positive_example_pool=POS_POOL,
         k_positive=2,
     )
-    pipeline = SteeringPipeline(controls=[fewshot], lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=[fewshot], model=model, tokenizer=tokenizer)
     pipeline.steer()
 
     messages = [[{"role": "user", "content": "How was the movie?"}]]
@@ -248,9 +240,7 @@ def test_adapt_messages_returns_none_when_nothing_configured(model_and_tokenizer
     base_model, tokenizer = model_and_tokenizer
     model = base_model.to(device)
     fewshot = FewShot()
-    pipeline = SteeringPipeline(controls=[fewshot], lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=[fewshot], model=model, tokenizer=tokenizer)
     pipeline.steer()
     out = fewshot.adapt_messages([[{"role": "user", "content": "?"}]])
     assert out is None
@@ -258,7 +248,7 @@ def test_adapt_messages_returns_none_when_nothing_configured(model_and_tokenizer
 
 def test_selector_accepts_instance(model_and_tokenizer, device: torch.device):
     """`selector=` should accept a BaseSelector instance directly (not just a string name)."""
-    from aisteer360.algorithms.input_control._common.selectors.random import RandomSelector
+    from aisteer360.algorithms.input_control.common.selectors.random import RandomSelector
 
     base_model, tokenizer = model_and_tokenizer
     model = base_model.to(device)
@@ -269,9 +259,7 @@ def test_selector_accepts_instance(model_and_tokenizer, device: torch.device):
         k_positive=1,
         selector=instance,
     )
-    pipeline = SteeringPipeline(controls=[fewshot], lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=[fewshot], model=model, tokenizer=tokenizer)
     pipeline.steer()
     # the resolved selector is the same instance we passed in
     assert fewshot._selector is instance
@@ -285,9 +273,7 @@ def test_unknown_selector_name_raises(model_and_tokenizer, device: torch.device)
         k_positive=1,
         selector="nonexistent",
     )
-    pipeline = SteeringPipeline(controls=[fewshot], lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=[fewshot], model=model, tokenizer=tokenizer)
     with pytest.raises(ValueError, match="Unknown selector"):
         pipeline.steer()
 
@@ -303,9 +289,7 @@ def test_few_shot_missing_pad_token_raises(model_and_tokenizer, device: torch.de
         k_positive=1,
     )
 
-    pipeline = SteeringPipeline(controls=[fewshot], lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=[fewshot], model=model, tokenizer=tokenizer)
     pipeline.steer()
 
 
@@ -353,9 +337,7 @@ def test_content_survives_schema_agnostic_keys(model_and_tokenizer, device: torc
         positive_example_pool=pool,
         k_positive=2,
     )
-    pipeline = SteeringPipeline(controls=[fewshot], lazy_init=True)
-    pipeline.model = base_model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=[fewshot], model=base_model, tokenizer=tokenizer)
     pipeline.steer()
 
     decoded = _decode_adapted_text(fewshot, tokenizer, "How tall is Everest?")
@@ -376,9 +358,7 @@ def test_default_headers_present(model_and_tokenizer, device: torch.device):
         k_positive=1,
         k_negative=1,
     )
-    pipeline = SteeringPipeline(controls=[fewshot], lazy_init=True)
-    pipeline.model = base_model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=[fewshot], model=base_model, tokenizer=tokenizer)
     pipeline.steer()
 
     decoded = _decode_adapted_text(fewshot, tokenizer, "Was the meal good?")
@@ -401,9 +381,7 @@ def test_custom_headers_propagate(model_and_tokenizer, device: torch.device):
         k_positive=1,
         k_negative=1,
     )
-    pipeline = SteeringPipeline(controls=[fewshot], lazy_init=True)
-    pipeline.model = base_model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=[fewshot], model=base_model, tokenizer=tokenizer)
     pipeline.steer()
 
     decoded = _decode_adapted_text(fewshot, tokenizer, "Was the meal good?")
@@ -419,9 +397,7 @@ def test_directive_only_via_adapt_messages(model_and_tokenizer, device: torch.de
     _ = base_model.to(device)
 
     fewshot = FewShot(directive="be concise")
-    pipeline = SteeringPipeline(controls=[fewshot], lazy_init=True)
-    pipeline.model = base_model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=[fewshot], model=base_model, tokenizer=tokenizer)
     pipeline.steer()
 
     out = fewshot.adapt_messages([[{"role": "user", "content": "x"}]])
@@ -437,9 +413,7 @@ def test_directive_only_via_adapt(model_and_tokenizer, device: torch.device):
     _ = base_model.to(device)
 
     fewshot = FewShot(directive="be concise")
-    pipeline = SteeringPipeline(controls=[fewshot], lazy_init=True)
-    pipeline.model = base_model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=[fewshot], model=base_model, tokenizer=tokenizer)
     pipeline.steer()
 
     input_ids = tokenizer("Tell me about cats.", return_tensors="pt").input_ids
@@ -456,9 +430,7 @@ def test_no_examples_no_directive_warns_and_passes_through(model_and_tokenizer, 
     _ = base_model.to(device)
 
     fewshot = FewShot()
-    pipeline = SteeringPipeline(controls=[fewshot], lazy_init=True)
-    pipeline.model = base_model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=[fewshot], model=base_model, tokenizer=tokenizer)
     pipeline.steer()
 
     input_ids = tokenizer("Hello world", return_tensors="pt").input_ids

@@ -1,11 +1,7 @@
 from typing import Any
 
 from peft import LoraConfig, PeftType
-from transformers import (
-    DataCollatorForLanguageModeling,
-    PreTrainedModel,
-    PreTrainedTokenizer,
-)
+from transformers import DataCollatorForLanguageModeling, PreTrainedModel, PreTrainedTokenizer
 from trl import SFTConfig, SFTTrainer
 
 from aisteer360.algorithms.structural_control.base import StructuralControl
@@ -24,12 +20,10 @@ class SFTTrainerMixin(TRLMixin, StructuralControl):
 
     def steer(self, model: PreTrainedModel | None, tokenizer: PreTrainedTokenizer | None = None, **_) -> PreTrainedModel:
 
-        self.model = model
         self.tokenizer = tokenizer or (getattr(model, "tokenizer", None) if model is not None else None)
-        self.device = next(model.parameters()).device if model is not None else None
 
         # resolve or load as needed
-        self._resolve_model_tokenizer(self.model, self.tokenizer)
+        model, self.tokenizer = self._resolve_model_tokenizer(model, self.tokenizer)
 
         # build TRL config
         config_kwargs = self._filter_kwargs_for_class_or_callable(SFTConfig, self.training_args)
@@ -49,7 +43,7 @@ class SFTTrainerMixin(TRLMixin, StructuralControl):
         # train if a dataset is provided
         if self.train_dataset is not None:
             trainer = SFTTrainer(
-                model=self.model,
+                model=model,
                 args=training_config,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
@@ -58,10 +52,10 @@ class SFTTrainerMixin(TRLMixin, StructuralControl):
                 peft_config=peft_config,
             )
             trainer.train(resume_from_checkpoint=self.training_args.get("resume_from_checkpoint"))
-            self.model = trainer.model
+            model = trainer.model
             self._maybe_save_trained_artifacts(trainer)
 
             # optional in-place LoRA merge, then re-freeze
-            self._maybe_merge_lora_in_place()
+            model = self._maybe_merge_lora_in_place(model)
 
-        return self._post_train_freeze()
+        return self._post_train_freeze(model)

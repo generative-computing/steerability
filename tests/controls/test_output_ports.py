@@ -1,21 +1,25 @@
 """Parity / behavior tests for the four ported output-control methods (output multiplicity design, P3).
 
 Hub-free. RAD and SASA had no prior test coverage; their steering math is pinned here directly. DeAL
-and ThinkingIntervention behavior is exercised against the port classes (the shape/content
-assertions of the existing hub tests are covered separately in test_deal.py / test_thinking_intervention.py).
+and PhasedDecoding tail-extraction behavior is exercised against the port classes (the shape/content
+assertions of the existing hub tests are covered separately in test_deal.py / test_generic_output_controls.py).
 """
 import pytest
 import torch
 from transformers import LlamaConfig, LlamaForSequenceClassification
 
+from aisteer360.algorithms.core.internals.probes.probe import Probe
 from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.output_control._common.estimators.linear_probe import LinearProbe
-from aisteer360.algorithms.output_control._common.values.base import StepContext
-from aisteer360.algorithms.output_control._common.values.subspace_margin import SubspaceMarginValue
+from aisteer360.algorithms.output_control.common.values.base import StepContext
+from aisteer360.algorithms.output_control.common.values.subspace_margin import (
+    SubspaceMarginValue,
+    load_single_file_probe,
+)
 from aisteer360.algorithms.output_control.deal.control import DeAL
+from aisteer360.algorithms.output_control.phased_decoding.control import PhasedDecoding
 from aisteer360.algorithms.output_control.rad.control import RAD
 from aisteer360.algorithms.output_control.sasa.control import SASA
-from aisteer360.algorithms.output_control.thinking_intervention.control import ThinkingIntervention
+from tests.utils.runtime_helpers import script_session_generate
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 VOCAB = 100
@@ -26,9 +30,7 @@ def _pipeline(controls, model=None, tokenizer=None):
         model = tiny_llama(num_layers=2, hidden=16, heads=2, vocab=VOCAB)
     if tokenizer is None:
         tokenizer = wordlevel_tokenizer()
-    pipeline = SteeringPipeline(controls=controls, lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=controls, model=model, tokenizer=tokenizer)
     pipeline.steer()
     return pipeline, model, tokenizer
 
@@ -52,11 +54,11 @@ class TestRADParity:
     def test_recipe_matches_reference_math(self, tmp_path):
         rm_path = _make_tiny_reward_model(tmp_path)
         model = tiny_llama(num_layers=2, hidden=16, heads=2, vocab=VOCAB)
-        rad = RAD(beta=10.0, reward_model_id=rm_path)
+        rad = RAD(beta=10.0, reward_model_id=rm_path, top_k=5)
         pipeline, model, tokenizer = _pipeline([rad], model=model)
 
-        # build the processor exactly as get_logits_processors would (top-k default 20)
-        processors = rad.get_logits_processors(torch.tensor([[0, 3, 4]]), {}, top_k=5)
+        # build the processor exactly as get_logits_processors would (top_k=5 on the control)
+        processors = rad.get_logits_processors(torch.tensor([[0, 3, 4]]), {})
         assert len(processors) == 1
         proc = processors[0]
 
@@ -64,14 +66,12 @@ class TestRADParity:
         scores = torch.randn(1, VOCAB)
         out = proc(prefix, scores.clone())
 
-        # reference: top-5 candidates, min-max normalized reward (inverted=False for HF classifier),
-        # non-candidates -> -inf
+        # reference apply_function: top-5 candidates, reward clamped to [0, 1] (inverted=False for the
+        # HF classifier), shift += beta * reward, non-candidates -> -inf
         cand_scores, cand_ids = torch.topk(scores, 5, dim=-1)
         # reward the candidates via the same value the processor uses
         v = proc.value.score(StepContext(prefix, cand_ids, tokenizer, model, None))
-        r_min = v.min()
-        r_max = v.max()
-        norm = (v - r_min) / (r_max - r_min) if (r_max - r_min) > 1e-8 else torch.full_like(v, 0.5)
+        norm = v.clamp(0.0, 1.0)
         expected = torch.full_like(scores, float("-inf"))
         expected.scatter_(1, cand_ids, cand_scores)
         expected.scatter_add_(1, cand_ids, 10.0 * norm.to(scores.dtype))
@@ -87,8 +87,8 @@ class TestRADParity:
         assert processors[0].policy == "top_k"
         assert processors[0].k == 20
 
-    def test_unsteered_raises(self):
-        rad = RAD(beta=1.0)
+    def test_unsteered_raises(self, monkeypatch):
+        rad = RAD(beta=1.0, reward_model_id="x")
         with pytest.raises(RuntimeError, match="steer"):
             rad.get_logits_processors(torch.tensor([[0, 3, 4]]), {})
 
@@ -110,16 +110,15 @@ class TestSASAParity:
     def test_margin_softmax_math(self):
         model = tiny_llama(num_layers=2, hidden=16, heads=2, vocab=VOCAB)
         tokenizer = wordlevel_tokenizer()
-        probe = LinearProbe(
-            direction=torch.randn(16),
-            midpoint=torch.randn(16),
+        probe = Probe(
+            model_type="test", location="layer_output", pooling="last",
+            layer_ids=[1], weights={1: torch.randn(16)}, bias=0.3,
         )
         sasa = SASA(beta=3.0, wv_path=None)
         # inject probe directly (skip fitting)
         sasa.model = model
         sasa.tokenizer = tokenizer
         sasa.probe = probe
-        sasa.probe.to(next(model.parameters()).device)
 
         prefix = torch.tensor([[0, 3, 4]])
         attention_mask = torch.ones_like(prefix)
@@ -144,10 +143,12 @@ class TestSASAParity:
         wv = {"wv": torch.randn(16), "mu_mu": torch.randn(16)}
         path = str(tmp_path / "steer_wv.pt")
         torch.save(wv, path)
-        probe = SASA._load_probe(path)
-        assert isinstance(probe, LinearProbe)
-        assert torch.allclose(probe.direction, wv["wv"])
-        assert torch.allclose(probe.midpoint, wv["mu_mu"])
+        probe = load_single_file_probe(path, layer_id=1)
+        assert isinstance(probe, Probe)
+        assert probe.location == "layer_output" and probe.pooling == "last"
+        assert probe.layer_ids == [1]
+        assert torch.allclose(probe.weights[1], wv["wv"])
+        assert probe.bias == pytest.approx(-float(torch.dot(wv["wv"], wv["mu_mu"])), abs=1e-5)
 
     def test_include_in_scoring_default_false(self):
         assert SASA.include_in_scoring is False
@@ -168,12 +169,12 @@ class TestSASAParity:
         out = pipeline.generate(input_ids=prompt, max_new_tokens=5, do_sample=False, eos_token_id=None)
         assert out.ndim == 2
         assert out.size(1) == 5  # continuation-only, prompt excluded
-        assert abs(float(sasa.probe.direction.norm()) - 1.0) < 1e-4
+        assert abs(float(sasa.probe.weights[1].norm()) - 1.0) < 1e-4
 
 
 # DeAL
 class TestDeALPort:
-    def test_base_generate_override_and_scorer_trajectory(self):
+    def test_rollouts_run_through_the_session(self, monkeypatch):
         model = tiny_llama(num_layers=2, hidden=16, heads=2, vocab=VOCAB)
         tokenizer = wordlevel_tokenizer()
 
@@ -184,21 +185,21 @@ class TestDeALPort:
         deal = DeAL(reward_func=scorer, lookahead=2, init_beams=4, topk=2, max_iterations=2)
         pipeline, model, tokenizer = _pipeline([deal], model=model, tokenizer=tokenizer)
 
-        override_calls = []
+        rollout_calls = []
         real_generate = model.generate
 
-        def override_generate(**kwargs):
-            override_calls.append("logits_processor" in kwargs)
+        def spy_generate(**kwargs):
+            rollout_calls.append(True)
             return real_generate(**kwargs)
 
+        script_session_generate(monkeypatch, spy_generate)
         prompt = tokenizer("the cat", return_tensors="pt").input_ids
         out = pipeline.generate(
             input_ids=prompt,
-            runtime_kwargs={"base_generate": override_generate},
             max_new_tokens=4,
         )
         assert out.ndim == 2
-        assert override_calls  # override was used for the rollouts
+        assert rollout_calls  # the driver's rollouts went through the session
 
     def test_step_level_control_steers_every_rollout(self):
         model = tiny_llama(num_layers=2, hidden=16, heads=2, vocab=VOCAB)
@@ -231,9 +232,9 @@ class TestDeALPort:
         assert torch.all(continuation == 7)
 
 
-# ThinkingIntervention
-class TestThinkingInterventionPort:
-    def test_extract_after_and_prefix_splice(self):
+# PhasedDecoding (tail extraction)
+class TestPhasedTailExtractionPort:
+    def test_extract_after_and_prefix_splice(self, monkeypatch):
         model = tiny_llama(num_layers=2, hidden=16, heads=2, vocab=VOCAB)
         tokenizer = wordlevel_tokenizer()
 
@@ -241,7 +242,10 @@ class TestThinkingInterventionPort:
             plan = params.get("plan", "steps")
             return f"the {plan} </think> {prompt}"
 
-        ti = ThinkingIntervention(intervention=intervention)
+        ti = PhasedDecoding(
+            plan=[{"fixed": intervention, "replace": True, "add_special_tokens": True}, {"generate": {}}],
+            extract_after="</think>",
+        )
         pipeline, model, tokenizer = _pipeline([ti], model=model, tokenizer=tokenizer)
 
         prompt = tokenizer("the cat", return_tensors="pt").input_ids
@@ -251,15 +255,16 @@ class TestThinkingInterventionPort:
             cont = tokenizer(" </think> mat", return_tensors="pt", add_special_tokens=False).input_ids
             return torch.cat([inp, cont.to(inp.device)], dim=1)
 
+        script_session_generate(monkeypatch, fake_generate)
         out = pipeline.generate(
             input_ids=prompt,
-            runtime_kwargs={"base_generate": fake_generate, "params": {"plan": "list steps"}},
+            runtime_kwargs={"params": {"plan": "list steps"}},
         )
         decoded = tokenizer.decode(out[0], skip_special_tokens=False)
         assert "</think>" not in decoded
         assert "mat" in decoded
 
-    def test_batched_dict_of_lists_params(self):
+    def test_batched_dict_of_lists_params(self, monkeypatch):
         model = tiny_llama(num_layers=2, hidden=16, heads=2, vocab=VOCAB)
         tokenizer = wordlevel_tokenizer()
 
@@ -269,7 +274,10 @@ class TestThinkingInterventionPort:
             seen_params.append(params.get("tag"))
             return f"{params.get('tag', 'x')} </think> {prompt}"
 
-        ti = ThinkingIntervention(intervention=intervention)
+        ti = PhasedDecoding(
+            plan=[{"fixed": intervention, "replace": True, "add_special_tokens": True}, {"generate": {}}],
+            extract_after="</think>",
+        )
         pipeline, model, tokenizer = _pipeline([ti], model=model, tokenizer=tokenizer)
 
         prompts = tokenizer(["the cat", "the dog"], return_tensors="pt", padding=True).input_ids
@@ -280,9 +288,10 @@ class TestThinkingInterventionPort:
             cont = cont.expand(inp.size(0), -1)
             return torch.cat([inp, cont.to(inp.device)], dim=1)
 
+        script_session_generate(monkeypatch, fake_generate)
         pipeline.generate(
             input_ids=prompts,
-            runtime_kwargs={"base_generate": fake_generate, "params": {"tag": ["the", "on"]}},
+            runtime_kwargs={"params": {"tag": ["the", "on"]}},
         )
         # per-example params sliced correctly
         assert seen_params == ["the", "on"]

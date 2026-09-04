@@ -12,6 +12,9 @@ OPTIONAL_MODULE_EXTRAS: dict[str, str] = {
     "econml": "cpo",
     "matplotlib": "plots",
     "seaborn": "plots",
+    "vllm": "vllm",
+    "vllm_hook_plugins": "vllm",
+    "xgrammar": "guided",
 }
 
 

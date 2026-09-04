@@ -6,21 +6,20 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Sequence
 
 from aisteer360.algorithms.core.base_args import BaseArgs
-from aisteer360.algorithms.state_control._common.selectors.condition_point import ConditionPoint
 from aisteer360.algorithms.core.internals.data import ContrastivePairs, as_contrastive_pairs
-from aisteer360.algorithms.state_control._common.specs import (
-    ComparatorInput,
+from aisteer360.algorithms.state_control.common.fit_specs import (
+    Comparator,
     CompMode,
     ConditionSearchSpec,
     VectorTrainSpec,
-    normalize_comparator,
 )
-from aisteer360.algorithms.state_control._common.steering_vector import SteeringVector
-from aisteer360.algorithms.state_control._common.token_scope import TokenScope
-from aisteer360.algorithms.state_control._common.transforms.base import BaseTransform
+from aisteer360.algorithms.state_control.common.selectors.condition_point import ConditionPoint
+from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
+from aisteer360.algorithms.state_control.common.token_scope import ScopeKind
+from aisteer360.algorithms.state_control.common.transforms.base import BaseTransform
 
 if TYPE_CHECKING:
-    from aisteer360.algorithms.state_control._common.transforms.context import TransformContext
+    from aisteer360.algorithms.state_control.common.transforms.context import TransformContext
 
 
 @dataclass
@@ -46,8 +45,8 @@ class CASTArgs(BaseArgs):
             defaults to the late third of the model's layers.
         behavior_transform: An alternative behavior application, replacing the default additive
             construction. Accepts a `BaseTransform` (bound, e.g.
-            `DirectionalAblationTransform(vector, alpha=0.8)`, or source-carrying, e.g.
-            `DirectionalAblationTransform(ContrastiveFit(data=...))` bound at steer()), or a factory
+            `ProjectionTransform(vector, alpha=0.8)`, or source-carrying, e.g.
+            `ProjectionTransform(ContrastiveFit(data=...))` bound at steer()), or a factory
             `Callable[[TransformContext], BaseTransform]`. The transform is the sole artifact carrier,
             so it is mutually exclusive with `behavior_vector`/`behavior_data` and with the additive
             knobs `behavior_vector_strength`, `use_explained_variance`, and
@@ -78,14 +77,8 @@ class CASTArgs(BaseArgs):
             `condition_vector_threshold`.
         condition_layer_ids: Layers to check the condition on.
         condition_vector_threshold: Similarity threshold for condition detection.
-        condition_comparator_threshold_is: When to open the gate. In this toolkit "larger" opens
-            when score >= threshold and "smaller" opens when score <= threshold. The aliases
-            "score_above" (== "larger") and "score_below" (== "smaller") are also accepted and
-            normalized in `__post_init__`. These semantics are inverted relative to the reference
-            implementation at github.com/IBM/activation-steering, where "larger" means "the
-            THRESHOLD is larger" and fires when similarity < threshold. Settings copied from the
-            paper or the reference repository must flip the comparator; prefer the "score_above"
-            and "score_below" aliases.
+        condition_comparator_threshold_is: When to open the gate. `"ge"` opens when
+            score >= threshold and `"le"` opens when score <= threshold.
         condition_threshold_comparison_mode: How to aggregate hidden states
             for comparison ("mean" or "last").
         use_ooi_preventive_normalization: Apply out-of-distribution preventive
@@ -133,13 +126,13 @@ class CASTArgs(BaseArgs):
     condition_point: ConditionPoint | Mapping | None = None
     condition_layer_ids: Sequence[int] | None = None
     condition_vector_threshold: float | None = None
-    condition_comparator_threshold_is: ComparatorInput = "larger"
+    condition_comparator_threshold_is: Comparator = "ge"
     condition_threshold_comparison_mode: CompMode = "mean"
 
     # hook behavior
     use_ooi_preventive_normalization: bool = False
     use_explained_variance: bool = False
-    token_scope: TokenScope = "all"
+    token_scope: ScopeKind = "all"
     last_k: int | None = None
     from_position: int | None = None
 
@@ -149,8 +142,11 @@ class CASTArgs(BaseArgs):
         if self.condition_vector is not None:
             self.condition_vector.validate()
 
-        # normalize the user-facing comparator (incl. score_above/score_below aliases) to canonical
-        self.condition_comparator_threshold_is = normalize_comparator(self.condition_comparator_threshold_is)
+        if self.condition_comparator_threshold_is not in ("ge", "le"):
+            raise ValueError(
+                f"condition_comparator_threshold_is must be 'ge' or 'le'; "
+                f"got {self.condition_comparator_threshold_is!r}."
+            )
 
         # expand a reusable condition point into the manual triple (supersedes search.auto_find)
         if self.condition_point is not None:
@@ -194,9 +190,13 @@ class CASTArgs(BaseArgs):
                     f"{point_comparison_mode!r}."
                 )
 
+            if point_comparator not in ("ge", "le"):
+                raise ValueError(
+                    f"condition_point comparator must be 'ge' or 'le'; got {point_comparator!r}."
+                )
             self.condition_layer_ids = list(point_layer_ids)
             self.condition_vector_threshold = point_threshold
-            self.condition_comparator_threshold_is = normalize_comparator(point_comparator)
+            self.condition_comparator_threshold_is = point_comparator
             if point_comparison_mode is not None:
                 self.condition_threshold_comparison_mode = point_comparison_mode
 
@@ -217,14 +217,14 @@ class CASTArgs(BaseArgs):
             if self.behavior_vector is not None or self.behavior_data is not None:
                 raise ValueError(
                     "behavior_transform carries its own artifact; provide the vector, data, or source "
-                    "on the transform (e.g. DirectionalAblationTransform(ContrastiveFit(data=...))) "
+                    "on the transform (e.g. ProjectionTransform(ContrastiveFit(data=...))) "
                     "instead of behavior_vector/behavior_data."
                 )
             if self.behavior_vector_strength != 1.0:
                 raise ValueError(
                     "behavior_vector_strength scales the default additive path and has no referent "
                     "with behavior_transform; construct the transform with its own magnitude "
-                    "(e.g. AdditiveTransform(..., strength=...) or DirectionalAblationTransform(..., "
+                    "(e.g. AdditiveTransform(..., strength=...) or ProjectionTransform(..., "
                     "alpha=...))."
                 )
             if self.use_ooi_preventive_normalization:

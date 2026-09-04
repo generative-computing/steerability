@@ -6,7 +6,6 @@ weight updates or architectural changes.
 Two base classes are provided:
 
 - `StructuralControl`: Base class for all structural control methods.
-- `NoStructuralControl`: Identity (null) control; used when no structural control is defined in steering pipeline.
 
 Structural controls implement steering through model weight or architecture modifications, transforming base parameters
 θ to θ', resulting in generations following y ~ p_θ'(x).
@@ -30,6 +29,9 @@ from transformers import PreTrainedModel, PreTrainedTokenizer
 
 from aisteer360.algorithms.core.base_args import BaseArgs
 from aisteer360.algorithms.core.base_control import BaseControl
+from aisteer360.algorithms.core.execution.access import ModelAccess
+from aisteer360.algorithms.core.execution.contracts import Capability, Requirements, any_of, needs
+from aisteer360.algorithms.core.execution.payloads import Artifact
 
 
 class StructuralControl(BaseControl):
@@ -52,19 +54,61 @@ class StructuralControl(BaseControl):
             self,
             model: PreTrainedModel,
             tokenizer: PreTrainedTokenizer = None,
+            session=None,
             **kwargs
     ) -> PreTrainedModel:
-        """Required steering/preparation."""
+        """Required steering/preparation.
+
+        `session` is a `SteeringSession` on the steering backend, provided by the pipeline.
+        """
         pass
 
+    def artifact_capability(self) -> Capability | None:
+        """The serve capability implied by this configuration's steer-time artifact, or None.
 
-class NoStructuralControl(StructuralControl):
-    """Identity structural control.
+        Controls whose `steer()` writes a servable product to disk return
+        `Capability.SERVE_CHECKPOINT` for a full-weights checkpoint or `Capability.SERVE_LORA`
+        for an adapter, so the generate phase gains a serving alternative. The default returns
+        None (no on-disk artifact), which keeps the generate phase in-process only.
 
-    Used as the default when no structural control is needed. Passes the model through unchanged.
-    """
-    enabled: bool = False
+        Returns:
+            The capability, or None.
+        """
+        return None
 
-    def steer(self, model: PreTrainedModel, **__) -> PreTrainedModel:
-        """Null steer operation; returns model."""
-        return model
+    def export_artifact(self) -> Artifact | None:
+        """The steer-time artifact this control produced, or None.
+
+        Called by the pipeline after `steer()` completes. The returned artifact must exist on
+        disk and correspond to `artifact_capability()` (a `CheckpointArtifact` for
+        `Capability.SERVE_CHECKPOINT`, a `LoRAArtifact` for `Capability.SERVE_LORA`). The
+        default returns None.
+
+        Returns:
+            The artifact, or None.
+        """
+        return None
+
+    def requirements(self) -> Requirements:
+        """Backend requirements computed from this instance's configuration, per phase.
+
+        The generate phase requires `Capability.IN_PROCESS_TORCH` for in-process adoption of
+        the returned model; when the configuration produces an on-disk artifact
+        (`artifact_capability()`), serving that artifact is an alternative, so a backend
+        advertising the matching serve capability also supports the generate phase.
+
+        Returns:
+            The control's phase-keyed requirements.
+        """
+        generate = needs(Capability.IN_PROCESS_TORCH)
+        capability = self.artifact_capability()
+        if capability is not None:
+            generate = any_of(
+                generate,
+                needs(capability, hint="serve the steer-time artifact on a vLLM backend"),
+            )
+        return Requirements(generate=generate)
+
+    def steer_access(self) -> ModelAccess:
+        """`ModelAccess.MODULE`; training happens on live weights."""
+        return ModelAccess.MODULE

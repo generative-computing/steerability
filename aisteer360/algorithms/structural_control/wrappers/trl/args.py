@@ -10,7 +10,7 @@ from aisteer360.algorithms.core.base_args import BaseArgs
 @dataclass
 class TRLArgs(BaseArgs):
 
-    # if the pipeline uses lazy_init=True, the structural control can load these.
+    # when the pipeline has no base model of its own, the structural control can load these.
     base_model_name_or_path: str | None = None
     tokenizer_name_or_path: str | None = None
     hf_model_kwargs: dict[str, Any] = field(default_factory=dict)

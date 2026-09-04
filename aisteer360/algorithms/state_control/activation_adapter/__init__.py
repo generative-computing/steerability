@@ -1,4 +1,4 @@
-from aisteer360.algorithms.state_control._common.transforms.context import TransformContext
+from aisteer360.algorithms.state_control.common.transforms.context import TransformContext
 
 from .args import ActivationAdapterArgs
 from .control import ActivationAdapter

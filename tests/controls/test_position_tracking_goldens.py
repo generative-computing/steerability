@@ -17,9 +17,9 @@ import pytest
 import torch
 
 from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.state_control._common.steering_vector import SteeringVector
 from aisteer360.algorithms.state_control.act_add.control import ActAdd
 from aisteer360.algorithms.state_control.angular_steering.control import AngularSteering
+from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
 from aisteer360.algorithms.state_control.iti.control import ITI
 from tests.utils.runtime_helpers import strip_clock
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
@@ -82,7 +82,7 @@ GOLDENS: dict[tuple[str, int], list[int]] = {
     ("iti", 4): [29, 55, 55, 55, 55, 55, 55, 55],
     ("angular", 1): [29, 66, 97, 29, 66, 97, 29, 66],
     ("angular", 4): [29, 66, 70, 14, 66, 70, 14, 66],
-    ("act_add", 1): [29, 66, 97, 29, 66, 97, 38, 38],
+    ("act_add", 1): [29, 45, 27, 33, 29, 66, 97, 38],
     ("act_add", 4): [29, 66, 70, 91, 10, 82, 10, 95],
 }
 
@@ -109,9 +109,7 @@ def _generate(control_name: str, prompt_len: int, strip: bool = False) -> list[i
     control = CONTROL_FACTORIES[control_name]()
     if strip:
         _strip_clock_from_hooks(control)
-    pipeline = SteeringPipeline(controls=[control], lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=[control], model=model, tokenizer=tokenizer)
     pipeline.steer()
 
     input_ids = torch.arange(3, 3 + prompt_len, dtype=torch.long).unsqueeze(0)

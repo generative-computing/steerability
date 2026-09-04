@@ -14,9 +14,7 @@
 # limitations under the License.
 
 """Registry of all instructions."""
-from aisteer360.evaluation.metrics.custom.instruction_following.helpers import (
-    instructions,
-)
+from aisteer360.evaluation.metrics.custom.instruction_following.helpers import instructions
 
 _KEYWORD = "keywords:"
 

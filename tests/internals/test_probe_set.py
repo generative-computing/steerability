@@ -14,7 +14,7 @@ from aisteer360.algorithms.core.internals.data import ContrastivePairs
 from aisteer360.algorithms.core.internals.fingerprint import model_fingerprint
 from aisteer360.algorithms.core.internals.probes.fitting import ProbeFitSpec
 from aisteer360.algorithms.core.internals.probes.probe import Probe
-from aisteer360.algorithms.core.internals.probes.probe_set import ProbeSet, ProbeSetFit, Readout
+from aisteer360.algorithms.core.internals.probes.probe_set import ProbeReadings, ProbeSet, ProbeSetFit
 from aisteer360.algorithms.core.internals.stats import StatsSpec
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
@@ -100,7 +100,7 @@ class TestRead:
 
     def test_forced_decisions_per_row(self, model):
         readout = self._forced_set().read(model, torch.tensor([[3, 4, 5], [6, 7, 8]]))
-        assert isinstance(readout, Readout)
+        assert isinstance(readout, ProbeReadings)
         assert readout.decisions["always"].tolist() == [True, True]
         assert readout.decisions["never"].tolist() == [False, False]
         assert readout.scores["always"].shape == (2,)
@@ -189,20 +189,10 @@ class TestCoexistence:
     `"all"`-scoped behavior transforms apply to it."""
 
     def test_read_skips_condition_scoring_and_applies_behavior(self, model):
-        from aisteer360.algorithms.state_control._common.gates.base import BaseGate
-        from aisteer360.algorithms.state_control._common.runtime import TransformHookRuntime
-        from aisteer360.algorithms.state_control._common.token_scope import compute_prompt_lens
-        from tests.utils.runtime_helpers import RecordingTransform
-
-        class _NeverReadyGate(BaseGate):
-            def update(self, scores, *, key=None):
-                pass
-
-            def open_rows(self):
-                return torch.ones(self.num_rows, dtype=torch.bool)
-
-            def is_ready(self):
-                return False
+        from aisteer360.algorithms.state_control.common.gating import CallableReadout, Evidence, Gate
+        from aisteer360.algorithms.state_control.common.runtime import TransformHookRuntime
+        from aisteer360.algorithms.state_control.common.token_scope import compute_prompt_lens
+        from tests.utils.runtime_helpers import NeverCompleteRule, RecordingTransform
 
         ids = torch.tensor([[3, 4, 5, 6]])
         probes = ProbeSet({"p": _probe([2])})
@@ -210,17 +200,18 @@ class TestCoexistence:
 
         runtime = TransformHookRuntime(hook_point="layer_output")
         runtime.reset(compute_prompt_lens(ids, None))
-        gate = _NeverReadyGate()
-        gate.reset(1)
-        scorer_calls: list[tuple] = []
+        readout_calls: list[tuple] = []
 
-        def scorer(hidden, layer_id, *, prompt_mask=None):
-            scorer_calls.append(tuple(hidden.shape))
-            return torch.zeros(hidden.size(0))
+        def readout(pooled, layer_id):
+            readout_calls.append(tuple(pooled.shape))
+            return torch.zeros(pooled.size(0))
+
+        gate = Gate(Evidence((0,), CallableReadout(readout)), NeverCompleteRule(open=True))
+        gate.reset(1)
 
         transform = RecordingTransform(value=0.5)
         condition_hook = runtime.build_condition_hook(
-            layer_id=0, scorer=scorer, gate=gate, is_pass_opener=True
+            layer_id=0, gate=gate, is_pass_opener=True
         )
         behavior_hook = runtime.build_behavior_hook(
             layer_id=0, transform=transform, gate=gate, token_scope="all",
@@ -237,13 +228,13 @@ class TestCoexistence:
             for handle in handles:
                 handle.remove()
 
-        assert scorer_calls == []  # condition scoring ignored the auxiliary pass
+        assert readout_calls == []  # condition scoring ignored the auxiliary pass
         assert transform.masks  # the "all"-scoped transform applied during the read
         assert not torch.allclose(steered, baseline)  # scores measure the stream as deployed
 
-    def test_read_leaves_live_cast_counters_and_gates_untouched(self, model, tokenizer):
-        from aisteer360.algorithms.state_control._common.steering_vector import SteeringVector
+    def test_read_leaves_live_cast_counters_and_gates_untouched(self, model, tokenizer, monkeypatch):
         from aisteer360.algorithms.state_control.cast.control import CAST
+        from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
 
         def steering_vector(seed, layers):
             return SteeringVector(
@@ -258,12 +249,16 @@ class TestCoexistence:
             condition_vector=steering_vector(200, [1]),
             condition_layer_ids=[1],
             condition_vector_threshold=0.5,
-            condition_comparator_threshold_is="larger",
+            condition_comparator_threshold_is="ge",
         )
         cast.steer(model, tokenizer)
 
+        from tests.utils.runtime_helpers import capture_built_runtimes
+
+        capture = capture_built_runtimes(monkeypatch)
         ids = torch.tensor([[3, 4, 5, 6]])
         hooks = cast.get_hooks(ids, None)
+        runtime = capture.last
         handles = []
         for phase, register in (("pre", "register_forward_pre_hook"), ("forward", "register_forward_hook")):
             for spec in hooks[phase]:
@@ -271,16 +266,16 @@ class TestCoexistence:
                 handles.append(getattr(module, register)(spec["hook_func"], with_kwargs=True))
         try:
             assert not cast._gate.is_ready()
-            assert cast._threshold_gate.evidence() == {}
-            offset_before = cast._runtime._offset
-            prefill_before = cast._runtime._prefill_seen
+            assert cast._gate.evidence_values() == {}
+            offset_before = runtime._offset
+            prefill_before = runtime._prefill_seen
 
             ProbeSet({"p": _probe([2])}).read(model, ids)
 
             assert not cast._gate.is_ready()  # no condition evidence from the auxiliary pass
-            assert cast._threshold_gate.evidence() == {}
-            assert cast._runtime._offset == offset_before
-            assert cast._runtime._prefill_seen == prefill_before
+            assert cast._gate.evidence_values() == {}
+            assert runtime._offset == offset_before
+            assert runtime._prefill_seen == prefill_before
         finally:
             for handle in handles:
                 handle.remove()

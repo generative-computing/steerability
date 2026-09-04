@@ -5,16 +5,17 @@ import gc
 import torch
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
-from aisteer360.algorithms.output_control._common.processors.contrastive_mixture import ContrastiveMixtureProcessor
-from aisteer360.algorithms.output_control._common.resolve import resolve_source
+from aisteer360.algorithms.core.execution.access import ModelAccess
 from aisteer360.algorithms.output_control.base import OutputControl
+from aisteer360.algorithms.output_control.common.processors.contrastive_mixture import ContrastiveMixtureProcessor
+from aisteer360.algorithms.output_control.common.resolve import resolve_source
 from aisteer360.algorithms.output_control.contrastive_guidance.args import ContrastiveGuidanceArgs
 
 
 class ContrastiveGuidance(OutputControl):
     """Contrastive mixing of next-token distributions as configuration.
 
-    `ContrastiveGuidance` is the generic over the distribution shape. It exposes the `_common` logit
+    `ContrastiveGuidance` is the generic over the distribution shape. It exposes the `common` logit
     source slot through flat `Args`: `steer()` resolves a parallel list of sources and mixes their
     log-probs with the base distribution as `base_weight * log p_base + sum_i weights[i] * log
     p_source_i`, with an optional plausibility mask. A method from the literature is an assignment of
@@ -59,6 +60,12 @@ class ContrastiveGuidance(OutputControl):
     # placeholders (filled by steer)
     tokenizer: PreTrainedTokenizer | None = None
     _sources: list | None = None
+
+    def steer_access(self) -> ModelAccess:
+        """`ModelAccess.MODULE`; sources may bind the live model (the prompt-variant source
+        forwards it during decoding), which is retained past steer (the generate phase is
+        in-process)."""
+        return ModelAccess.MODULE
 
     def steer(
         self,

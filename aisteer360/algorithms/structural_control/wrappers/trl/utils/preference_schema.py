@@ -1,3 +1,4 @@
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from datasets import Dataset
@@ -15,27 +16,72 @@ def _first_present(d: dict[str, Any], keys: list[str]) -> Any | None:
     return None
 
 
-def _to_plain_string(value: Any) -> str:
+def _is_message_list(value: Any) -> bool:
+    return (
+        isinstance(value, Sequence)
+        and not isinstance(value, (str, bytes))
+        and all(isinstance(item, Mapping) and "role" in item and "content" in item for item in value)
+    )
+
+
+def _last_assistant_content(messages: Sequence[Mapping[str, Any]], column: str) -> str:
+    for message in reversed(messages):
+        if message.get("role") == "assistant":
+            return str(message["content"]).strip()
+    raise ValueError(
+        f"Column '{column}' is a conversation with no assistant turn; cannot resolve a completion string."
+    )
+
+
+def _resolve_completion(value: Any, column: str) -> str:
     if isinstance(value, str):
-        return value
-    return str(value)
+        return value.strip()
+    if _is_message_list(value):
+        return _last_assistant_content(value, column)
+    raise TypeError(
+        f"Column '{column}' has unsupported type {type(value).__name__}; expected a string or a list of "
+        "role/content messages. Map the dataset to string columns before calling this function."
+    )
 
 
-def _strip_or_none(s: str | None) -> str | None:
-    if s is None:
-        return None
-    return s.strip()
+def _resolve_prompt(value: Any, column: str) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    raise TypeError(
+        f"Column '{column}' has unsupported type {type(value).__name__}; expected a string. Map the dataset "
+        "to string columns before calling this function."
+    )
 
 
 def standardize_preference_dataset(
     dataset: Dataset,
     drop_unknown_columns: bool = True,
 ) -> Dataset:
-    """
-    Return a dataset with exactly {'prompt','chosen','rejected'} as plain strings.
-    If the dataset already has those keys, we coerce values to str and drop extras.
-    If 'messages' (or similar) coexists with them, we drop 'messages' (pick one schema).
-    This function does NOT attempt to synthesize 'chosen'/'rejected' from 'messages'.
+    """Return a dataset with exactly `{'prompt', 'chosen', 'rejected'}` as plain strings.
+
+    Key aliases are resolved (e.g. `question` to `prompt`, `preferred` to `chosen`), extra columns are
+    dropped, and any coexisting `messages`/`conversations` column is removed so TRL sees a single schema.
+
+    Column values are resolved by type:
+
+    - A string passes through stripped.
+    - For the chosen/rejected columns, a value that is a sequence of role/content mappings resolves to the
+        content of the last message whose role is `assistant`, stripped. Earlier turns of a multi-turn
+        completion are not folded into the prompt.
+
+    Args:
+        dataset: A `datasets.Dataset` carrying prompt/chosen/rejected columns (or their aliases).
+        drop_unknown_columns: When True, drop every column other than `prompt`, `chosen`, and `rejected`
+            from the result.
+
+    Returns:
+        A `datasets.Dataset` with columns `prompt`, `chosen`, and `rejected`, all plain strings.
+
+    Raises:
+        TypeError: If `dataset` is not a `datasets.Dataset`; or if the `prompt` value is not a string; or if
+            a chosen/rejected value is neither a string nor a list of role/content messages.
+        ValueError: If a required prompt/chosen/rejected column (or alias) is absent; or if a chosen/rejected
+            conversation has no assistant turn.
     """
 
     if not isinstance(dataset, Dataset):
@@ -46,7 +92,6 @@ def standardize_preference_dataset(
     has_prompt = any(k in column_names for k in _PROMPT_KEYS)
     has_chosen = any(k in column_names for k in _CHOSEN_KEYS)
     has_rejected = any(k in column_names for k in _REJECTED_KEYS)
-    has_messages = any(k in column_names for k in _MESSAGES_KEYS)
 
     if not (has_prompt and has_chosen and has_rejected):
         missing = []
@@ -67,14 +112,11 @@ def standardize_preference_dataset(
         if prompt_val is None or chosen_val is None or rejected_val is None:
             raise ValueError("Example lacks one of prompt/chosen/rejected after key resolution.")
 
-        prompt = _strip_or_none(_to_plain_string(prompt_val))
-        chosen = _strip_or_none(_to_plain_string(chosen_val))
-        rejected = _strip_or_none(_to_plain_string(rejected_val))
-
-        if not isinstance(prompt, str) or not isinstance(chosen, str) or not isinstance(rejected, str):
-            raise TypeError("prompt/chosen/rejected must be strings after standardization.")
-
-        return {"prompt": prompt, "chosen": chosen, "rejected": rejected}
+        return {
+            "prompt": _resolve_prompt(prompt_val, "prompt"),
+            "chosen": _resolve_completion(chosen_val, "chosen"),
+            "rejected": _resolve_completion(rejected_val, "rejected"),
+        }
 
     # apply mapping
     standardized = dataset.map(

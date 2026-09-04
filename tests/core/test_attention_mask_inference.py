@@ -1,4 +1,4 @@
-"""Tests for `infer_attention_mask_from_ids` (WS2) and the `_prepare_inputs` interior-eos path.
+"""Tests for `infer_attention_mask_from_ids` (WS2) and the `prepare_inputs` interior-eos path.
 
 The utility replaces the token-identity `ids != pad_id` heuristic: interior occurrences of the pad id
 (which equals eos for tokenizers without a dedicated pad token) must NOT be masked, because chat
@@ -7,6 +7,7 @@ templates legitimately place the eos mid-prompt. All tests run CPU-only and offl
 import torch
 
 from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
+from aisteer360.algorithms.core.utils.generation import PromptWarnings, prepare_inputs
 from aisteer360.utils.tokenization import infer_attention_mask_from_ids
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
@@ -66,7 +67,7 @@ class TestInferAttentionMask:
 
 
 class TestPrepareInputsInteriorEos:
-    """`_prepare_inputs` must not mask an interior eos when pad == eos and no mask is supplied."""
+    """`prepare_inputs` must not mask an interior eos when pad == eos and no mask is supplied."""
 
     def _steered_pipeline(self):
         torch.manual_seed(0)
@@ -75,9 +76,7 @@ class TestPrepareInputsInteriorEos:
         # force pad == eos, the hazardous configuration ensure_pad_token would create
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.pad_token_id = tokenizer.eos_token_id
-        pipeline = SteeringPipeline(lazy_init=True)
-        pipeline.model = model
-        pipeline.tokenizer = tokenizer
+        pipeline = SteeringPipeline(model=model, tokenizer=tokenizer)
         pipeline.steer()
         return pipeline, tokenizer
 
@@ -86,8 +85,13 @@ class TestPrepareInputsInteriorEos:
         eos = tokenizer.eos_token_id
         # eos appears mid-sequence; with pad == eos, a token-identity mask would wrongly zero it
         ids = torch.tensor([[3, 4, eos, 5, 6]])
-        steered_ids, mask = pipeline._prepare_inputs(
-            input_ids=ids, attention_mask=None, runtime_kwargs=None
+        steered_ids, mask = prepare_inputs(
+            ids, None,
+            input_controls=pipeline.input_controls,
+            tokenizer=pipeline.tokenizer,
+            device=pipeline.model.device,
+            runtime_kwargs=None,
+            warnings_state=PromptWarnings(),
         )
         # no interior zero: the eos at position 2 is kept as a real token
         assert mask.tolist() == [[1, 1, 1, 1, 1]]
@@ -97,5 +101,12 @@ class TestPrepareInputsInteriorEos:
         eos = tokenizer.eos_token_id
         # a trailing run of eos/pad is genuine right-padding and should be masked
         ids = torch.tensor([[3, 4, 5, eos, eos]])
-        _, mask = pipeline._prepare_inputs(input_ids=ids, attention_mask=None, runtime_kwargs=None)
+        _, mask = prepare_inputs(
+            ids, None,
+            input_controls=pipeline.input_controls,
+            tokenizer=pipeline.tokenizer,
+            device=pipeline.model.device,
+            runtime_kwargs=None,
+            warnings_state=PromptWarnings(),
+        )
         assert mask.tolist() == [[1, 1, 1, 0, 0]]

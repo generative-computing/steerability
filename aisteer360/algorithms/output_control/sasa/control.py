@@ -8,18 +8,44 @@ import pandas as pd
 import torch
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
-from aisteer360.algorithms.output_control._common.estimators.linear_probe import (
-    LinearProbe,
-    LinearProbeEstimator,
-)
-from aisteer360.algorithms.output_control._common.processors.value_guided import ValueGuidedProcessor
+from aisteer360.algorithms.core.execution.access import ModelAccess
 from aisteer360.algorithms.core.internals.data import LabeledExamples
-from aisteer360.algorithms.output_control._common.values.subspace_margin import SubspaceMarginValue
+from aisteer360.algorithms.core.internals.probes.fitting import ProbeFitSpec, fit_probe
+from aisteer360.algorithms.core.internals.probes.probe import Probe
 from aisteer360.algorithms.output_control.base import OutputControl
+from aisteer360.algorithms.output_control.common.processors.value_guided import ValueGuidedProcessor
+from aisteer360.algorithms.output_control.common.values.subspace_margin import (
+    SubspaceMarginValue,
+    load_single_file_probe,
+)
 from aisteer360.algorithms.output_control.sasa.args import SASAArgs
 from aisteer360.utils.tokenization import ensure_pad_token
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_probe_space(probe: Probe, final_layer: int) -> None:
+    """Raise unless the probe is fitted in the space the margins are evaluated in.
+
+    Margins are evaluated on last-token hidden states at the raw output boundary of the final
+    decoder layer, so the probe must record `location="layer_output"`, `pooling="last"`, and
+    exactly the final decoder layer.
+    """
+    if probe.location != "layer_output":
+        raise ValueError(
+            f"SASA requires a probe fitted at location 'layer_output', got {probe.location!r}; "
+            "margins are evaluated at the raw output boundary of the final decoder layer."
+        )
+    if probe.pooling != "last":
+        raise ValueError(
+            f"SASA requires a probe with pooling 'last', got {probe.pooling!r}; margins are "
+            "evaluated at the candidate token position."
+        )
+    if list(probe.layer_ids) != [final_layer]:
+        raise ValueError(
+            f"SASA requires a probe over exactly the final decoder layer [{final_layer}], got "
+            f"layer_ids {list(probe.layer_ids)}."
+        )
 
 
 class SASA(OutputControl):
@@ -40,7 +66,7 @@ class SASA(OutputControl):
     from `gen_wv_data_path`. Any binary-labeled attribute works: pass in-memory positives/negatives via
     `gen_wv_data`, or a previously fitted probe via `wv_path`.
 
-    SASA is a step-level control. `steer()` fits (or loads) a `LinearProbe`, and `get_logits_processors()` returns
+    SASA is a step-level control. `steer()` fits (or loads) a `Probe`, and `get_logits_processors()` returns
     a `ValueGuidedProcessor` over the `surviving` candidate policy whose per-candidate value is the subspace margin,
     obtained via a single same-model forward per step. The margins are softmax-normalized over the surviving set and
     added (scaled by `beta`) to the surviving logits. As a step-level control, SASA composes with other output
@@ -72,9 +98,14 @@ class SASA(OutputControl):
     # placeholders (filled by steer)
     model: PreTrainedModel | None = None
     tokenizer: PreTrainedTokenizer | None = None
-    probe: LinearProbe | None = None
+    probe: Probe | None = None
 
     beta: float
+
+    def steer_access(self) -> ModelAccess:
+        """`ModelAccess.MODULE`; the probe fits on the live model, which is retained for the
+        per-step value forwards (the generate phase is in-process)."""
+        return ModelAccess.MODULE
 
     def steer(
             self,
@@ -84,6 +115,12 @@ class SASA(OutputControl):
     ) -> PreTrainedModel:
         """Load or fit the linear probe defining the attribute subspace.
 
+        A `wv_path` naming a directory loads a saved `Probe` artifact; a `.probe` JSON file or a
+        legacy `{'wv', 'mu_mu'}` tensor checkpoint is adapted into a `Probe` over the final
+        decoder layer. Without `wv_path`, a probe is fitted on the labeled data (fisher direction
+        over last-token features at the raw final-layer boundary, midpoint calibration). The
+        probe's recorded space is validated against the boundary the margins are evaluated at.
+
         Args:
             model (PreTrainedModel): The base language model to be steered.
             tokenizer (PreTrainedTokenizer | None): Tokenizer for the base model.
@@ -91,46 +128,52 @@ class SASA(OutputControl):
 
         Returns:
             PreTrainedModel: The input model (unchanged).
+
+        Raises:
+            ValueError: If a loaded probe's `location`, `pooling`, or layer ids do not match
+                last-token features at the raw output boundary of the final decoder layer.
         """
         self.model = model
         self.tokenizer = tokenizer or getattr(model, "tokenizer", None)
         if self.tokenizer.pad_token_id is None:
-            logger.info("pad_token is absent; setting it to eos_token or '<pad>'.")
             if self.tokenizer.eos_token_id is not None:
                 self.tokenizer = ensure_pad_token(self.tokenizer)
             else:
                 self.tokenizer.add_special_tokens({"pad_token": "<pad>"})
-        if self.model.generation_config.pad_token_id is None:
-            self.model.generation_config.pad_token_id = self.tokenizer.pad_token_id
-            self.model.config.pad_token_id = self.tokenizer.eos_token_id
-        self.device = next(model.parameters()).device
 
+        final_layer = int(model.config.num_hidden_layers) - 1
         if getattr(self, "wv_path", None):
             logger.info("Loading SASA probe.")
-            self.probe = self._load_probe(self.wv_path)
+            if os.path.isdir(self.wv_path):
+                self.probe = Probe.load(self.wv_path)
+            else:
+                self.probe = load_single_file_probe(self.wv_path, layer_id=final_layer)
         else:
             logger.info("Fitting SASA probe.")
             data = self._resolve_labeled_examples()
-            estimator = LinearProbeEstimator(pooling="last_token")
-            self.probe = estimator.fit(
+            spec = ProbeFitSpec(
+                method="fisher",
+                pooling="last",
+                location="layer_output",
+                prompt_format="raw",
+                candidate_layers=[final_layer],
+                calibration="midpoint",
+            )
+            self.probe = fit_probe(
                 model,
                 self.tokenizer,
                 data=data,
+                spec=spec,
                 batch_size=self.gen_wv_batch_size,
                 max_length=1024,
             )
-        self.probe.to(self.device)
+        _validate_probe_space(self.probe, final_layer)
         return model
-
-    @staticmethod
-    def _load_probe(path: str) -> LinearProbe:
-        """Load a probe, accepting the `.probe` JSON, the legacy `{'wv','mu_mu'}` tensor, or a pickle."""
-        return LinearProbe.load_any(path)
 
     def _resolve_labeled_examples(self) -> LabeledExamples:
         """Resolve labeled positives/negatives from the configured data source (SASA's loader)."""
         if self.gen_wv_data is not None:
-            logger.info("Data provided in-memory.")
+            logger.debug("Data provided in-memory.")
             return LabeledExamples(positives=self.gen_wv_data["pos"], negatives=self.gen_wv_data["neg"])
 
         os.makedirs(self.gen_wv_data_path, exist_ok=True)
@@ -145,7 +188,7 @@ class SASA(OutputControl):
                     dataset = pd.read_csv('/tmp/Jigsaw_data/all_data.csv')
                     """
             )
-        dataset = pd.read_csv(csv_path)
+        dataset = pd.read_csv(csv_path, low_memory=False)  # jigsaw csv has mixed-dtype columns
         pos = [row for i, row in dataset["comment_text"].items()
                if isinstance(row, str) and dataset["toxicity"][i] == 0]
         neg = [row for i, row in dataset["comment_text"].items()

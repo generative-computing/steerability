@@ -7,7 +7,7 @@ import pytest
 import torch
 
 from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.output_control._common.processors.contrastive_mixture import ContrastiveMixtureProcessor
+from aisteer360.algorithms.output_control.common.processors.contrastive_mixture import ContrastiveMixtureProcessor
 from aisteer360.algorithms.output_control.dexperts.control import DExperts
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
@@ -29,9 +29,7 @@ def _pipeline(controls, model=None, tokenizer=None):
         model = tiny_llama(num_layers=2, hidden=16, heads=2, vocab=VOCAB)
     if tokenizer is None:
         tokenizer = wordlevel_tokenizer()
-    pipeline = SteeringPipeline(controls=controls, lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=controls, model=model, tokenizer=tokenizer)
     pipeline.steer()
     return pipeline, model, tokenizer
 
@@ -96,7 +94,7 @@ class TestDExpertsMath:
 class TestVocabGuardrail:
     def test_vocab_mismatch_raises(self, tmp_path):
         # aux model with a different vocab than the base model -> clear error, no silent mapping
-        from aisteer360.algorithms.output_control._common.logit_sources import AuxModelSource
+        from aisteer360.algorithms.output_control.common.logit_sources import AuxModelSource
 
         path = tmp_path / "mismatched"
         tiny_llama(num_layers=2, hidden=16, heads=2, vocab=64).save_pretrained(str(path))

@@ -445,7 +445,7 @@ def _overlay_pareto_frontier(
     return pareto_points
 
 
-## PUBLIC PLOTTING FUNCTIONS 
+## PUBLIC PLOTTING FUNCTIONS
 
 def plot_metric_by_config(
     summary: pd.DataFrame,
@@ -646,7 +646,7 @@ def plot_tradeoff_scatter(
                 fill_color=group_color, label=grp_label, fill=fill, **scatter_kwargs,
             )
 
-    # colorbar 
+    # colorbar
     if colorbar_scatter is not None:
         cbar = plt.colorbar(colorbar_scatter, ax=ax, label=color_col)
         _style_colorbar(cbar, values=summary[color_col].values)

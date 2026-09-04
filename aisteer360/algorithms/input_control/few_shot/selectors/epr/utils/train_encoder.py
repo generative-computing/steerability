@@ -15,9 +15,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 from transformers import AutoModel, AutoTokenizer
 
-from aisteer360.algorithms.input_control.few_shot.selectors.epr.utils.lm_labeling import (
-    LabeledPair,
-)
+from aisteer360.algorithms.input_control.few_shot.selectors.epr.utils.lm_labeling import LabeledPair
 
 logger = logging.getLogger(__name__)
 

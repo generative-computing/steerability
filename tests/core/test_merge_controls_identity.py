@@ -10,11 +10,11 @@ import pytest
 import torch
 
 from aisteer360.algorithms.core.utils.controls import merge_controls
-from aisteer360.algorithms.state_control._common.gates import MultiKeyThresholdGate
-from aisteer360.algorithms.state_control._common.steering_vector import SteeringVector
-from aisteer360.algorithms.state_control._common.transforms import AdditiveTransform
 from aisteer360.algorithms.state_control.activation_adapter.control import ActivationAdapter
 from aisteer360.algorithms.state_control.caa.control import CAA
+from aisteer360.algorithms.state_control.common.gating import CallableReadout, Evidence, Gate, PerKeyThreshold
+from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
+from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform
 
 HIDDEN = 32
 
@@ -57,14 +57,15 @@ def test_two_distinct_same_class_accepted():
 
 def test_shared_gate_across_distinct_adapters_accepted():
     """Driver/follower ActivationAdapters sharing one gate object are distinct instances."""
-    gate = MultiKeyThresholdGate(threshold=0.0, comparator="score_above", expected_keys={0})
+    gate = Gate(
+        Evidence((0,), CallableReadout(lambda pooled, layer_id: torch.ones(pooled.size(0)))),
+        PerKeyThreshold(threshold=0.0, comparator="ge"),
+    )
 
     driver = ActivationAdapter(
         transform=_additive(1),
         layer_ids=[2],
         gate=gate,
-        condition_layer_ids=[0],
-        score_fn=lambda hidden, layer_id, *, prompt_mask=None: torch.ones(hidden.size(0)),
     )
     follower = ActivationAdapter(
         transform=_additive(2),

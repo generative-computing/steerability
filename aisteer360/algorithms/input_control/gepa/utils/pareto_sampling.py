@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import random
 
-from aisteer360.algorithms.input_control._common.pareto import ParetoFrontier
+from aisteer360.algorithms.input_control.common.pareto import ParetoFrontier
 
 
 def sample(

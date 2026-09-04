@@ -11,6 +11,7 @@ def tokenize_texts(
     device: torch.device | str | None = None,
     *,
     add_special_tokens: bool = True,
+    max_length: int | None = None,
 ) -> dict[str, torch.Tensor]:
     """Tokenize a flat list of texts independently.
 
@@ -24,6 +25,8 @@ def tokenize_texts(
             device the tokenizer produces them on (CPU).
         add_special_tokens: Whether to add special tokens (e.g. BOS). Pass False
             for chat-templated text that already contains them.
+        max_length: Truncation bound. When None, truncation falls back to the tokenizer's model
+            maximum length.
 
     Returns:
         Dictionary with input_ids and attention_mask tensors.
@@ -33,6 +36,7 @@ def tokenize_texts(
         return_tensors="pt",
         padding=True,
         truncation=True,
+        max_length=max_length,
         add_special_tokens=add_special_tokens,
     )
     if device is None:

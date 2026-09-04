@@ -12,19 +12,24 @@ import pytest
 import torch
 
 from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.state_control._common.steering_vector import SteeringVector
-from aisteer360.algorithms.state_control._common.transforms import (
-    AlignmentAdaptiveTransform,
-    RotationTransform,
-)
 from aisteer360.algorithms.state_control.angular_steering.args import AngularSteeringArgs
 from aisteer360.algorithms.state_control.angular_steering.control import AngularSteering
+from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
+from aisteer360.algorithms.state_control.common.transforms import AlignmentAdaptiveTransform, RotationTransform
 from tests.utils.sweep import build_param_grid
 
 PROMPT_TEXT = "Give me a short set of instructions to follow when you respond."
 
 
 # helpers
+
+def _no_hooks_on(model) -> bool:
+    """True when no forward or pre hooks remain on any module (nothing leaked)."""
+    for module in model.modules():
+        if module._forward_hooks or module._forward_pre_hooks:
+            return False
+    return True
+
 
 def _basis_vector(hidden_size, num_layers, seed=0):
     gen = torch.Generator().manual_seed(seed)
@@ -215,18 +220,16 @@ def test_angular_precomputed_vector(model_and_tokenizer, device: torch.device, c
         adaptive=conf["adaptive"],
         layer_range=(0, min(2, num_layers)),
     )
-    pipeline = SteeringPipeline(controls=[angular], lazy_init=True, device_map=device)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=[angular],  device_map=device, model=model, tokenizer=tokenizer)
     pipeline.steer()
 
     prompt_ids = tokenizer(PROMPT_TEXT, return_tensors="pt").input_ids.to(device)
 
     # generate twice; assert hooks are removed after each call so they do not accumulate
     out_ids = pipeline.generate(input_ids=prompt_ids, max_new_tokens=8)
-    assert angular.registered == [], "Hooks leaked after first generation"
+    assert _no_hooks_on(model), "Hooks leaked after first generation"
     out_ids_again = pipeline.generate(input_ids=prompt_ids, max_new_tokens=8)
-    assert angular.registered == [], "Hooks leaked after second generation"
+    assert _no_hooks_on(model), "Hooks leaked after second generation"
 
     for out in (out_ids, out_ids_again):
         assert isinstance(out, torch.Tensor), "Output is not torch.Tensor"
@@ -248,9 +251,7 @@ def test_steer_does_not_mutate_caller_vector(model_and_tokenizer, device: torch.
     original_dtype = steering_vector.directions[0].dtype
 
     angular = AngularSteering(steering_vector=steering_vector, target_degree=90.0, layer_range=(0, 1))
-    pipeline = SteeringPipeline(controls=[angular], lazy_init=True, device_map=device)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=[angular],  device_map=device, model=model, tokenizer=tokenizer)
     pipeline.steer()
 
     # caller's vector keeps every layer and its original dtype; the control uses a private copy
@@ -285,9 +286,7 @@ def test_angular_estimation_path(model_and_tokenizer, device: torch.device):
         target_degree=180.0,
         layer_range=(0, min(2, num_layers)),
     )
-    pipeline = SteeringPipeline(controls=[angular], lazy_init=True, device_map=device)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=[angular],  device_map=device, model=model, tokenizer=tokenizer)
     pipeline.steer()
 
     assert angular._steering_vector is not None

@@ -16,9 +16,9 @@ import pytest
 import torch
 
 from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.state_control._common.steering_vector import SteeringVector
 from aisteer360.algorithms.state_control.angular_steering.control import AngularSteering
 from aisteer360.algorithms.state_control.caa.control import CAA
+from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
 from aisteer360.algorithms.state_control.directional_ablation.control import DirectionalAblation
 from aisteer360.algorithms.state_control.iti.control import ITI
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
@@ -143,9 +143,7 @@ def test_after_prompt_steers_every_generated_position(control_name, prompt_len):
     tokenizer = wordlevel_tokenizer()
 
     control = CONTROL_FACTORIES[control_name]()
-    pipeline = SteeringPipeline(controls=[control], lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=[control], model=model, tokenizer=tokenizer)
     pipeline.steer()
 
     # count model forward passes via a pre-hook, and steered passes via a recording transform

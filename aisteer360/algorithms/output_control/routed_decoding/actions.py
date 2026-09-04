@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from aisteer360.algorithms.output_control._common.drivers.phased import Fixed, Generated
+from aisteer360.algorithms.output_control.common.drivers.phased import Fixed, Generated
 
 
 def _ellipsize(text: str, limit: int = 40) -> str:

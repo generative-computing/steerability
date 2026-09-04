@@ -9,9 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from aisteer360.algorithms.structural_control.wrappers.trl.ppotrainer.base_mixin import (
-    PPOTrainerMixin,
-)
+from aisteer360.algorithms.structural_control.wrappers.trl.ppotrainer.base_mixin import PPOTrainerMixin
 
 
 class _TokenizerStub:

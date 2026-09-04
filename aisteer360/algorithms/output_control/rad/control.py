@@ -2,193 +2,243 @@ from __future__ import annotations
 
 import gc
 import logging
-import os
+import warnings
 
 import torch
-from transformers import (
-    AutoTokenizer,
-    PreTrainedModel,
-    PreTrainedTokenizer,
-)
+from transformers import PreTrainedModel, PreTrainedTokenizer
 
-from aisteer360.algorithms.output_control._common.candidates import rad_candidate_sizing
-from aisteer360.algorithms.output_control._common.loading import load_sequence_classifier
-from aisteer360.algorithms.output_control._common.processors.value_guided import ValueGuidedProcessor
-from aisteer360.algorithms.output_control._common.values.reward_model import RewardModelValue
+from aisteer360.algorithms.core.execution.access import ModelAccess
 from aisteer360.algorithms.output_control.base import OutputControl
+from aisteer360.algorithms.output_control.common.loading import load_sequence_classifier
+from aisteer360.algorithms.output_control.common.processors.value_guided import ValueGuidedProcessor
+from aisteer360.algorithms.output_control.common.values.reward_model import CachedRewardModelValue, RewardModelValue
 from aisteer360.algorithms.output_control.rad.args import RADArgs
-from aisteer360.algorithms.output_control.rad.utils import GPT2RewardModel
 
 logger = logging.getLogger(__name__)
 
 
 class RAD(OutputControl):
-    """
-    Implementation of RAD (Reward-Augmented Decoding) from Deng and Raffel, 2023.
-    Integrated from the official implementation of RAD ([https://github.com/r-three/RAD?tab=readme-ov-file](https://github.com/r-three/RAD?tab=readme-ov-file)).
+    """Implementation of RAD (Reward-Augmented Decoding) from Deng and Raffel, 2023.
 
     RAD works in two phases:
 
-    1. **Reward model training**: Train a reward model on a labeled dataset of texts and labels.
-    For details about this step, please see [https://github.com/r-three/RAD?tab=readme-ov-file](https://github.com/r-three/RAD?tab=readme-ov-file). We skip this
-    step in this implementation and re-use the open-source toxicity reward model trained by the authors via
-    gdown [https://storage.googleapis.com/rad_release/saved_models.zip](https://storage.googleapis.com/rad_release/saved_models.zip)
+    1. **Preparation (`steer`)**: load an `AutoModelForSequenceClassification` reward model.
+    2. **Controlled decoding (`get_logits_processors`)**: at each decode step, the top-`top_k`
+       candidate tokens are scored by the reward model, their reward is clamped to `[0, 1]`, and the
+       candidate logits are shifted by `beta * reward` while non-candidate logits are masked to
+       `-inf`.
 
-    2. **Controlled decoding**: At every decoding step the candidate-token logits are shifted by `beta * reward`,
-    where the `reward` is given by a trained reward model.
+    The score read from the reward model is column `score_index` of its output, after `score_transform`
+    (`"none"` reads a raw logit, `"sigmoid"` and `"softmax"` map it into `[0, 1]`). With `invert=True`
+    the shift uses `1 - reward`, steering away from the scored attribute. The `"clamp"` normalization
+    is absolute rather than relative to the candidate set, so the shift spread across candidates is
+    `beta * (max_reward - min_reward)` and benign steps preserve the base distribution. When
+    `score_transform="none"` the reward is an unbounded logit, so `invert=True` gives `1 - clamp(v)`,
+    which saturates to 0 for any logit at or above 1; pass `score_transform="sigmoid"` to invert a
+    logit head meaningfully.
 
-    RAD is a step-level control: `steer()` loads the reward model into a `RewardModelValue`, and
-    `get_logits_processors()` returns a `ValueGuidedProcessor` that selects candidates (RAD's documented
-    top-k/top-p precedence), scores them with the reward model, min-max normalizes within the candidate
-    set (optionally inverted for the legacy toxicity head), and shifts the candidate logits by
-    `beta * value` while masking non-candidates to `-inf`. As a step-level control, RAD composes with
-    other output controls and with a decoding driver, and the sampling kwargs
-    (`temperature`/`top_k`/`top_p`/`repetition_penalty`) are applied once by the driver's loop.
+    RAD is a step-level control. `steer()` loads the reward model into a candidate value, and
+    `get_logits_processors()` returns a fresh `ValueGuidedProcessor` per call. Candidates are the
+    top-`top_k` of the scores this processor receives, so its position in a composed output stack
+    matters. Caller-supplied sampling kwargs (temperature, `top_p`, repetition penalty) apply around
+    the shift; in particular temperature rescales the effective `beta`, so a protocol-faithful run
+    passes `do_sample=True` and nothing else.
+
+    Two scoring paths back the value. When `efficient=True` and the reward model is decoder-only and
+    shares the language model's vocabulary, `steer()` builds a `CachedRewardModelValue` that memoizes
+    the reward model's prefix activations across steps (the paper's O(km) unidirectional path). When
+    a precondition or a steer-time smoke forward fails, RAD emits one `UserWarning` naming the failed
+    precondition and falls back to `RewardModelValue(shared_vocab=True)`, which produces the same
+    scores at higher cost. When the vocabularies differ, RAD uses `RewardModelValue(shared_vocab=False)`,
+    which decodes candidates to text and re-encodes with the reward-model tokenizer. Toggling
+    `efficient` changes speed only, not scores.
 
     Args:
-        beta (float): Steering intensity. Defaults to 0.0.
-        reward_path (str, optional): Path to the trained reward model. See [https://github.com/r-three/RAD](https://github.com/r-three/RAD) for details. Defaults to None.
-        reward_model_id (str, optional): HuggingFace model ID or local path for an AutoModelForSequenceClassification
-            reward model. When set, this is used instead of reward_path. Defaults to None.
-        reward_model_kwargs (dict, optional): Extra kwargs passed to AutoModelForSequenceClassification.from_pretrained().
-            Defaults to {}.
+        reward_model_id (str): HF model id or local path for an `AutoModelForSequenceClassification`
+            reward model.
+        beta (float): Steering intensity (Algorithm 1's beta). Non-negative; direction is set by
+            `invert`.
+        top_k (int): Number of candidate tokens scored per step (Algorithm 1's k). Defaults to 20.
+        invert (bool): Use `1 - reward` as the shift. Defaults to False.
+        score_index (int): Output column of the reward model read as the score. Defaults to 0.
+        score_transform (str): Map head outputs before selecting `score_index` (`"none"`, `"sigmoid"`,
+            or `"softmax"`). Defaults to `"none"`.
+        reward_model_kwargs (dict): Extra kwargs for `AutoModelForSequenceClassification.from_pretrained()`.
+            Defaults to `{}`.
+        include_in_scoring (bool): Apply the processor during `compute_logprobs`. Defaults to True.
+        efficient (bool): Cache reward-model prefix activations across steps when preconditions hold.
+            Defaults to True.
 
     Reference:
 
-    - "Reward-Augmented Decoding: Efficient Controlled Text Generation With a Unidirectional Reward Model"
-     Haikang Deng, Colin Raffel
-     [https://arxiv.org/abs/2310.09520](https://arxiv.org/abs/2310.09520)
+        - "Reward-Augmented Decoding: Efficient Controlled Text Generation With a Unidirectional Reward Model"
+          Haikang Deng, Colin Raffel
+          [https://arxiv.org/abs/2310.09520](https://arxiv.org/abs/2310.09520)
     """
+
     Args = RADArgs
 
-    # placeholders (filled by steer)
-    model: PreTrainedModel | None = None
     tokenizer: PreTrainedTokenizer | None = None
+    _value = None
 
     beta: float
 
+    def steer_access(self) -> ModelAccess:
+        """`ModelAccess.MODULE`; the reward model's placement follows the live model at steer time
+        (the generate phase is in-process)."""
+        return ModelAccess.MODULE
+
     def steer(
-            self,
-            model: PreTrainedModel,
-            tokenizer: PreTrainedTokenizer | None = None,
-            **__,
-    ) -> PreTrainedModel:
-        """Load and configure the reward model, then build the `RewardModelValue`.
+        self,
+        model: PreTrainedModel,
+        tokenizer: PreTrainedTokenizer | None = None,
+        **__,
+    ) -> None:
+        """Load the reward model and build the candidate value.
 
-        Supports two modes:
-
-        1. **HuggingFace classifier**: When `reward_model_id` is set, loads any
-           `AutoModelForSequenceClassification` compatible model from HuggingFace Hub.
-        2. **Legacy toxicity model**: When `reward_path` is set (or neither is set),
-           loads the GPT-2 based toxicity classifier from the original RAD paper.
+        Loads an `AutoModelForSequenceClassification` reward model and builds a
+        `CachedRewardModelValue` when `efficient` is set and the reward model is decoder-only and
+        shares the language model's vocabulary (verified by a smoke forward), otherwise a
+        `RewardModelValue`. Derives `supports_batching` from the resolved value. Performs no network
+        downloads or filesystem writes (model loading may hit the HF cache).
 
         Args:
             model (PreTrainedModel): The base language model to be steered.
             tokenizer (PreTrainedTokenizer | None): Tokenizer for the base model.
             **__: Additional arguments (unused).
-
-        Returns:
-            PreTrainedModel: The input model, unchanged.
         """
-        self.model = model
         self.tokenizer = tokenizer or getattr(model, "tokenizer", None)
-        self.device = next(model.parameters()).device
+        device = next(model.parameters()).device
 
-        # the legacy toxicity head is used iff no HF classifier id was supplied
-        self._legacy = self.reward_model_id is None
-        if self._legacy:
-            self._load_legacy_toxicity_model()
-            rm_score_fn = lambda output: output[:, 0]  # invert applied via _legacy
-        else:
-            self._load_hf_classifier()
-            rm_score_fn = lambda output: output.logits[:, 0]  # general RM: higher = better
-
-        self._value = RewardModelValue(
-            reward_model=self.rm,
-            rm_tokenizer=self.rm_tokenizer,
-            rm_score_fn=rm_score_fn,
-        )
-        return model
-
-    def _load_hf_classifier(self) -> None:
-        """Load a HuggingFace AutoModelForSequenceClassification reward model."""
-        logger.info("Loading reward model from HuggingFace: %s", self.reward_model_id)
-        self.rm, self.rm_tokenizer = load_sequence_classifier(
+        reward_model, rm_tokenizer = load_sequence_classifier(
             self.reward_model_id,
-            device=self.device,
+            device=device,
             hf_model_kwargs=self.reward_model_kwargs,
         )
-        logger.info("HuggingFace reward model loaded successfully")
 
-    def _load_legacy_toxicity_model(self) -> None:
-        """Load the legacy GPT-2 toxicity reward model from the RAD paper."""
-        self.rm_tokenizer = AutoTokenizer.from_pretrained("gpt2", cache_dir=self.reward_path)
-        self.rm_tokenizer.pad_token = self.rm_tokenizer.eos_token
-        self.rm_tokenizer.padding_side = "right"
-        self.rm_tokenizer.max_length = 1024
+        shared_vocab = self._vocab_matches(rm_tokenizer, self.tokenizer)
+        self._value = self._build_value(reward_model, rm_tokenizer, shared_vocab)
+        self.supports_batching = self._value.supports_batching
 
-        if (self.reward_path is None) or not os.path.exists(os.path.join(self.reward_path, "pytorch_model.bin")):
-            logger.info(
-                "Reward model not found in: %s. Downloading from https://huggingface.co/hk/rad_rms/tree/main/gpt2_toxicity...",
-                self.reward_path,
+    def _build_value(self, reward_model, rm_tokenizer, shared_vocab: bool):
+        """Select the candidate value: cached (with smoke-test + degrade), shared-vocab, or text."""
+        if not shared_vocab:
+            return RewardModelValue(
+                reward_model, rm_tokenizer,
+                score_index=self.score_index, score_transform=self.score_transform,
+                shared_vocab=False,
             )
-            from huggingface_hub import hf_hub_download
-            hf_hub_download(
-                repo_id="hk/rad_rms",
-                filename="gpt2_toxicity/pytorch_model.bin",
-                local_dir="./tmp/rad_saved_models/saved_models/",
+
+        stateless = RewardModelValue(
+            reward_model, rm_tokenizer,
+            score_index=self.score_index, score_transform=self.score_transform,
+            shared_vocab=True,
+        )
+        if not self.efficient:
+            return stateless
+
+        if not self._is_unidirectional(reward_model):
+            warnings.warn(
+                "RAD: the reward model is not decoder-only (no past_key_values/cache_position support); "
+                "falling back to the stateless reward value.",
+                UserWarning,
             )
-            logger.info(
-                "Reward model downloaded. Please set reward_path='./tmp/rad_saved_models/saved_models/gpt2_toxicity' in the future."
+            return stateless
+
+        cached = CachedRewardModelValue(
+            reward_model, rm_tokenizer,
+            score_index=self.score_index, score_transform=self.score_transform,
+        )
+        if not self._cached_smoke_ok(cached):
+            warnings.warn(
+                "RAD: the cached reward-model forward failed its smoke test; falling back to the "
+                "stateless reward value.",
+                UserWarning,
             )
-        else:
-            logger.info("Reward model found in: %s", self.reward_path)
+            return stateless
+        return cached
 
-        if self.reward_path is None:
-            self.reward_path = "./tmp/rad_saved_models/saved_models/gpt2_toxicity"
+    @staticmethod
+    def _vocab_matches(rm_tokenizer, lm_tokenizer) -> bool:
+        """Whether the reward-model and language-model tokenizers share a vocabulary."""
+        if lm_tokenizer is None:
+            return False
+        try:
+            return rm_tokenizer.get_vocab() == lm_tokenizer.get_vocab()
+        except Exception:
+            return False
 
-        state_dict = torch.load(os.path.join(self.reward_path, "pytorch_model.bin"), map_location="cpu")
-        self.rm = GPT2RewardModel(reward_model_name="gpt2", out_features=7, cache_dir=self.reward_path)
-        self.rm.load_state_dict(state_dict, strict=False)
-        self.rm = self.rm.to(self.device)
+    @staticmethod
+    def _is_unidirectional(reward_model) -> bool:
+        """Whether the reward model's forward accepts `past_key_values` (and thus `cache_position`).
 
-        logger.info("Legacy toxicity reward model loaded successfully")
+        A decoder-only sequence classifier threads `past_key_values` and absorbs `cache_position`
+        through a `**kwargs` catch-all; an encoder classifier (BERT/RoBERTa) accepts neither. The
+        cached forward's smoke test at steer time is the final gate.
+        """
+        import inspect
 
-    def get_logits_processors(self, input_ids, runtime_kwargs, **kwargs) -> list:
+        try:
+            params = inspect.signature(reward_model.forward).parameters
+        except (TypeError, ValueError):
+            return False
+        if "past_key_values" not in params:
+            return False
+        has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+        return "cache_position" in params or has_var_keyword
+
+    def _cached_smoke_ok(self, cached: CachedRewardModelValue) -> bool:
+        """Run one tiny cached forward to confirm the reward model supports the cached path."""
+        from aisteer360.algorithms.output_control.common.values.base import StepContext
+
+        device = cached._device
+        prefix = torch.zeros(1, 2, dtype=torch.long, device=device)
+        candidates = torch.zeros(1, 1, dtype=torch.long, device=device)
+        ctx = StepContext(
+            prefix_ids=prefix,
+            candidate_ids=candidates,
+            lm_tokenizer=self.tokenizer,
+            attention_mask=torch.ones(1, 2, dtype=torch.long, device=device),
+        )
+        try:
+            cached.score(ctx)
+        except Exception as exc:
+            logger.debug("RAD cached smoke forward failed: %s", exc)
+            cached._cached_ids = None
+            cached._cache = None
+            return False
+        cached._cached_ids = None
+        cached._cache = None
+        return True
+
+    def get_logits_processors(self, input_ids, runtime_kwargs, attention_mask=None, **kwargs) -> list:
         """Return a fresh `ValueGuidedProcessor` implementing RAD's reward-augmented shift.
 
-        The candidate policy follows RAD's documented top-k/top-p precedence (`rad_candidate_sizing`),
-        which is total (no unassigned-variable path). Non-candidate tokens are masked to `-inf`;
-        candidates are min-max normalized within the set (inverted for the legacy toxicity head) and
-        shifted by `beta * value`.
+        Candidates are the top-`top_k` of the scores this processor receives; non-candidate tokens
+        are masked to `-inf`; candidate rewards are clamped to `[0, 1]` (inverted when `invert` is
+        set) and the candidate logits are shifted by `beta * reward`.
         """
-        if getattr(self, "_value", None) is None:
+        if self._value is None:
             raise RuntimeError("RAD.steer() must run before generation (reward model not loaded).")
-        sizing = rad_candidate_sizing(kwargs)
         return [
             ValueGuidedProcessor(
                 self._value,
-                policy=sizing["policy"],
-                k=sizing["k"],
-                p=sizing["p"],
+                policy="top_k",
+                k=self.top_k,
                 beta=self.beta,
-                normalize="minmax",
-                invert=self._legacy,
+                normalize="clamp",
+                invert=self.invert,
                 mask_non_candidates=True,
                 lm_tokenizer=self.tokenizer,
+                attention_mask=attention_mask,
             )
         ]
 
     def cleanup(self) -> None:
-        """Release the reward model and tokenizer to free GPU memory."""
-        if hasattr(self, "rm") and self.rm is not None:
-            del self.rm
-            self.rm = None
-        if hasattr(self, "rm_tokenizer") and self.rm_tokenizer is not None:
-            del self.rm_tokenizer
-            self.rm_tokenizer = None
+        """Release the reward model and tokenizer to free memory."""
+        if self._value is not None:
+            self._value.cleanup()
         self._value = None
-        self.model = None
         self.tokenizer = None
 
         gc.collect()

@@ -24,6 +24,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from aisteer360.algorithms.core.base_args import BaseArgs
+from aisteer360.algorithms.core.execution.access import ModelAccess
 from aisteer360.algorithms.input_control.base import InputControl
 from aisteer360.algorithms.output_control.base import OutputControl
 from aisteer360.algorithms.state_control.base import StateControl
@@ -115,6 +116,9 @@ class MockInputControl(InputControl):
         self._runtime_kwargs_received = runtime_kwargs
         return input_ids
 
+    def steer_access(self) -> ModelAccess:
+        return ModelAccess.MODULE
+
     def steer(self, model=None, tokenizer=None, **kwargs):
         self.model = model
         self.tokenizer = tokenizer
@@ -195,6 +199,9 @@ class MockStateControl(StateControl):
             })
         return hooks
 
+    def steer_access(self) -> ModelAccess:
+        return ModelAccess.MODULE
+
     def steer(self, model, tokenizer=None, **kwargs):
         self.model = model
         self.tokenizer = tokenizer
@@ -236,6 +243,9 @@ class MockOutputControl(OutputControl):
             return scores
 
         return [_identity]
+
+    def steer_access(self) -> ModelAccess:
+        return ModelAccess.MODULE
 
     def steer(self, model, tokenizer=None, **kwargs):
         self.model = model

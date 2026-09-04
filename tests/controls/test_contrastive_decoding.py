@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.output_control._common.processors.contrastive_mixture import ContrastiveMixtureProcessor
+from aisteer360.algorithms.output_control.common.processors.contrastive_mixture import ContrastiveMixtureProcessor
 from aisteer360.algorithms.output_control.contrastive_decoding.control import ContrastiveDecoding
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
@@ -25,9 +25,7 @@ def _pipeline(controls, model=None, tokenizer=None):
         model = tiny_llama(num_layers=2, hidden=16, heads=2, vocab=VOCAB)
     if tokenizer is None:
         tokenizer = wordlevel_tokenizer()
-    pipeline = SteeringPipeline(controls=controls, lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=controls, model=model, tokenizer=tokenizer)
     pipeline.steer()
     return pipeline, model, tokenizer
 

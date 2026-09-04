@@ -10,7 +10,6 @@ import re
 from collections import Counter
 from typing import Sequence
 
-
 _TOKEN_RE = re.compile(r"\w+")
 
 

@@ -6,9 +6,10 @@ import logging
 import torch
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
-from aisteer360.algorithms.output_control._common.logit_sources import AuxModelSource
-from aisteer360.algorithms.output_control._common.processors.contrastive_mixture import ContrastiveMixtureProcessor
+from aisteer360.algorithms.core.execution.access import ModelAccess
 from aisteer360.algorithms.output_control.base import OutputControl
+from aisteer360.algorithms.output_control.common.logit_sources import AuxModelSource
+from aisteer360.algorithms.output_control.common.processors.contrastive_mixture import ContrastiveMixtureProcessor
 from aisteer360.algorithms.output_control.dexperts.args import DExpertsArgs
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,12 @@ class DExperts(OutputControl):
     tokenizer: PreTrainedTokenizer | None = None
     _expert_source: AuxModelSource | None = None
     _anti_expert_source: AuxModelSource | None = None
+
+    def steer_access(self) -> ModelAccess:
+        """`ModelAccess.MODULE`; the expert and anti-expert placements follow the live
+        model, whose vocabulary the shared-vocab check reads (the generate phase is
+        in-process)."""
+        return ModelAccess.MODULE
 
     def steer(
         self,

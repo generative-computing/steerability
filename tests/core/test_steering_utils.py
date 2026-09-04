@@ -11,45 +11,34 @@ from unittest.mock import MagicMock
 import pytest
 
 from aisteer360.algorithms.core.utils.controls import merge_controls
-from aisteer360.algorithms.input_control.base import InputControl, NoInputControl
-from aisteer360.algorithms.output_control.base import HFGenerateDriver
-from aisteer360.algorithms.state_control.base import NoStateControl, StateControl
-from aisteer360.algorithms.structural_control.base import NoStructuralControl, StructuralControl
+from aisteer360.algorithms.input_control.base import InputControl
+from aisteer360.algorithms.output_control.base import DecodingDriver
+from aisteer360.algorithms.state_control.base import StateControl
+from aisteer360.algorithms.structural_control.base import StructuralControl
 from aisteer360.utils.tokenization import ensure_pad_token
-from tests.conftest import (
-    MockInputControl,
-    MockOutputControl,
-    MockStateControl,
-    MockStructuralControl,
-)
+from tests.conftest import MockInputControl, MockOutputControl, MockStateControl, MockStructuralControl
 
 
 # merge_controls Tests
 class TestMergeControlsEmpty:
     """Tests for merge_controls with empty or minimal input."""
 
-    def test_empty_list_returns_all_defaults(self):
-        """An empty list yields identity controls for input/structural/state and an empty
-        output list."""
+    def test_empty_list_returns_empty_categories(self):
+        """An empty list yields an empty list per category; the identity element of every
+        category's fold is the empty sequence."""
         result = merge_controls([])
 
-        assert "input_controls" in result
-        assert "structural_controls" in result
-        assert "state_controls" in result
-        assert "output_controls" in result
+        assert result == {
+            "input_controls": [],
+            "structural_controls": [],
+            "state_controls": [],
+            "output_controls": [],
+        }
 
-        assert len(result["input_controls"]) == 1
-        assert isinstance(result["input_controls"][0], NoInputControl)
-        assert len(result["structural_controls"]) == 1
-        assert isinstance(result["structural_controls"][0], NoStructuralControl)
-        assert len(result["state_controls"]) == 1
-        assert isinstance(result["state_controls"][0], NoStateControl)
-        assert result["output_controls"] == []
-
-    def test_empty_iterable_returns_defaults(self):
-        """Any empty iterable yields the defaults."""
+    def test_empty_iterable_returns_empty_categories(self):
+        """Any empty iterable yields empty categories."""
         result = merge_controls(iter([]))
-        assert isinstance(result["input_controls"][0], NoInputControl)
+        assert result["input_controls"] == []
 
 
 class TestMergeControlsSingleCategory:
@@ -60,9 +49,9 @@ class TestMergeControlsSingleCategory:
         result = merge_controls([control])
 
         assert result["input_controls"] == [control]
-        # other categories fall back to defaults
-        assert isinstance(result["structural_controls"][0], NoStructuralControl)
-        assert isinstance(result["state_controls"][0], NoStateControl)
+        # other categories stay empty
+        assert result["structural_controls"] == []
+        assert result["state_controls"] == []
         assert result["output_controls"] == []
 
     def test_single_structural_control(self):
@@ -70,7 +59,7 @@ class TestMergeControlsSingleCategory:
         result = merge_controls([control])
 
         assert result["structural_controls"] == [control]
-        assert isinstance(result["input_controls"][0], NoInputControl)
+        assert result["input_controls"] == []
 
     def test_single_state_control(self):
         control = MockStateControl()
@@ -97,7 +86,7 @@ class TestMergeControlsMultipleCategories:
 
         assert result["input_controls"] == [input_ctrl]
         assert result["state_controls"] == [state_ctrl]
-        assert isinstance(result["structural_controls"][0], NoStructuralControl)
+        assert result["structural_controls"] == []
         assert result["output_controls"] == []
 
     def test_all_four_categories(self):
@@ -159,19 +148,26 @@ class TestMergeControlsMultiplicityAndErrors:
     def test_multiple_decoding_drivers_raises(self):
         """Two enabled decoding drivers raise (the decode loop does not compose)."""
 
-        class DriverA(HFGenerateDriver):
-            pass
+        class DriverA(DecodingDriver):
+            def decode(self, *args, **kwargs):
+                raise NotImplementedError
 
-        class DriverB(HFGenerateDriver):
-            pass
+        class DriverB(DecodingDriver):
+            def decode(self, *args, **kwargs):
+                raise NotImplementedError
 
         with pytest.raises(ValueError, match="decoding drivers"):
             merge_controls([DriverA(), DriverB()])
 
     def test_step_level_control_plus_driver_allowed(self):
         """A step-level control alongside a single driver is accepted, in encounter order."""
+
+        class Driver(DecodingDriver):
+            def decode(self, *args, **kwargs):
+                raise NotImplementedError
+
         step_level_control = MockOutputControl()
-        driver = HFGenerateDriver()
+        driver = Driver()
 
         result = merge_controls([step_level_control, driver])
         assert result["output_controls"] == [step_level_control, driver]
@@ -270,14 +266,6 @@ class TestControlTypeDetection:
 
         result = merge_controls([control])
         assert result["input_controls"] == [control]
-
-    def test_null_controls_have_correct_types(self):
-        result = merge_controls([])
-
-        assert isinstance(result["input_controls"][0], InputControl)
-        assert isinstance(result["structural_controls"][0], StructuralControl)
-        assert isinstance(result["state_controls"][0], StateControl)
-        assert result["output_controls"] == []  # no output no-op
 
 
 # Edge Cases

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
-from aisteer360.algorithms.output_control._common.drivers.search import SearchDriver
 from aisteer360.algorithms.output_control.base import OutputControl
+from aisteer360.algorithms.output_control.common.drivers.search import SearchDriver
 from aisteer360.algorithms.output_control.deal.args import DeALArgs
 
 
@@ -28,7 +28,7 @@ class DeAL(SearchDriver):
     DeAL is a decoding driver, a thin preset of the generic `SearchDriver` that maps DeAL's args onto
     `(scorer, segment_len, num_candidates, keep_k, max_iterations, propose_mode="beam")`. The driver forwards the
     composed logits/stopping stacks into every lookahead rollout, so a step-level control such as RAD steers every DeAL
-    rollout. Runtime overrides (`base_generate`, `reward_params`) are honored. The per-iteration deepcopy of `gen_kwargs`
+    rollout. The `reward_params` runtime override is honored. The per-iteration deepcopy of `gen_kwargs`
     is safe because the composed stacks travel as explicit `decode()` parameters and never inside `gen_kwargs`.
 
     Args:

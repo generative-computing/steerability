@@ -5,6 +5,7 @@ from typing import Any
 
 from aisteer360.evaluation.use_cases.base import UseCase
 from aisteer360.evaluation.utils.generation_utils import (
+    DEFAULT_EVAL_BATCH_SIZE,
     batch_retry_generate,
     log_truncation_count,
     output_record_fields,
@@ -50,7 +51,8 @@ class TruthfulQA(UseCase):
         model_or_pipeline,
         tokenizer,
         gen_kwargs: dict | None = None,
-        runtime_overrides: dict[tuple[str, str], str] | None = None,
+        runtime_overrides: dict[str, dict[str, Any]] | None = None,
+        batch_size: int = DEFAULT_EVAL_BATCH_SIZE,
         **kwargs,
     ) -> list[dict[str, Any]]:
         """Generates model responses for TruthfulQA questions.
@@ -61,9 +63,12 @@ class TruthfulQA(UseCase):
             model_or_pipeline: Either a HuggingFace model or a ``SteeringPipeline`` instance.
             tokenizer: Tokenizer for encoding/decoding text.
             gen_kwargs: Optional generation parameters passed to the model's generate method.
-            runtime_overrides: Optional runtime parameter overrides for steering controls. To route the truthfulness
-                instruction to PASTA, use ``{"PASTA": {"substrings": "truthfulness_instruction"}}``.
-            **kwargs: Additional keyword arguments; must include ``batch_size`` (int).
+            runtime_overrides: Optional runtime parameter overrides for steering controls, keyed by control class name.
+                To route the truthfulness instruction to PASTA, use
+                ``{"PASTA": {"substrings": "truthfulness_instruction"}}``; the column resolves against the prompt rows,
+                each of which carries ``truthfulness_instruction``.
+            batch_size: Generation batch size.
+            **kwargs: Additional keyword arguments.
 
         Returns:
             List of generation dictionaries, each containing:
@@ -75,32 +80,33 @@ class TruthfulQA(UseCase):
                 - ``incorrect_answers``: List of common misconception answers.
                 - ``best_answer``: Single best reference answer (if present in the dataset).
                 - ``category``: Question category (if present in the dataset).
+                - ``thinking``: Reasoning segment split from the continuation, or None if no think
+                    tag is present. This constructed key shadows any same-named instance column.
         """
         if not self.evaluation_data:
             logger.warning("No evaluation data provided")
             return []
 
         gen_kwargs = dict(gen_kwargs or {})
-        batch_size: int = int(kwargs["batch_size"])
 
-        # construct prompts with truthfulness instruction
+        # construct prompts with truthfulness instruction; rows carry truthfulness_instruction, so
+        # runtime_overrides={"PASTA": {"substrings": "truthfulness_instruction"}} resolves per row
         prompt_data = []
         for instance in self.evaluation_data:
             prompt_text = (
                 f"{instance['truthfulness_instruction']}\n\n"
                 f"Question: {instance['question']}"
             )
-            user_prompt = [{"role": "user", "content": prompt_text}]
-            prompt_data.append({"prompt": user_prompt})
+            prompt_data.append({**instance, "prompt": [{"role": "user", "content": prompt_text}]})
 
-        responses, _, outputs = batch_retry_generate(
+        responses, _, outputs, thinking = batch_retry_generate(
             prompt_data=prompt_data,
             model_or_pipeline=model_or_pipeline,
             tokenizer=tokenizer,
             gen_kwargs=gen_kwargs,
             runtime_overrides=runtime_overrides,
-            evaluation_data=self.evaluation_data,
             return_outputs=True,
+            return_thinking=True,
             batch_size=batch_size,
         )
 
@@ -115,9 +121,10 @@ class TruthfulQA(UseCase):
                 "incorrect_answers": instance["incorrect_answers"],
                 "best_answer": instance.get("best_answer", ""),
                 "category": instance.get("category", ""),
+                "thinking": think,
                 **output_record_fields(output, tokenizer),
             }
-            for instance, response, output in zip(self.evaluation_data, responses, outputs)
+            for instance, response, output, think in zip(self.evaluation_data, responses, outputs, thinking)
         ]
 
         return generations

@@ -76,7 +76,7 @@ pools, respectively, for `FewShot` as follows:
 ```python
 positive_pool = []
 negative_pool = []
-for _, row in steering_data.iterrows():
+for row in steering_data:
     positive_pool.append({
         "question": row["question"],
         "answer": row["answer_chosen"]
@@ -162,6 +162,24 @@ A benchmark can also optionally accept
 - `hf_model_kwargs`: load-time options for configuration of the construction of the model.
 - `gen_kwargs`: generation-time options for configuration of the behavior of the model.
 - `device_map`: indicates how model layers are assigned to devices.
+- `seed`: benchmark-level base seed; when set, one seed is derived per (config, trial), threaded into `gen_kwargs` and
+  into use-case-side RNG, and recorded on each run dict, so a resumed trial reproduces the same sampling on the same
+  hardware, dtype, and torch/vLLM versions.
+- `backend`: the backend forwarded to each pipeline, as a `BackendSpec` or a known kind name (`"huggingface"`,
+  `"vllm"`, `"vllm-serve"`); defaults to the in-process Hugging Face backend.
+- `fit`: the fit venue policy forwarded to each pipeline (`"auto"` or `"in_process"`); part of checkpoint identity.
+- `on_unsupported`: `"raise"` (default) fails the run with one aggregate error if any sweep point is unsupported on the
+  configured backend, checked before any model or engine work; `"skip"` runs the supported points and warns once per
+  skipped point.
+- `checkpoint_every`: `"trial"` (default) writes the checkpoint after every trial; `"config"` writes once per
+  configuration.
+
+When `save_dir` is set, the run is checkpointed to an envelope and resume is trial-granular, i.e., a subsequent
+call with the same `save_dir` completes only the trials still missing from each configuration (and raising
+`num_trials` runs only the delta). Resume accepts only a checkpoint whose identity metadata matches the
+current configuration; a well-shaped checkpoint produced under a different configuration or an earlier format is
+refused with an error naming the differing field, and anything unreadable or wrong-shaped at the checkpoint path is
+ignored with a warning and overwritten on the next save.
 
 The benchmark for `CommonsenseMCQA` can now be constructed as follows:
 ```python
@@ -221,7 +239,7 @@ pasta = PASTA(
     scale_position="exclude",
 )
 ```
-The `ThinkingIntervention` control requires specification of an intervention function:
+The thinking-intervention configuration of `PhasedDecoding` requires specification of an intervention function:
 ```python
 def instruction_following_intervention(prompt: str, params: dict) -> str:
     intervention = (
@@ -234,13 +252,17 @@ def instruction_following_intervention(prompt: str, params: dict) -> str:
 ```
 which is then used when instantiating the control:
 ```python
-from aisteer360.algorithms.output_control.thinking_intervention.control import ThinkingIntervention
+from aisteer360.algorithms.output_control.phased_decoding.control import PhasedDecoding
 
-thinking_intervention = ThinkingIntervention(
-    intervention=instruction_following_intervention
+thinking_intervention = PhasedDecoding(
+    plan=[
+        {"fixed": instruction_following_intervention, "replace": True, "add_special_tokens": True},
+        {"generate": {}},
+    ],
+    extract_after="</think>",
 )
 ```
-Note that both `PASTA` and `ThinkingIntervention` require the specific instructions within a given prompt to be passed
+Note that both `PASTA` and the thinking-intervention configuration require the specific instructions within a given prompt to be passed
 to the control. This is facilitated through the `runtime_overrides` argument in the `Benchmark` class, i.e., a
 dictionary of dictionaries each which is keyed by the control name and take values mapping the control's variable, e.g.,
 `substrings` in `PASTA`, to the relevant column of the evaluation dataset, e.g., `instructions`. The full benchmark call
@@ -256,13 +278,13 @@ benchmark = Benchmark(
     },
     runtime_overrides={
         "PASTA": {"substrings": "instructions"},
-        "ThinkingIntervention": {"params": {"instructions": "instructions"}},
+        "PhasedDecoding": {"params": {"instructions": "instructions"}},
     },
     gen_kwargs={
         "max_new_tokens": 100,
         "do_sample": False,
-        "output_attentions": True,  # mandatory for PASTA
     },
+    hf_model_kwargs={"attn_implementation": "eager"},  # PASTA requires the "eager" or "sdpa" attention implementation
 )
 ```
 The benchmark can then be run as usual to generate the profiles. We direct the reader to the

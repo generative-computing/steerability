@@ -4,8 +4,8 @@ import warnings
 
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
-from aisteer360.algorithms.output_control._common.drivers.phased import Fixed, Generated, PhasedDriver
 from aisteer360.algorithms.output_control.base import OutputControl
+from aisteer360.algorithms.output_control.common.drivers.phased import Fixed, Generated, PhasedDriver
 from aisteer360.algorithms.output_control.phased_decoding.args import PhasedDecodingArgs
 
 _FIXED_KEYS = {"fixed", "replace", "add_special_tokens"}
@@ -55,7 +55,7 @@ class PhasedDecoding(PhasedDriver):
     """Config-first phase-shape driver: forced / generated segments spliced into one stream.
 
     `PhasedDecoding` is the generic over the phase shape, a thin `Args`-configured preset of the
-    `_common` `PhasedDriver`. A declarative `plan` grammar (str-or-callable forced text and bounded
+    `common` `PhasedDriver`. A declarative `plan` grammar (str-or-callable forced text and bounded
     generated segments) makes a method from the literature an assignment of a config:
 
         - Budget forcing (s1): a bounded thinking phase, a forced `"Wait"`, an extended thinking

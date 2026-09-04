@@ -1,7 +1,7 @@
 """Machine checks of the `core/internals` dependency DAG.
 
 A subprocess imports every `core/internals` module and asserts that no `*_control` category
-package loads; a second case shows `Probe.as_condition()` is the single edge that pulls one in.
+package loads; a second case shows `Probe.as_gate()` is the single edge that pulls one in.
 The registry assertion keeps `core/internals` structurally outside the steering-method crawl.
 """
 import json
@@ -21,7 +21,6 @@ INTERNALS_MODULES = [
     "aisteer360.algorithms.core.internals.probes.probe",
     "aisteer360.algorithms.core.internals.probes.fitting",
     "aisteer360.algorithms.core.internals.probes.probe_set",
-    "aisteer360.algorithms.core.internals.probes.rules",
 ]
 
 _CATEGORY_SCAN = """
@@ -58,7 +57,7 @@ print(json.dumps(category_modules(sys.modules)))
     assert json.loads(_run(code)) == []
 
 
-def test_as_condition_is_the_single_category_edge():
+def test_as_gate_is_the_single_category_edge():
     code = _CATEGORY_SCAN + """
 import json
 import sys
@@ -73,7 +72,7 @@ probe = Probe(
     model_type="llama", location="layer_input", pooling="mean",
     layer_ids=[0], weights={0: torch.ones(4)}, bias=0.0,
 )
-probe.as_condition()
+probe.as_gate()
 
 after = category_modules(sys.modules)
 print(json.dumps({"before": before, "loaded_state_control": any(

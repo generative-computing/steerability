@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from aisteer360.algorithms.input_control._common.pareto import ParetoFrontier
+    from aisteer360.algorithms.input_control.common.pareto import ParetoFrontier
 
 
 @dataclass
@@ -40,7 +40,7 @@ class CandidatePool:
         return index
 
     def frontier(self) -> "ParetoFrontier":
-        from aisteer360.algorithms.input_control._common.pareto import ParetoFrontier
+        from aisteer360.algorithms.input_control.common.pareto import ParetoFrontier
         return ParetoFrontier(self.scores)
 
     def best_index(self) -> int:

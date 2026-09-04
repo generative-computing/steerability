@@ -1,36 +1,33 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
-from aisteer360.algorithms.output_control._common.criteria import (
-    BudgetTokens,
-    StopOnSubstring,
-    StopOnTokens,
-)
+from aisteer360.algorithms.core.execution.contracts import Requirements
 from aisteer360.algorithms.output_control.base import OutputControl
+from aisteer360.algorithms.output_control.common.criteria import BudgetTokens, StopOnSubstring, StopOnTokens
 from aisteer360.algorithms.output_control.stopping_rules.args import StoppingRulesArgs
 
 
 class StoppingRules(OutputControl):
-    """Stopping criteria as configuration: substring, token, and budget stops.
+    """Stop rules as configuration: substring, token, and budget stops.
 
-    `StoppingRules` is the smallest member of the generic family and, without it, the only way to
-    get a `StopOnSubstring` into a pipeline without writing a class. It participates through the
-    stopping-criteria composition only and contributes no logits processors. Each configured rule
-    becomes a fresh, prompt-anchored criterion per generation:
+    `StoppingRules` is the smallest member of the generic family. It is sampling-expressible:
+    the pipeline merges its configuration into the call's normalized generation parameters
+    (`export_generation_params`), and the backend session composes the resulting stop rules,
+    so the control runs on every backend:
 
         - `stop_texts=["\\n\\nQ:"]` halts a row once its continuation contains the substring.
-        - `stop_token_ids=[13]` halts a row once its last token is one of the ids.
-        - `budget=64` halts a row once it has generated `budget` tokens past the prompt.
+        - `stop_token_ids=[13]` halts a row once its last generated token is one of the ids.
+        - `budget=64` tightens `max_new_tokens` to at most `budget`.
 
-    `StoppingRules` is a step-level control: `get_stopping_criteria` returns fresh criteria anchored
-    at the current prompt length, so two generations with different prompt lengths each stop relative
-    to their own prompt. It contributes no logits processors.
-
-    Semantics: criteria are not applied during `compute_logprobs` (there is no loop to stop), and
-    under a segment or phase driver the composed criteria apply inside every rollout/phase with the
-    prompt-anchored lengths fixed at composition time (a global stop, by design). `StopOnSubstring`
-    decodes the continuation each step (the cost of a text-level stop).
+    Token ids are returned as generated (the stop text plus any token-boundary overrun stays in
+    the ids); the pipeline truncates decoded text at the first stop-string occurrence and rows
+    halted by these rules report `finish_reason="stop"` (budget stops report `"length"`).
+    `get_stopping_criteria` remains available for direct composition outside the pipeline and
+    returns fresh criteria anchored at the current prompt length.
 
     Args:
         stop_texts (list[str]): Substrings that halt a row.
@@ -50,6 +47,21 @@ class StoppingRules(OutputControl):
         if self.stop_texts and self.tokenizer is None:
             raise RuntimeError("StoppingRules requires a tokenizer when 'stop_texts' is configured.")
         return model
+
+    def requirements(self) -> Requirements:
+        """Stop rules are session contract on every backend, so no phase requires anything."""
+        return Requirements()
+
+    def export_generation_params(self, runtime_kwargs: dict | None = None) -> Mapping[str, Any]:
+        """The configured stops as normalized generation parameters."""
+        contribution: dict[str, Any] = {}
+        if self.stop_texts:
+            contribution["stop_strings"] = tuple(self.stop_texts)
+        if self.stop_token_ids:
+            contribution["stop_token_ids"] = tuple(self.stop_token_ids)
+        if self.budget is not None:
+            contribution["max_new_tokens"] = self.budget
+        return contribution
 
     def get_stopping_criteria(self, input_ids, runtime_kwargs, **kwargs) -> list:
         """Return fresh criteria anchored at the current prompt length."""

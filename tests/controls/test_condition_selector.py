@@ -5,28 +5,22 @@ import warnings
 import pytest
 import torch
 
-from aisteer360.algorithms.state_control._common.estimators import MeanDifferenceEstimator
-from aisteer360.algorithms.state_control._common.estimators.contrastive_direction import (
-    ContrastiveDirectionEstimator,
-)
 from aisteer360.algorithms.core.internals.capture import layerwise_tokenwise_hidden
-from aisteer360.algorithms.state_control._common.condition_scorers import (
+from aisteer360.algorithms.core.internals.data import ContrastivePairs
+from aisteer360.algorithms.state_control.common.estimators import MeanDifferenceEstimator
+from aisteer360.algorithms.state_control.common.estimators.contrastive_direction import ContrastiveDirectionEstimator
+from aisteer360.algorithms.state_control.common.fit_specs import ConditionSearchSpec, VectorTrainSpec
+from aisteer360.algorithms.state_control.common.gating import (
     projected_cosine_similarity,
     projected_cosine_similarity_tensor,
     rank_one_projector,
 )
-from aisteer360.algorithms.state_control._common.selectors import condition_point
-from aisteer360.algorithms.state_control._common.selectors.condition_point import (
+from aisteer360.algorithms.state_control.common.selectors import condition_point
+from aisteer360.algorithms.state_control.common.selectors.condition_point import (
     ConditionPointSelector,
     _best_point_for_layer,
     _threshold_grid,
 )
-from aisteer360.algorithms.core.internals.data import ContrastivePairs
-from aisteer360.algorithms.state_control._common.specs import (
-    ConditionSearchSpec,
-    VectorTrainSpec,
-)
-
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 
@@ -124,7 +118,7 @@ class TestSelectEndToEnd:
         )
         # layer 0 is searchable (0-based) and the returned layer is a valid runtime layer id
         assert 0 <= point.layer_id < num_layers
-        assert point.comparator in ("larger", "smaller")
+        assert point.comparator in ("ge", "le")
 
 
 def _selector_data():
@@ -224,7 +218,7 @@ class TestMarginAwareSelection:
         sims_n = torch.tensor([0.02, 0.05])
         best = _best_point_for_layer(sims_p, sims_n, self.GRID)
         assert best["f1"] == pytest.approx(1.0)
-        assert best["comparator"] == "larger"
+        assert best["comparator"] == "ge"
         assert best["thr"] == pytest.approx(0.08, abs=0.011)  # midpoint of the 0.05 -> 0.11 gap
         assert best["margin"] == pytest.approx(0.03, abs=0.011)
 
@@ -239,9 +233,9 @@ class TestMarginAwareSelection:
         best = _best_point_for_layer(torch.tensor([0.05, 0.20]), torch.tensor([0.04, 0.22]), self.GRID)
         assert best["f1"] < 0.999 or best["margin"] <= 0
 
-    def test_inverted_classes_select_smaller(self):
+    def test_inverted_classes_select_le(self):
         best = _best_point_for_layer(torch.tensor([0.02, 0.05]), torch.tensor([0.30, 0.45]), self.GRID)
-        assert best["comparator"] == "smaller"
+        assert best["comparator"] == "le"
         assert best["f1"] == pytest.approx(1.0)
         assert best["margin"] == pytest.approx(0.12, abs=0.011)
 
@@ -265,8 +259,8 @@ class TestMarginAwareSelection:
         assert hasattr(point, "margin")
         assert math.isfinite(point.margin)
 
-    def test_mean_diff_smaller_comparator_warns(self):
-        # a contrast where mean_diff scores positives BELOW negatives forces a "smaller" pick
+    def test_mean_diff_le_comparator_warns(self):
+        # a contrast where mean_diff scores positives BELOW negatives forces a "le" pick
         torch.manual_seed(11)
         model = tiny_llama(num_layers=4, hidden=32, heads=4)
         tokenizer = wordlevel_tokenizer()
@@ -274,7 +268,7 @@ class TestMarginAwareSelection:
         fit_spec = VectorTrainSpec(method="mean_diff", accumulate="all", prompt_format="raw",
                                    location="layer_input")
         vec = MeanDifferenceEstimator().fit(model, tokenizer, data=data, spec=fit_spec)
-        # invert the fitted directions so positives project below negatives -> selector picks "smaller"
+        # invert the fitted directions so positives project below negatives -> selector picks "le"
         directions = {lid: -d for lid, d in vec.directions.items()}
         selector = ConditionPointSelector()
         with warnings.catch_warnings(record=True) as record:
@@ -288,5 +282,20 @@ class TestMarginAwareSelection:
                 search_spec=ConditionSearchSpec(auto_find=True),
                 comparison_mode="mean",
             )
-        if point.comparator == "smaller":
+        if point.comparator == "le":
             assert any("expected to score HIGHER" in str(w.message) for w in record)
+
+
+def test_unknown_score_raises():
+    torch.manual_seed(0)
+    model = tiny_llama(num_layers=4, hidden=32, heads=4)
+    with pytest.raises(ValueError, match="projected_cosine"):
+        ConditionPointSelector().select(
+            model=model,
+            tokenizer=wordlevel_tokenizer(),
+            condition_directions={0: torch.randn(32)},
+            data=ContrastivePairs(positives=["the cat"], negatives=["the dog"]),
+            fit_spec=VectorTrainSpec(prompt_format="raw", location="layer_input"),
+            search_spec=ConditionSearchSpec(),
+            score="bogus",
+        )

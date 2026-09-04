@@ -22,9 +22,10 @@ STEERING_METHOD = {
 
 Next, the args dataclass contains three parameters: `noise_scale` controlling the standard deviation of Gaussian noise
 to inject, `target_modules` specifying which layer patterns to modify (or None for all linear layers), and `seed`
-ensuring reproducible noise generation. Note that (as indicated in
-[the general instructions for the arguments dataclass](../add_new_steering_method.md#2-arguments-dataclass-argspy)), the
-field for `target_modules` must contain `default_factory=list` instead of simply `default`.
+ensuring reproducible noise generation. The default for `target_modules` is `None` (all linear layers); note that (as
+indicated in
+[the general instructions for the arguments dataclass](../add_new_steering_method.md#2-arguments-dataclass-argspy)) a
+mutable default, such as a non-empty list of patterns, would need `default_factory` instead of `default`.
 
 ```python
 from dataclasses import dataclass, field
@@ -38,7 +39,7 @@ class NoiseInjectionArgs(BaseArgs):
         metadata={"help": "Standard deviation of Gaussian noise to inject, in [0, 1]."},
     )
     target_modules: list[str] | None = field(
-        default_factory=list,
+        default=None,
         metadata={"help": "List of module name patterns to target. None means all linear layers."},
     )
     seed: int = field(
@@ -60,8 +61,8 @@ class NoiseInjectionArgs(BaseArgs):
                 raise ValueError("`target_modules` cannot be an empty list. Use None for all modules.")
 ```
 
-Lastly, the control is implemented via the `steer` method by defining the heads to prune and shrinking the model’s
-weight tensors in-place (via the Hugging Face's built-in `prune_heads` utility).
+Lastly, the control is implemented via the `steer` method by iterating over the model's linear modules and adding
+scaled Gaussian noise to their parameters in place.
 
 ```python
 import torch

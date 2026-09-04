@@ -13,15 +13,9 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from aisteer360.algorithms.input_control._common.memory.pool import PoolMemory
-from aisteer360.algorithms.input_control._common.selectors.dense_retrieval import (
-    DenseRetrievalSelector,
-)
-from aisteer360.algorithms.input_control.few_shot.selectors.epr.utils import (
-    bm25_index,
-    lm_labeling,
-    train_encoder,
-)
+from aisteer360.algorithms.input_control.common.memory.pool import PoolMemory
+from aisteer360.algorithms.input_control.common.selectors.dense_retrieval import DenseRetrievalSelector
+from aisteer360.algorithms.input_control.few_shot.selectors.epr.utils import bm25_index, lm_labeling, train_encoder
 
 logger = logging.getLogger(__name__)
 

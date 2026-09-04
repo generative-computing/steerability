@@ -7,7 +7,7 @@ loop is exclusive and owned by at most one `DecodingDriver` (default: the pipeli
 criteria do not.
 
 Runs hub-free on a tiny randomly-initialized Llama with module-local fixture controls (no
-`output_control/_common` dependency).
+`output_control/common` dependency).
 """
 import math
 
@@ -26,7 +26,7 @@ LAYERS = 4
 VOCAB = 100
 
 
-# fixture controls (module-local; no _common)
+# fixture controls (module-local; no common)
 class _ForceTokenControl(OutputControl):
     """Contributes a processor that masks all logits to -inf except token `k`."""
 
@@ -106,11 +106,12 @@ class _CapturingDriver(DecodingDriver):
         self.captured = None
 
     def decode(self, input_ids, attention_mask, model, logits_processors,
-               stopping_criteria, runtime_kwargs, **gen_kwargs):
+               stopping_criteria, runtime_kwargs, session=None, **gen_kwargs):
         self.captured = {
             "logits_processors": logits_processors,
             "stopping_criteria": stopping_criteria,
             "runtime_kwargs": runtime_kwargs,
+            "session": session,
             "gen_kwargs": dict(gen_kwargs),
         }
         extra = {}
@@ -139,9 +140,7 @@ def _pipeline(controls, model=None):
     if model is None:
         model = tiny_llama(num_layers=LAYERS, hidden=HIDDEN, heads=HEADS, vocab=VOCAB)
     tokenizer = wordlevel_tokenizer()
-    pipeline = SteeringPipeline(controls=controls, lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=controls, model=model, tokenizer=tokenizer)
     pipeline.steer()
     return pipeline, model
 
@@ -390,13 +389,13 @@ class TestComputeLogprobs:
         prompt = _prompt_ids()
         ref = torch.tensor([[3, 4, 5]], dtype=torch.long)
 
-        with caplog.at_level("INFO", logger="aisteer360.algorithms.core.steering_pipeline"):
+        with caplog.at_level("INFO", logger="aisteer360.algorithms.core.utils.assembly"):
             pipeline.compute_logprobs(input_ids=prompt, ref_output_ids=ref)
         assert any("_OptOutUniform" in r.message and "include_in_scoring" in r.message
                    for r in caplog.records)
 
         caplog.clear()
-        with caplog.at_level("INFO", logger="aisteer360.algorithms.core.steering_pipeline"):
+        with caplog.at_level("INFO", logger="aisteer360.algorithms.core.utils.assembly"):
             pipeline.generate(input_ids=prompt, max_new_tokens=2, do_sample=False, eos_token_id=None)
         # the skip log is a scoring concern only; generate must not emit it
         assert not any("_OptOutUniform" in r.message for r in caplog.records)

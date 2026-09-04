@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from transformers import PreTrainedTokenizerBase
 
-from aisteer360.algorithms.core.internals.data import ContrastivePairs
+from aisteer360.algorithms.core.internals.data import ContrastivePairs, LabeledExamples
 from aisteer360.utils.rendering import PromptFormat, has_chat_template, render_for_model
 
 logger = logging.getLogger(__name__)
@@ -40,32 +40,46 @@ class RenderedContrastive:
 
 def render_contrastive(
     tokenizer: PreTrainedTokenizerBase,
-    data: ContrastivePairs,
+    data: ContrastivePairs | LabeledExamples,
     mode: PromptFormat,
 ) -> RenderedContrastive:
-    """Render both sides of a ContrastivePairs under `mode`.
+    """Render both sides of a contrastive dataset under `mode`.
 
-    Resolves the effective mode (with raw fallbacks and warnings), renders
+    Accepts `ContrastivePairs` (paired, with optional shared prompts) or
+    `LabeledExamples` (unpaired classes, rendered independently). Resolves the
+    effective mode (with raw fallbacks and warnings), renders
     positives/negatives, renders the prompt-only strings used for suffix-only
     span computation, and reports the `add_special_tokens` flag the tokenizer
     must use for all of the above.
 
     Args:
         tokenizer: Tokenizer whose chat template defines the rendering.
-        data: ContrastivePairs with `positives`, `negatives`, and optional
-            `prompts`.
+        data: ContrastivePairs (with `positives`, `negatives`, and optional
+            `prompts`) or LabeledExamples.
         mode: Requested rendering policy.
 
     Returns:
         A RenderedContrastive with rendered texts and tokenization policy.
+
+    Raises:
+        ValueError: If `mode` is `"chat_completion"` and `data` is
+            `LabeledExamples` (that format's shared prompts align per example,
+            which requires paired data).
     """
+    if mode == "chat_completion" and isinstance(data, LabeledExamples):
+        raise ValueError(
+            "prompt_format='chat_completion' requires paired data with shared prompts "
+            "(ContrastivePairs); LabeledExamples classes are unpaired."
+        )
+    prompts = getattr(data, "prompts", None)
+
     effective: PromptFormat = mode
 
     if mode in ("chat_completion", "chat_prompt") and not has_chat_template(tokenizer):
         logger.warning("render_contrastive: no chat_template; falling back to raw.")
         effective = "raw"
 
-    if mode == "chat_completion" and data.prompts is None:
+    if mode == "chat_completion" and prompts is None:
         logger.warning(
             "prompt_format='chat_completion' requires `prompts` (positives/negatives "
             "are treated as completions); none provided. Falling back to raw."
@@ -75,10 +89,10 @@ def render_contrastive(
     add_special = effective == "raw"
 
     if effective == "raw":
-        if data.prompts is not None:
-            pos = [p + c for p, c in zip(data.prompts, data.positives)]
-            neg = [p + c for p, c in zip(data.prompts, data.negatives)]
-            prompt_texts = list(data.prompts)
+        if prompts is not None:
+            pos = [p + c for p, c in zip(prompts, data.positives)]
+            neg = [p + c for p, c in zip(prompts, data.negatives)]
+            prompt_texts = list(prompts)
         else:
             pos = list(data.positives)
             neg = list(data.negatives)
@@ -86,13 +100,13 @@ def render_contrastive(
     elif effective == "chat_completion":
         pos = [
             render_for_model(tokenizer, prompt=p, completion=c, mode="chat_completion")
-            for p, c in zip(data.prompts, data.positives)
+            for p, c in zip(prompts, data.positives)
         ]
         neg = [
             render_for_model(tokenizer, prompt=p, completion=c, mode="chat_completion")
-            for p, c in zip(data.prompts, data.negatives)
+            for p, c in zip(prompts, data.negatives)
         ]
-        prompt_texts = [render_for_model(tokenizer, prompt=p, mode="chat_prompt") for p in data.prompts]
+        prompt_texts = [render_for_model(tokenizer, prompt=p, mode="chat_prompt") for p in prompts]
     else:  # chat_prompt: each positive/negative IS a standalone prompt
         pos = [render_for_model(tokenizer, prompt=t, mode="chat_prompt") for t in data.positives]
         neg = [render_for_model(tokenizer, prompt=t, mode="chat_prompt") for t in data.negatives]

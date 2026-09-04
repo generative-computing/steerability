@@ -21,8 +21,10 @@ aisteer360/
 
 The `CommonsenseMCQA` use case is located at`commonsense_mcqa/use_case.py`. Every use case is instantiated by providing
 `evaluation_data`, the data that the model uses to produce generations, and `evaluation_metrics`, the functions to
-evaluate the model's behavior. Any number of additional keyword arguments specific to the use case (e.g.,
-`num_shuffling_runs` for `CommonsenseMCQA`) can also be passed in to the class. For instance,
+evaluate the model's behavior. A use case may declare additional constructor parameters specific to it (e.g.,
+`num_shuffling_runs` for `CommonsenseMCQA`); each is declared as a class-level annotation and passed as a keyword. A
+bare annotation makes the parameter required, and an annotation with a class-attribute default makes it optional.
+Unknown keywords and missing required parameters both raise `TypeError` at construction. For instance,
 
 ```python
 from aisteer360.evaluation.use_cases.commonsense_mcqa.use_case import CommonsenseMCQA
@@ -30,7 +32,7 @@ from aisteer360.evaluation.metrics.custom.commonsense_mcqa.mcqa_accuracy import 
 from aisteer360.evaluation.metrics.custom.commonsense_mcqa.mcqa_positional_bias import MCQAPositionalBias
 
 commonsense_mcqa = CommonsenseMCQA(
-    evaluation_data_path="./data/evaluation_qa.jsonl",
+    evaluation_data="./data/evaluation_qa.jsonl",
     evaluation_metrics=[
         MCQAAccuracy(),
         MCQAPositionalBias()
@@ -62,12 +64,15 @@ at `aisteer360/evaluation/metrics/custom/commonsense_mcqa` for details. For deta
 ## Defining the use case class
 
 Each use case subclasses the base `UseCase` class (`aisteer/evaluation/use_cases/base.py`), which contains all necessary
-initialization logic. Please **do not** write an `__init__` for your custom use case. Any arguments specific to the use
-case, like `num_shuffling_runs` above, are automatically saved as class attributes by the constructor of the base
-`UseCase` class.  Optionally, you can add a placeholder (type hint), e.g., `num_shuffling_runs: int`, at the class level
-to inform your IDE that your added argument(s) will exist at runtime. We additionally advise that contributors write
-validation logic for their evaluation data (via `validate_evaluation_data`) based on the required columns
-(`_EVALUATION_REQ_KEYS`). This is helpful for catching any errors early.
+initialization logic. Please **do not** write an `__init__` for your custom use case. Instead, declare each use-case
+parameter as a class-level annotation, e.g., `num_shuffling_runs: int`. A bare annotation makes the parameter required;
+adding a class-attribute default (e.g., `num_shuffling_runs: int = 20`) makes it optional with that default. The base
+constructor reads each declared parameter from the keyword arguments and sets it as an instance attribute, so
+`num_shuffling_runs` is available at runtime as `self.num_shuffling_runs`. A keyword that is not a declared parameter
+raises `TypeError`, as does a missing required parameter. We additionally advise that contributors write validation
+logic for their evaluation data (via `validate_evaluation_data`) based on the required columns
+(`_EVALUATION_REQ_KEYS`); the base constructor calls it on each retained instance (after shuffling and sampling), so a
+schema violation raises `ValueError` at construction with the offending `evaluation_data[<index>]` prefix.
 
 For our example use case:
 
@@ -133,7 +138,8 @@ def generate(
     model_or_pipeline,
     tokenizer,
     gen_kwargs: dict | None = None,
-    runtime_overrides: dict[tuple[str, str], str] | None = None
+    runtime_overrides: dict[str, dict[str, Any]] | None = None,
+    batch_size: int = DEFAULT_EVAL_BATCH_SIZE,
 ) -> list[dict[str, Any]]:
 
     if not self.evaluation_data:
@@ -141,10 +147,9 @@ def generate(
         return []
     gen_kwargs = dict(gen_kwargs or {})
 
-    # form prompt data
+    # form prompt data; each shuffled copy inherits its instance's columns
     prompt_data = []
     for instance in self.evaluation_data:
-        data_id = instance['id']
         question = instance['question']
         answer = instance['answer']
         choices = instance['choices']
@@ -163,13 +168,11 @@ def generate(
             lines += ["\nPlease only print the letter corresponding to your choice."]
             lines += ["\nAnswer:"]
 
-            prompt_data.append(
-                {
-                    "id": data_id,
-                    "prompt": "\n".join(lines),
-                    "reference_answer": _LETTERS[choice_order.index(choices.index(answer))]
-                }
-            )
+            prompt_data.append({
+                **instance,
+                "prompt": "\n".join(lines),
+                "reference_answer": _LETTERS[choice_order.index(choices.index(answer))],
+            })
 
     # batch template/generate/decode
     choices = batch_retry_generate(
@@ -179,7 +182,7 @@ def generate(
         parse_fn=self._parse_letter,
         gen_kwargs=gen_kwargs,
         runtime_overrides=runtime_overrides,
-        evaluation_data=self.evaluation_data
+        batch_size=batch_size,
     )
 
     # store
@@ -213,9 +216,11 @@ for an example of how these overrides are defined and used.
 
 The first step in defining the `generate` method is to construct the prompt data. For the example MCQA task, our goal is
 to (robustly) evaluate a model's ability to accurately answer (common sense) multiple choice questions, and thus we
-present the same question to the model under various orderings/shufflings of the answers. This is implemented by defining
-the prompt data as the question ID, the question (as the `prompt`), and the reference answer, under various shuffles of
-the answer order.
+present the same question to the model under various orderings/shufflings of the answers. Each prompt row spreads its
+source instance (`**instance`) and then sets the constructed `prompt` (the question) and `reference_answer` for that
+shuffle. Spreading the instance means every prompt row carries the instance's own columns, so `runtime_overrides` map
+per row (a `runtime_overrides` column resolves against these rows). Constructed keys such as `prompt`,
+`reference_answer`, and `thinking` shadow same-named instance columns, so name any override column distinctly from them.
 
 Once the prompt data has been prepared for the use case, it then needs to be passed into the model (or steering
 pipeline) to generate responses. We strongly advise that contributors make use of the `batch_retry_generate` helper
@@ -223,6 +228,12 @@ function to aid in this process. This function implements conversion to a model'
 generation, batch decoding, and parsing (via `parse_fn`), and retry logic for a given list of prompts. For the example
 use case, we define the parsing function as a custom `parse_letter` method, such that the model's choices can be
 reliably extracted from its response (and stored as `choices`).
+
+For reasoning models, `batch_retry_generate` splits each decoded continuation into a thinking segment and an answer
+segment (the `think_tags` parameter, default `("<think>", "</think>")`). The raw text and `parse_fn` see the answer
+segment only, so reasoning tokens do not blend into parsing or scoring. To retain the reasoning, pass
+`return_thinking=True` and store the returned list under a `"thinking"` column, as the built-in use cases do; pass
+`think_tags=None` to disable the split and keep the full continuation.
 
 Lastly, we store each choice under the `response` key along with the prompt, question ID, and reference answer across
 all elements of the prompt data.

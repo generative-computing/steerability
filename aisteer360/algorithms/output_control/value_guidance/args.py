@@ -36,7 +36,7 @@ class ValueGuidanceArgs(BaseArgs):
     )
     normalize: str = field(
         default="none",
-        metadata={"help": "Per-row value normalization: 'none', 'minmax', or 'softmax'."},
+        metadata={"help": "Per-row value normalization: 'none', 'minmax', 'softmax', or 'clamp'."},
     )
     invert: bool = field(
         default=False,
@@ -62,8 +62,10 @@ class ValueGuidanceArgs(BaseArgs):
             raise ValueError("'value' is required.")
         if self.policy not in ("top_k", "top_p", "surviving"):
             raise ValueError(f"'policy' must be one of 'top_k', 'top_p', 'surviving', got {self.policy!r}.")
-        if self.normalize not in ("none", "minmax", "softmax"):
-            raise ValueError(f"'normalize' must be one of 'none', 'minmax', 'softmax', got {self.normalize!r}.")
+        if self.normalize not in ("none", "minmax", "softmax", "clamp"):
+            raise ValueError(
+                f"'normalize' must be one of 'none', 'minmax', 'softmax', 'clamp', got {self.normalize!r}."
+            )
         if self.policy == "top_k" and (not isinstance(self.k, int) or self.k <= 0):
             raise ValueError(f"policy='top_k' requires a positive 'k', got {self.k!r}.")
         if self.policy == "top_p" and not (self.p is not None and 0.0 < self.p <= 1.0):

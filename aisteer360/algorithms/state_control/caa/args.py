@@ -3,9 +3,9 @@ from dataclasses import dataclass, field
 
 from aisteer360.algorithms.core.base_args import BaseArgs
 from aisteer360.algorithms.core.internals.data import ContrastivePairs, as_contrastive_pairs
-from aisteer360.algorithms.state_control._common.specs import VectorTrainSpec
-from aisteer360.algorithms.state_control._common.steering_vector import SteeringVector
-from aisteer360.algorithms.state_control._common.token_scope import TokenScope
+from aisteer360.algorithms.state_control.common.fit_specs import VectorTrainSpec
+from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
+from aisteer360.algorithms.state_control.common.token_scope import ScopeKind
 
 
 @dataclass
@@ -44,7 +44,7 @@ class CAAArgs(BaseArgs):
     # inference configuration
     layer_id: int | None = None
     multiplier: float = 1.0
-    token_scope: TokenScope = "after_prompt"
+    token_scope: ScopeKind = "after_prompt"
     last_k: int | None = None
     from_position: int | None = None
     normalize_vector: bool = False

@@ -8,10 +8,14 @@ import torch
 from sklearn.linear_model import LogisticRegression
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
-from aisteer360.algorithms.core.internals.capture import layerwise_tokenwise_hidden
-from aisteer360.algorithms.core.internals.data import ContrastivePairs
+from aisteer360.algorithms.core.internals.capture import capture_hidden
+from aisteer360.algorithms.core.internals.data import ContrastivePairs, LabeledExamples
 from aisteer360.algorithms.core.internals.encoding import tokenize_texts
-from aisteer360.algorithms.core.internals.fingerprint import model_fingerprint
+from aisteer360.algorithms.core.internals.fingerprint import (
+    artifact_provenance_meta,
+    model_fingerprint,
+    session_artifact_identity,
+)
 from aisteer360.algorithms.core.internals.pooling import aggregate_condition_hidden
 from aisteer360.algorithms.core.internals.probes.probe import POLARITY_MARKER, Probe
 from aisteer360.algorithms.core.internals.render import render_contrastive
@@ -55,7 +59,13 @@ class ProbeFitSpec:
         method: Direction estimation method. `"lda"` (default) computes the difference in class
             means on standardized features (diagonal LDA) and requires `stats`; `"logreg"` is L2
             logistic regression on standardized features and also requires `stats`;
-            `"mean_diff"` computes the raw difference in class means and never consults `stats`.
+            `"mean_diff"` computes the raw difference in class means and never consults `stats`;
+            `"fisher"` is a full-covariance discriminant computed from the class features alone
+            (the pooled within-class covariance, pseudo-inverted with singular values truncated
+            at `1e-6`, applied to the class-mean difference) and never consults `stats`. The
+            truncated pseudo-inverse handles rank deficiency when sample counts are below the
+            hidden size. `"fisher"` weights are unit-normalized; the scale is part of the
+            method's contract, since downstream consumers score raw margins.
         pooling: Token aggregation for feature extraction (`"mean"` or `"last"`, mask-aware).
         location: Residual-stream boundary features are captured at.
         prompt_format: How pairs are rendered into model-ready text before tokenization.
@@ -68,7 +78,7 @@ class ProbeFitSpec:
         seed: Random seed forwarded to `"logreg"`.
     """
 
-    method: Literal["lda", "mean_diff", "logreg"] = "lda"
+    method: Literal["lda", "mean_diff", "logreg", "fisher"] = "lda"
     pooling: Literal["mean", "last"] = "last"
     location: str = "layer_input"
     prompt_format: PromptFormat = "chat_prompt"
@@ -79,8 +89,10 @@ class ProbeFitSpec:
     seed: int = 0
 
     def __post_init__(self):
-        if self.method not in ("lda", "mean_diff", "logreg"):
-            raise ValueError(f"method must be 'lda', 'mean_diff', or 'logreg', got {self.method!r}.")
+        if self.method not in ("lda", "mean_diff", "logreg", "fisher"):
+            raise ValueError(
+                f"method must be 'lda', 'mean_diff', 'logreg', or 'fisher', got {self.method!r}."
+            )
         if self.pooling not in ("mean", "last"):
             raise ValueError(f"pooling must be 'mean' or 'last', got {self.pooling!r}.")
         if self.location not in ("layer_input", "layer_output"):
@@ -177,27 +189,63 @@ def _pooled_std(pos: torch.Tensor, neg: torch.Tensor) -> float:
     return float(centered.pow(2).mean().sqrt().clamp_min(1e-8))
 
 
+def _resolve_num_layers(model: PreTrainedModel | None, session) -> int:
+    """Decoder layer count from a live model (given or session-exposed) or a session layout."""
+    live_model = model
+    if live_model is None and session is not None:
+        try:
+            live_model = session.model
+        except (AttributeError, RuntimeError):
+            live_model = None
+    if live_model is not None:
+        return int(live_model.config.num_hidden_layers)
+    if session is not None and getattr(session, "layout", None) is not None:
+        return int(session.layout.num_layers)
+    raise ValueError("Layer resolution requires a live model or a capture-capable session.")
+
+
 def _pooled_features(
-    model: PreTrainedModel,
+    model: PreTrainedModel | None,
     tokenizer: PreTrainedTokenizerBase,
-    data: ContrastivePairs,
+    data: ContrastivePairs | LabeledExamples,
     spec: ProbeFitSpec,
+    layers: Sequence[int],
+    batch_size: int = 8,
+    max_length: int | None = None,
+    session=None,
 ) -> tuple[dict[int, torch.Tensor], dict[int, torch.Tensor]]:
-    """Render, tokenize, capture, and pool contrastive pairs into per-layer `[N, H]` features."""
-    device = next(model.parameters()).device
+    """Render, tokenize, capture, and pool the classes into per-layer `[N, H]` features.
+
+    Each class's texts are processed in descending length order, in chunks of `batch_size`;
+    every chunk is pooled immediately and only the pooled rows of the layers in `layers` are
+    retained, so peak memory holds one chunk of per-token states plus the accumulated `[N, H]`
+    features. Feature order within a class follows the length sort (features are pooled per
+    class, so order carries no meaning downstream).
+    """
+    device = next(model.parameters()).device if model is not None else torch.device("cpu")
     rendered = render_contrastive(tokenizer, data, spec.prompt_format)
 
     features: list[dict[int, torch.Tensor]] = []
     for texts in (rendered.pos_texts, rendered.neg_texts):
-        enc = tokenize_texts(tokenizer, texts, device, add_special_tokens=rendered.add_special_tokens)
-        with auxiliary_pass(aligned=True):
-            hidden = layerwise_tokenwise_hidden(model, enc, location=spec.location)
-        mask = enc.get("attention_mask")
-        mask = mask.cpu() if mask is not None else None
-        features.append({
-            lid: aggregate_condition_hidden(states.to(torch.float32), spec.pooling, attention_mask=mask)
-            for lid, states in hidden.items()
-        })
+        ordered = sorted(texts, key=len, reverse=True)
+        pooled: dict[int, list[torch.Tensor]] = {lid: [] for lid in layers}
+        for start in range(0, len(ordered), batch_size):
+            chunk = ordered[start:start + batch_size]
+            enc = tokenize_texts(
+                tokenizer, chunk, device,
+                add_special_tokens=rendered.add_special_tokens, max_length=max_length,
+            )
+            with auxiliary_pass(aligned=True):
+                hidden, mask = capture_hidden(
+                    enc, model=model, session=session, batch_size=batch_size, location=spec.location
+                )
+            for lid in layers:
+                pooled[lid].append(
+                    aggregate_condition_hidden(
+                        hidden[lid].to(torch.float32), spec.pooling, attention_mask=mask
+                    )
+                )
+        features.append({lid: torch.cat(chunks, dim=0) for lid, chunks in pooled.items()})
     return features[0], features[1]
 
 
@@ -215,6 +263,19 @@ def _fit_direction(
     """
     if spec.method == "mean_diff":
         return (pos.mean(dim=0) - neg.mean(dim=0)).to(torch.float32)
+
+    if spec.method == "fisher":
+        mu_pos = pos.mean(dim=0)
+        mu_neg = neg.mean(dim=0)
+        cov = torch.cov(pos.T) * (pos.size(0) - 1) + torch.cov(neg.T) * (neg.size(0) - 1)
+        cov = cov / (pos.size(0) + neg.size(0) - 2)
+        # truncated pseudo-inverse of the pooled covariance; handles rank deficiency when
+        # sample counts are below the hidden size
+        basis, spectrum, _ = torch.linalg.svd(cov)
+        keep = spectrum > 1e-6
+        basis = basis[:, keep]
+        w = basis @ ((basis.T @ (mu_pos - mu_neg)) / spectrum[keep])
+        return (w / torch.linalg.norm(w)).to(torch.float32)
 
     if spec.method == "lda":
         pos_z = stats.standardize(pos, layer_id)
@@ -234,26 +295,31 @@ def _fit_direction(
 
 
 def fit_probe(
-    model: PreTrainedModel,
+    model: PreTrainedModel | None,
     tokenizer: PreTrainedTokenizerBase,
     *,
-    data: ContrastivePairs,
+    data: ContrastivePairs | LabeledExamples,
     spec: ProbeFitSpec = ProbeFitSpec(),
     stats: ActivationStats | None = None,
-    calibration_data: ContrastivePairs | None = None,
+    calibration_data: ContrastivePairs | LabeledExamples | None = None,
     allow_model_mismatch: bool = False,
+    batch_size: int = 8,
+    max_length: int | None = None,
+    session=None,
 ) -> Probe:
-    """Fit a calibrated single-layer `Probe` from contrastive pairs.
+    """Fit a calibrated single-layer `Probe` from contrastive data.
 
-    Pairs are rendered per `spec.prompt_format`, tokenized, captured at `spec.location` (inside
-    `auxiliary_pass(aligned=True)`), and pooled per `spec.pooling`. Candidate layers are swept;
-    for each, a direction is fitted per `spec.method`, oriented on fit-set scores (weights are
-    negated when the mean positive score falls below the mean negative score, which can occur
-    only for `"logreg"`, since for `"mean_diff"` and `"lda"` the fit-set score gap is
-    nonnegative by construction), and the bias is calibrated via `calibrate_bias`. The layer
-    with the best F1 at the calibrated point is kept, with the calibration score gap in pooled
-    within-class standard deviations as tie-break, and the full sweep is recorded in
-    `probe.meta["layer_sweep"]`.
+    The data is rendered per `spec.prompt_format`, tokenized, captured at `spec.location`
+    (inside `auxiliary_pass(aligned=True)`), and pooled per `spec.pooling`. Extraction runs in
+    chunks of `batch_size`, pooling each chunk immediately and retaining features only for the
+    candidate layers, so memory holds pooled `[N, H]` features rather than per-token states.
+    Candidate layers are swept; for each, a direction is fitted per `spec.method`, oriented on
+    fit-set scores (weights are negated when the mean positive score falls below the mean
+    negative score, which can occur only for `"logreg"`, since for `"mean_diff"`, `"lda"`, and
+    `"fisher"` the fit-set score gap is nonnegative by construction), and the bias is
+    calibrated via `calibrate_bias`. The layer with the best F1 at the calibrated point is
+    kept, with the calibration score gap in pooled within-class standard deviations as
+    tie-break, and the full sweep is recorded in `probe.meta["layer_sweep"]`.
 
     Calibration scores come from `calibration_data` when supplied, else from `data`. The split
     lets the contrast be fitted on discriminative pairs while the operating point is calibrated
@@ -262,15 +328,19 @@ def fit_probe(
 
     Args:
         model: Model whose activations are captured.
-        tokenizer: Tokenizer for rendering and encoding the pairs.
-        data: Contrastive pairs the direction is fitted on.
+        tokenizer: Tokenizer for rendering and encoding the data.
+        data: Contrastive pairs or unpaired labeled examples the direction is fitted on.
+            Unpaired classes require `spec.prompt_format` of `"raw"` or `"chat_prompt"`.
         spec: Fitting configuration.
         stats: Ambient activation statistics, required by `"lda"` and `"logreg"` (the
             standardization is folded into the stored weights). Ignored for the `"mean_diff"`
-            direction.
-        calibration_data: Optional pairs the operating point is calibrated on.
+            and `"fisher"` directions.
+        calibration_data: Optional data the operating point is calibrated on.
         allow_model_mismatch: When True, a `stats` artifact estimated on a different model is
             accepted instead of raising.
+        batch_size: Chunk size for feature extraction.
+        max_length: Tokenization truncation bound for feature extraction. None truncates to the
+            tokenizer's model maximum length.
 
     Returns:
         A fitted `Probe` with canonical polarity, a single chosen layer, and a provenance
@@ -280,7 +350,8 @@ def fit_probe(
         ValueError: If the method requires `stats` and none is supplied, a supplied `stats` was
             estimated on a different model (without `allow_model_mismatch`) or at a different
             `location` than `spec.location`, a requested candidate layer is out of range or has
-            no recorded statistics, or the calibration scores are inverted.
+            no recorded statistics, `spec.prompt_format` is `"chat_completion"` with unpaired
+            data, or the calibration scores are inverted.
     """
     if spec.method in ("lda", "logreg") and stats is None:
         raise ValueError(
@@ -288,8 +359,19 @@ def fit_probe(
             "ActivationStats once per model; see core.internals.stats."
         )
 
-    fingerprint = model_fingerprint(model)
-    if stats is not None and stats.model_fingerprint != fingerprint and not allow_model_mismatch:
+    if model is not None:
+        fingerprint = model_fingerprint(model)
+        fitted_model_type = getattr(model.config, "model_type", "unknown")
+        session_meta: dict = {}
+    else:
+        fitted_model_type, session_meta = session_artifact_identity(session)
+        fingerprint = session_meta.get("model_fingerprint")
+    if (
+        stats is not None
+        and fingerprint is not None
+        and stats.model_fingerprint != fingerprint
+        and not allow_model_mismatch
+    ):
         raise ValueError(
             "stats were estimated on a different model (fingerprint "
             f"{stats.model_fingerprint!r} vs {fingerprint!r}); whitening with another model's "
@@ -303,13 +385,7 @@ def fit_probe(
             "produces a miscalibrated probe. Re-estimate ActivationStats at the fit location."
         )
 
-    pos_features, neg_features = _pooled_features(model, tokenizer, data, spec)
-    if calibration_data is not None:
-        cal_pos_features, cal_neg_features = _pooled_features(model, tokenizer, calibration_data, spec)
-    else:
-        cal_pos_features, cal_neg_features = pos_features, neg_features
-
-    num_layers = len(pos_features)
+    num_layers = _resolve_num_layers(model, session)
     if spec.candidate_layers is not None:
         candidates = [int(lid) for lid in dict.fromkeys(spec.candidate_layers)]
         for lid in candidates:
@@ -332,6 +408,18 @@ def fit_probe(
                 f"{sorted(stats.mean)}."
             )
 
+    pos_features, neg_features = _pooled_features(
+        model, tokenizer, data, spec, candidates,
+        batch_size=batch_size, max_length=max_length, session=session,
+    )
+    if calibration_data is not None:
+        cal_pos_features, cal_neg_features = _pooled_features(
+            model, tokenizer, calibration_data, spec, candidates,
+            batch_size=batch_size, max_length=max_length, session=session,
+        )
+    else:
+        cal_pos_features, cal_neg_features = pos_features, neg_features
+
     sweep: list[dict] = []
     best: dict | None = None
     for lid in candidates:
@@ -343,8 +431,8 @@ def fit_probe(
         flipped = fit_gap < 0
         if flipped:
             assert spec.method == "logreg", (
-                "fit-set orientation cannot invert for mean_diff or lda; the score gap equals "
-                "the squared class-mean difference in the fit metric."
+                "fit-set orientation cannot invert for mean_diff, lda, or fisher; the score gap "
+                "is a squared class-mean difference in the fit metric."
             )
             w = -w
 
@@ -414,11 +502,18 @@ def fit_probe(
         "package_version": _PACKAGE_VERSION,
         "polarity": POLARITY_MARKER,
     }
+    if model is not None:
+        provenance = artifact_provenance_meta(model, tokenizer)
+        for key in ("config_fingerprint", "chat_template_fingerprint"):
+            if key in provenance:
+                meta[key] = provenance[key]
+    elif "model_ref" in session_meta:
+        meta["model_ref"] = session_meta["model_ref"]
     if meta["stats_used"]:
         meta["stats_fingerprint"] = stats.fingerprint()
 
     return Probe(
-        model_type=getattr(model.config, "model_type", "unknown"),
+        model_type=fitted_model_type,
         location=spec.location,
         pooling=spec.pooling,
         layer_ids=[best["layer_id"]],

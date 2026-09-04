@@ -1,8 +1,9 @@
-"""Tests for `ActivationAdapter` (v5: transforms as the sole artifact carrier).
+"""Tests for `ActivationAdapter` (transforms as the sole artifact carrier, gates as the sole
+condition carrier).
 
 Covers behavioral parity with CAA and DirectionalAblation (bound + source-carrying transforms),
 the slimmed validation surface (placement / gating / scope / follower rules + legacy-kwarg guard),
-transform binding and coverage, factory mode over `ctx.resolve`, the packaged `CosineDirectionScorer`,
+transform binding and coverage, factory mode over `ctx.resolve`, the packaged `CosineReadout`,
 gating, native batch support, registry discovery, a `ControlSpec` sweep with shared-source
 memoization, and pipeline integration under state-control multiplicity.
 
@@ -14,20 +15,7 @@ import pytest
 import torch
 
 from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.state_control._common.sources import ArtifactSource, ContrastiveFit
-from aisteer360.algorithms.state_control._common.condition_scorers import CosineDirectionScorer
-from aisteer360.algorithms.state_control._common.gates import (
-    AlwaysOpenGate,
-    CacheOnceGate,
-    MultiKeyThresholdGate,
-)
-from aisteer360.algorithms.state_control._common.steering_vector import SteeringVector
-from aisteer360.algorithms.state_control._common.transforms import (
-    AdditiveTransform,
-    DirectionalAblationTransform,
-    NormPreservingTransform,
-)
-from aisteer360.algorithms.state_control._common.transforms.base import BaseTransform
+from aisteer360.algorithms.core.utils.assembly import collect_state_entries
 from aisteer360.algorithms.state_control.activation_adapter import (
     ActivationAdapter,
     ActivationAdapterArgs,
@@ -35,6 +23,21 @@ from aisteer360.algorithms.state_control.activation_adapter import (
 )
 from aisteer360.algorithms.state_control.activation_adapter.control import ActivationAdapter as _AA
 from aisteer360.algorithms.state_control.caa.control import CAA
+from aisteer360.algorithms.state_control.common.gating import (
+    CallableReadout,
+    CosineReadout,
+    Evidence,
+    Gate,
+    PerKeyThreshold,
+)
+from aisteer360.algorithms.state_control.common.sources import ArtifactSource, ContrastiveFit
+from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
+from aisteer360.algorithms.state_control.common.transforms import (
+    AdditiveTransform,
+    NormPreservingTransform,
+    ProjectionTransform,
+)
+from aisteer360.algorithms.state_control.common.transforms.base import BaseTransform
 from aisteer360.algorithms.state_control.directional_ablation.control import DirectionalAblation
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
@@ -63,26 +66,29 @@ class _StubSource:
         return self._sv.clone()
 
 
+def _constant_gate(threshold, value, condition_layer=0):
+    """A gate whose readout returns a constant per-row value at one condition layer."""
+    readout = CallableReadout(lambda pooled, lid, _v=value: torch.full((pooled.size(0),), float(_v)))
+    return Gate(Evidence((condition_layer,), readout), PerKeyThreshold(threshold=threshold, comparator="ge"))
+
+
 def _pipe(control, model):
     tok = wordlevel_tokenizer()
-    p = SteeringPipeline(controls=[control] if not isinstance(control, list) else control, lazy_init=True)
-    p.model = model
-    p.tokenizer = tok
+    p = SteeringPipeline(controls=[control] if not isinstance(control, list) else control, model=model, tokenizer=tok)
     p.steer()
     return p
 
 
 def _hidden_at(model, layer_id, pipeline, input_ids):
     """Capture the (steered) output of `layer_id` under the pipeline's state controls, single pass."""
-    import contextlib
-
-    pipeline._setup_state_controls(input_ids, {})
+    entries = collect_state_entries(
+        pipeline.state_controls, input_ids, {},
+        hooks_in_process=True, lowered_state=pipeline._lowered_state, model=pipeline.model,
+    )
+    backend = pipeline._backend_for(pipeline._resolve_backend_spec(None))
     captured = {}
 
-    with contextlib.ExitStack() as stack:
-        for c in pipeline.state_controls:
-            stack.enter_context(c)
-
+    with backend.open_session() as session, session.entries_applied(entries):
         def _cap(module, args, kwargs, output):
             captured["h"] = (output[0] if isinstance(output, tuple) else output).detach().clone()
 
@@ -131,13 +137,13 @@ class TestParity:
 
         # bound transform
         out_bound, _, _ = _gen(ActivationAdapter(
-            transform=DirectionalAblationTransform(sv, alpha=1.0), layer_ids=[1, 2], token_scope="all",
+            transform=ProjectionTransform(sv, alpha=1.0), layer_ids=[1, 2], token_scope="all",
         ))
 
         # source-carrying transform (resolved + bound at steer)
         source = _StubSource(sv)
         out_source, m_src, p_src = _gen(ActivationAdapter(
-            transform=DirectionalAblationTransform(source, alpha=1.0), layer_ids=[1, 2], token_scope="all",
+            transform=ProjectionTransform(source, alpha=1.0), layer_ids=[1, 2], token_scope="all",
         ))
 
         assert torch.equal(out_da, out_bound)
@@ -150,7 +156,7 @@ class TestParity:
         source = _StubSource(sv)
         model = tiny_llama(num_layers=LAYERS, hidden=HIDDEN, heads=HEADS)
         adapter = ActivationAdapter(
-            transform=DirectionalAblationTransform(source, alpha=1.0), layer_ids=[1], token_scope="all",
+            transform=ProjectionTransform(source, alpha=1.0), layer_ids=[1], token_scope="all",
         )
         adapter.steer(model, wordlevel_tokenizer())
         bound = adapter._transform
@@ -193,7 +199,7 @@ class TestValidationSurface:
         assert "AdditiveTransform" in str(ei.value)  # replacement hint for 'strength'
 
     def test_both_placements(self):
-        from aisteer360.algorithms.state_control._common.selectors import FixedLayerSelector
+        from aisteer360.algorithms.state_control.common.selectors import FixedLayerSelector
         with pytest.raises(ValueError, match="exactly one of layer_ids or layer_selector"):
             ActivationAdapterArgs(transform=AdditiveTransform(_sv()), layer_ids=1, layer_selector=FixedLayerSelector(1))
 
@@ -201,35 +207,31 @@ class TestValidationSurface:
         with pytest.raises(ValueError, match="exactly one of layer_ids or layer_selector"):
             ActivationAdapterArgs(transform=AdditiveTransform(_sv()))
 
-    def test_stateful_gate_no_condition(self):
-        gate = MultiKeyThresholdGate(threshold=0.5, comparator="score_above")
-        with pytest.raises(ValueError, match="stateful gate requires condition"):
-            ActivationAdapterArgs(transform=AdditiveTransform(_sv()), layer_ids=1, gate=gate)
-
-    def test_only_one_of_condition_pair(self):
-        with pytest.raises(ValueError, match="both condition_layer_ids and score_fn"):
-            ActivationAdapterArgs(transform=AdditiveTransform(_sv()), layer_ids=1, condition_layer_ids=[0])
-
-    def test_condition_without_stateful_gate(self):
-        with pytest.raises(ValueError, match="requires a stateful gate"):
+    def test_condition_ports_removed(self):
+        with pytest.raises(TypeError, match="condition_layer_ids"):
             ActivationAdapterArgs(
                 transform=AdditiveTransform(_sv()), layer_ids=1,
                 condition_layer_ids=[0], score_fn=lambda h, l, **_: 0.0,
             )
 
-    def test_follower_flag_permits_stateful_gate_without_condition(self):
-        gate = MultiKeyThresholdGate(threshold=0.5, comparator="score_above")
+    def test_gate_wrong_type(self):
+        with pytest.raises(TypeError, match="gate must be a Gate"):
+            ActivationAdapterArgs(transform=AdditiveTransform(_sv()), layer_ids=1, gate=object())
+
+    def test_follower_flag_permits_shared_gate(self):
+        gate = _constant_gate(threshold=0.5, value=0.9)
         ActivationAdapterArgs(transform=AdditiveTransform(_sv()), layer_ids=1, gate=gate, gate_driven_externally=True)
 
-    def test_follower_flag_with_condition_path(self):
-        gate = MultiKeyThresholdGate(threshold=0.5, comparator="score_above")
-        with pytest.raises(ValueError, match="does not drive the gate"):
+    def test_follower_flag_with_gate_source_raises(self):
+        from aisteer360.algorithms.state_control.common.sources import ConditionPointSearch
+
+        with pytest.raises(ValueError, match="pass the driver's Gate"):
             ActivationAdapterArgs(
-                transform=AdditiveTransform(_sv()), layer_ids=1, gate=gate, gate_driven_externally=True,
-                condition_layer_ids=[0], score_fn=lambda h, l, **_: 0.0,
+                transform=AdditiveTransform(_sv()), layer_ids=1,
+                gate=ConditionPointSearch(), gate_driven_externally=True,
             )
 
-    def test_follower_flag_without_stateful_gate_warns(self):
+    def test_follower_flag_without_gate_warns(self):
         with pytest.warns(UserWarning, match="gate_driven_externally is inert"):
             ActivationAdapterArgs(transform=AdditiveTransform(_sv()), layer_ids=1, gate_driven_externally=True)
 
@@ -262,21 +264,16 @@ class TestValidationSurface:
             ActivationAdapterArgs(transform=AdditiveTransform(_sv()), layer_ids=1, hook_point="middle")
 
     def test_deferred_condition_layer_out_of_range(self):
-        gate = CacheOnceGate(MultiKeyThresholdGate(threshold=0.0, comparator="score_above", expected_keys={99}))
+        gate = _constant_gate(threshold=0.0, value=0.0, condition_layer=99)
         model = tiny_llama(num_layers=LAYERS, hidden=HIDDEN, heads=HEADS)
-        adapter = ActivationAdapter(
-            transform=AdditiveTransform(_sv()), layer_ids=[1], gate=gate,
-            condition_layer_ids=[99], score_fn=lambda h, l, **_: 0.0,
-        )
+        adapter = ActivationAdapter(transform=AdditiveTransform(_sv()), layer_ids=[1], gate=gate)
         with pytest.raises(ValueError, match="condition_layer_id 99 out of range"):
             adapter.steer(model, wordlevel_tokenizer())
 
     def test_condition_selector_rejected_for_placement(self):
-        from aisteer360.algorithms.state_control._common.selectors import ConditionPointSelector
-        model = tiny_llama(num_layers=LAYERS, hidden=HIDDEN, heads=HEADS)
-        adapter = ActivationAdapter(transform=AdditiveTransform(_sv()), layer_selector=ConditionPointSelector())
+        from aisteer360.algorithms.state_control.common.selectors import ConditionPointSelector
         with pytest.raises(ValueError, match="ConditionPointSelector returns"):
-            adapter.steer(model, wordlevel_tokenizer())
+            ActivationAdapter(transform=AdditiveTransform(_sv()), layer_selector=ConditionPointSelector())
 
 
 # transform binding, coverage, factory
@@ -378,12 +375,9 @@ class TestTransformBinding:
 # gating
 class TestGating:
     def _gated_adapter(self, threshold, score_value, condition_layer=0, behavior_layer=1):
-        gate = CacheOnceGate(MultiKeyThresholdGate(
-            threshold=threshold, comparator="score_above", expected_keys={condition_layer}))
         return ActivationAdapter(
             transform=AdditiveTransform(_sv(13), strength=1.0), layer_ids=[behavior_layer], token_scope="all",
-            gate=gate, condition_layer_ids=[condition_layer],
-            score_fn=lambda h, l, _v=score_value, **_: _v,
+            gate=_constant_gate(threshold, score_value, condition_layer),
         )
 
     def test_transform_fires_above_threshold(self):
@@ -419,19 +413,19 @@ class TestGating:
         model = tiny_llama(num_layers=LAYERS, hidden=HIDDEN, heads=HEADS)
         order = []
 
-        def _score(hidden, layer_id, **_):
+        def _readout(pooled, layer_id):
             order.append("condition")
-            return 0.9
+            return torch.full((pooled.size(0),), 0.9)
 
         class _RecordingTransform(BaseTransform):
             def apply(self, hidden_states, *, layer_id, token_mask, **kwargs):
                 order.append("behavior")
                 return hidden_states
 
-        gate = CacheOnceGate(MultiKeyThresholdGate(threshold=0.5, comparator="score_above", expected_keys={1}))
+        gate = Gate(Evidence((1,), CallableReadout(_readout)), PerKeyThreshold(threshold=0.5, comparator="ge"))
         adapter = ActivationAdapter(
             transform=_RecordingTransform(), layer_ids=[1], token_scope="all",
-            gate=gate, condition_layer_ids=[1], score_fn=_score,
+            gate=gate,
         )
         p = _pipe(adapter, model)
         _hidden_at(model, 1, p, torch.arange(3, 7).unsqueeze(0))
@@ -441,13 +435,10 @@ class TestGating:
 
 # reset() / get_hooks() gate re-sizing across consecutive generations
 def _row_gated_adapter(threshold=0.5, score_value=0.9, condition_layer=0, behavior_layer=1):
-    """A gated adapter whose scorer returns per-row scores, so it batches natively."""
-    gate = CacheOnceGate(MultiKeyThresholdGate(
-        threshold=threshold, comparator="score_above", expected_keys={condition_layer}))
+    """A gated adapter whose readout returns per-row values, so it batches natively."""
     return ActivationAdapter(
         transform=AdditiveTransform(_sv(13), strength=1.0), layer_ids=[behavior_layer], token_scope="all",
-        gate=gate, condition_layer_ids=[condition_layer],
-        score_fn=lambda h, l, _v=score_value, **_: torch.full((h.size(0),), _v),
+        gate=_constant_gate(threshold, score_value, condition_layer),
     )
 
 
@@ -480,14 +471,15 @@ def test_consecutive_generations_across_batch_sizes():
     assert adapter._gate.num_rows == 2  # get_hooks re-sized the gate past the unsized reset() clear
 
 
-# CosineDirectionScorer
-class TestCosineDirectionScorer:
+# CosineReadout
+class TestCosineReadout:
     def test_matches_legacy_lambda(self):
-        """The scorer reproduces the notebook's hand-rolled cosine on identical tensors."""
+        """The readout reproduces the notebook's hand-rolled cosine on identical pooled tensors."""
         import torch.nn.functional as F
 
         sv = _sv(41)
         hidden = torch.randn(2, 5, HIDDEN)
+        pooled = hidden[:, -1, :]  # "last" pooling over an unpadded batch
 
         def legacy_rows(hidden, layer_id):
             direction = sv.directions[layer_id].to(hidden.dtype).to(hidden.device)
@@ -495,37 +487,39 @@ class TestCosineDirectionScorer:
             last_token = hidden[:, -1, :]
             return F.cosine_similarity(last_token, direction.unsqueeze(0), dim=-1)
 
-        scorer = CosineDirectionScorer(sv)
+        readout = CosineReadout(sv)
         for lid in range(LAYERS):
-            rows = scorer(hidden, lid)  # per-row [B]
+            rows = readout(pooled, lid)  # per-row [B]
             assert rows.shape == (2,)
             assert torch.allclose(rows, legacy_rows(hidden, lid), atol=1e-6)
 
     def test_absent_layer_returns_zero(self):
-        scorer = CosineDirectionScorer(SteeringVector(model_type="x", directions={0: torch.randn(1, HIDDEN)}))
-        out = scorer(torch.randn(1, 3, HIDDEN), 99)
+        readout = CosineReadout(SteeringVector(model_type="x", directions={0: torch.randn(1, HIDDEN)}))
+        out = readout(torch.randn(1, HIDDEN), 99)
         assert torch.equal(out, torch.zeros(1))
 
     def test_accepts_mapping(self):
-        scorer = CosineDirectionScorer({0: torch.randn(1, HIDDEN)})
-        out = scorer(torch.randn(1, 3, HIDDEN), 0)
+        readout = CosineReadout({0: torch.randn(1, HIDDEN)})
+        out = readout(torch.randn(1, HIDDEN), 0)
         assert isinstance(out, torch.Tensor) and out.shape == (1,)
 
     def test_junk_artifact_raises(self):
         with pytest.raises(TypeError, match="concrete SteeringVector or Mapping"):
-            CosineDirectionScorer(ContrastiveFit(data={"positives": ["a"], "negatives": ["b"]}))
+            CosineReadout(ContrastiveFit(data={"positives": ["a"], "negatives": ["b"]}))
 
-    def test_gated_end_to_end_with_scorer(self):
-        """A gated adapter using CosineDirectionScorer fires above threshold, holds below."""
+    def test_gated_end_to_end_with_readout(self):
+        """A gated adapter using CosineReadout fires above threshold, holds below."""
         sv = _sv(43)
         input_ids = torch.arange(3, 7).unsqueeze(0)
 
         def _build(threshold):
-            gate = CacheOnceGate(MultiKeyThresholdGate(
-                threshold=threshold, comparator="score_above", expected_keys={0}))
+            gate = Gate(
+                Evidence((0,), CosineReadout(sv), pooling="last"),
+                PerKeyThreshold(threshold=threshold, comparator="ge"),
+            )
             return ActivationAdapter(
                 transform=AdditiveTransform(sv, strength=3.0), layer_ids=[1], token_scope="all",
-                gate=gate, condition_layer_ids=[0], score_fn=CosineDirectionScorer(sv),
+                gate=gate,
             )
 
         model = tiny_llama(num_layers=LAYERS, hidden=HIDDEN, heads=HEADS)
@@ -556,20 +550,18 @@ class TestSupportsBatching:
         ungated.steer(model, wordlevel_tokenizer())
         assert ungated.supports_batching is True
 
-        gate = CacheOnceGate(MultiKeyThresholdGate(threshold=0.5, comparator="score_above", expected_keys={0}))
         gated = ActivationAdapter(
             transform=AdditiveTransform(_sv()), layer_ids=[1], token_scope="all",
-            gate=gate, condition_layer_ids=[0], score_fn=lambda h, l, **_: 0.9,
+            gate=_constant_gate(threshold=0.5, value=0.9),
         )
         gated.steer(tiny_llama(num_layers=LAYERS, hidden=HIDDEN, heads=HEADS), wordlevel_tokenizer())
         assert gated.supports_batching is True
 
     def test_pipeline_batched_logprobs_when_gated(self):
         model = tiny_llama(num_layers=LAYERS, hidden=HIDDEN, heads=HEADS)
-        gate = CacheOnceGate(MultiKeyThresholdGate(threshold=0.5, comparator="score_above", expected_keys={0}))
         adapter = ActivationAdapter(
             transform=AdditiveTransform(_sv()), layer_ids=[1], token_scope="all",
-            gate=gate, condition_layer_ids=[0], score_fn=lambda h, l, **_: 0.9,
+            gate=_constant_gate(threshold=0.5, value=0.9),
         )
         p = _pipe(adapter, model)
         assert p.supports_batching is True
@@ -613,7 +605,7 @@ class TestControlSpecSweep:
 
     def test_shared_source_fits_once_per_model(self):
         """One ContrastiveFit across two adapter configs fits once per model; templates clean."""
-        from aisteer360.algorithms.state_control._common.estimators.base import BaseEstimator
+        from aisteer360.algorithms.state_control.common.estimators.base import BaseEstimator
 
         class _CountingEstimator(BaseEstimator):
             def __init__(self):
@@ -628,7 +620,7 @@ class TestControlSpecSweep:
         model = tiny_llama(num_layers=LAYERS, hidden=HIDDEN, heads=HEADS)
 
         t1 = AdditiveTransform(source, strength=1.0)
-        t2 = DirectionalAblationTransform(source, alpha=1.0)
+        t2 = ProjectionTransform(source, alpha=1.0)
         a1 = ActivationAdapter(transform=t1, layer_ids=[1], token_scope="all")
         a2 = ActivationAdapter(transform=t2, layer_ids=[1], token_scope="all")
         a1.steer(model, wordlevel_tokenizer())
@@ -652,7 +644,7 @@ class TestPipelineIntegration:
                         transform=AdditiveTransform(sv, strength=5.0), layer_ids=[1], token_scope="all"))
                 else:
                     controls.append(ActivationAdapter(
-                        transform=DirectionalAblationTransform(sv, alpha=1.0), layer_ids=[1], token_scope="all"))
+                        transform=ProjectionTransform(sv, alpha=1.0), layer_ids=[1], token_scope="all"))
             p = _pipe(controls, model)
             return _hidden_at(model, 1, p, input_ids)
 
@@ -666,12 +658,10 @@ class TestPipelineIntegration:
 
     def _shared_gate_pipeline(self, sv, model, driver_score, driver_condition_layer=0,
                               driver_layer=1, follower_layer=2):
-        shared_gate = CacheOnceGate(MultiKeyThresholdGate(
-            threshold=0.5, comparator="score_above", expected_keys={driver_condition_layer}))
+        shared_gate = _constant_gate(threshold=0.5, value=driver_score, condition_layer=driver_condition_layer)
         driver = ActivationAdapter(
             transform=AdditiveTransform(sv, strength=1.0), layer_ids=[driver_layer], token_scope="all",
-            gate=shared_gate, condition_layer_ids=[driver_condition_layer],
-            score_fn=lambda h, l, _v=driver_score, **_: _v,
+            gate=shared_gate,
         )
         follower = ActivationAdapter(
             transform=AdditiveTransform(sv, strength=1.0), layer_ids=[follower_layer], token_scope="all",

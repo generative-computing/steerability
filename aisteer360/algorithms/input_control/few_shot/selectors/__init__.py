@@ -4,7 +4,7 @@ Selectors determine which examples are picked from the pool when constructing th
 
 Available selectors:
 
-  - `RandomSelector` (re-exported from `_common.selectors`): uniform random sampling. Suitable for
+  - `RandomSelector` (re-exported from `common.selectors`): uniform random sampling. Suitable for
     homogeneous pools where any example is roughly as informative as any other.
   - `EPRSelector`: learned dense retriever (Rubin et al. 2021). Constructed by the caller (it requires
     a scoring LM) and passed to `FewShot` via `selector=`.
@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from aisteer360.algorithms.input_control._common.selectors.base import BaseSelector
-from aisteer360.algorithms.input_control._common.selectors.random import RandomSelector
+from aisteer360.algorithms.input_control.common.selectors.base import BaseSelector
+from aisteer360.algorithms.input_control.common.selectors.random import RandomSelector
 from aisteer360.algorithms.input_control.few_shot.selectors.epr import EPRSelector
 
 SELECTOR_REGISTRY: dict[str, type[BaseSelector]] = {

@@ -8,14 +8,9 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from aisteer360.algorithms.core.internals.data import ContrastivePairs
+from aisteer360.algorithms.core.internals.data import ContrastivePairs, LabeledExamples
 from aisteer360.algorithms.core.internals.fingerprint import model_fingerprint
-from aisteer360.algorithms.core.internals.probes.fitting import (
-    ProbeFitSpec,
-    _fit_direction,
-    calibrate_bias,
-    fit_probe,
-)
+from aisteer360.algorithms.core.internals.probes.fitting import ProbeFitSpec, _fit_direction, calibrate_bias, fit_probe
 from aisteer360.algorithms.core.internals.probes.probe import Probe
 from aisteer360.algorithms.core.internals.stats import ActivationStats
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
@@ -256,7 +251,7 @@ def _features_for_layer(model, tokenizer, data, spec, layer_id):
     """Pooled positive/negative features at one layer, via the fitting module's own path."""
     from aisteer360.algorithms.core.internals.probes.fitting import _pooled_features
 
-    pos, neg = _pooled_features(model, tokenizer, data, spec)
+    pos, neg = _pooled_features(model, tokenizer, data, spec, [layer_id])
     return pos[layer_id], neg[layer_id]
 
 
@@ -302,9 +297,11 @@ class TestPromptFormatting:
         recorded: list[tuple[tuple[str, ...], bool]] = []
         original = fitting_module.tokenize_texts
 
-        def spy(tokenizer, texts, device=None, *, add_special_tokens=True):
+        def spy(tokenizer, texts, device=None, *, add_special_tokens=True, max_length=None):
             recorded.append((tuple(texts), add_special_tokens))
-            return original(tokenizer, texts, device, add_special_tokens=add_special_tokens)
+            return original(
+                tokenizer, texts, device, add_special_tokens=add_special_tokens, max_length=max_length
+            )
 
         monkeypatch.setattr(fitting_module, "tokenize_texts", spy)
 
@@ -353,6 +350,82 @@ class TestMetaRecord:
         assert probe.weights[2].dtype == torch.float32
         assert probe.weights[2].shape == (HIDDEN,)
         assert isinstance(probe.bias, float)
+
+
+class TestFisher:
+    def test_matches_closed_form_pooled_covariance_discriminant(self):
+        # full-rank case: the direction equals the pooled-covariance solve of the class-mean
+        # difference, unit-normalized (reference computed without the SVD path)
+        g = torch.Generator().manual_seed(7)
+        pos = torch.randn(12, 8, generator=g) + torch.tensor([1.0] + [0.0] * 7)
+        neg = torch.randn(10, 8, generator=g)
+        w = _fit_direction(pos, neg, 0, ProbeFitSpec(method="fisher"), None)
+
+        cov = (torch.cov(pos.T) * (pos.size(0) - 1) + torch.cov(neg.T) * (neg.size(0) - 1)) / (
+            pos.size(0) + neg.size(0) - 2
+        )
+        expected = torch.linalg.solve(cov, pos.mean(dim=0) - neg.mean(dim=0))
+        expected = expected / torch.linalg.norm(expected)
+        assert torch.allclose(w, expected, atol=1e-4)
+        assert torch.linalg.norm(w).item() == pytest.approx(1.0, abs=1e-5)
+
+    def test_rank_deficient_uses_truncated_pseudo_inverse(self):
+        # fewer samples than dimensions: the direction stays finite and equals the truncated
+        # pseudo-inverse applied to the class-mean difference
+        g = torch.Generator().manual_seed(3)
+        pos = torch.randn(3, 16, generator=g) + 0.5
+        neg = torch.randn(3, 16, generator=g)
+        w = _fit_direction(pos, neg, 0, ProbeFitSpec(method="fisher"), None)
+        assert torch.isfinite(w).all()
+
+        cov = (torch.cov(pos.T) * (pos.size(0) - 1) + torch.cov(neg.T) * (neg.size(0) - 1)) / (
+            pos.size(0) + neg.size(0) - 2
+        )
+        expected = torch.linalg.pinv(cov, atol=1e-6) @ (pos.mean(dim=0) - neg.mean(dim=0))
+        expected = expected / torch.linalg.norm(expected)
+        assert torch.allclose(w, expected, atol=1e-4)
+
+    def test_fit_probe_without_stats(self, model, tokenizer):
+        spec = ProbeFitSpec(method="fisher", candidate_layers=[1])
+        probe = fit_probe(model, tokenizer, data=DATA, spec=spec)
+        assert probe.layer_ids == [1]
+        assert probe.meta["stats_used"] is False
+        assert probe.meta["orientation_flipped"] is False
+        assert torch.linalg.norm(probe.weights[1]).item() == pytest.approx(1.0, abs=1e-4)
+
+
+class TestUnpairedData:
+    def test_labeled_examples_with_unequal_classes(self, model, tokenizer):
+        data = LabeledExamples(
+            positives=["the cat sat", "the dog ran", "the cat ran on"],
+            negatives=["mat on fast", "span attention"],
+        )
+        spec = ProbeFitSpec(
+            method="fisher", pooling="last", location="layer_output",
+            prompt_format="raw", candidate_layers=[LAYERS - 1], calibration="midpoint",
+        )
+        probe = fit_probe(model, tokenizer, data=data, spec=spec)
+        assert probe.layer_ids == [LAYERS - 1]
+        assert probe.meta["n_pos"] == 3 and probe.meta["n_neg"] == 2
+
+    def test_chat_completion_with_unpaired_data_raises(self, model, tokenizer):
+        data = LabeledExamples(positives=["the cat sat"], negatives=["mat on fast", "dog ran"])
+        spec = ProbeFitSpec(
+            method="mean_diff", candidate_layers=[1], prompt_format="chat_completion"
+        )
+        with pytest.raises(ValueError, match="unpaired"):
+            fit_probe(model, tokenizer, data=data, spec=spec)
+
+
+class TestChunkedExtraction:
+    def test_fitted_probe_is_chunking_invariant(self, model, tokenizer):
+        # per-chunk tokenization pads independently; mask-aware pooling makes the fitted probe
+        # independent of the chunking
+        spec = ProbeFitSpec(method="fisher", candidate_layers=[1], calibration="midpoint")
+        one_chunk = fit_probe(model, tokenizer, data=DATA, spec=spec, batch_size=8)
+        split = fit_probe(model, tokenizer, data=DATA, spec=spec, batch_size=1)
+        assert torch.allclose(one_chunk.weights[1], split.weights[1], atol=1e-4)
+        assert one_chunk.bias == pytest.approx(split.bias, abs=1e-4)
 
 
 class TestSpecValidation:

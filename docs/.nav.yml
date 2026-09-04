@@ -48,8 +48,11 @@ nav:
         - TRL wrapper: "examples/notebooks/algorithms/trl.ipynb"
       - State control:
         - ActAdd: "examples/notebooks/algorithms/act_add.ipynb"
+        - ActivationAdapter: "examples/notebooks/generics/activation_adapter.ipynb"
+        - AngularSteering: "examples/notebooks/algorithms/angular_steering.ipynb"
         - CAA: "examples/notebooks/algorithms/caa.ipynb"
         - CAST: "examples/notebooks/algorithms/cast.ipynb"
+        - DirectionalAblation: "examples/notebooks/algorithms/directional_ablation.ipynb"
         - ITI: "examples/notebooks/algorithms/iti.ipynb"
         - PASTA: "examples/notebooks/algorithms/pasta.ipynb"
       - Output control:
@@ -64,7 +67,6 @@ nav:
         - SASA: "examples/notebooks/algorithms/sasa.ipynb"
         - SearchDecoding: "examples/notebooks/generics/search_decoding.ipynb"
         - StoppingRules: "examples/notebooks/generics/stopping_rules.ipynb"
-        - ThinkingIntervention: "examples/notebooks/algorithms/thinking_intervention.ipynb"
         - ValueGuidance: "examples/notebooks/generics/value_guidance.ipynb"
     - Recipes:
       - Routed decoding: "examples/notebooks/recipes/routed_decoding.ipynb"
@@ -86,7 +88,7 @@ nav:
                 - Probes: reference/algorithms/core/probes.md
         - Input control:
             - Base classes: reference/algorithms/input_control/base_input_control.md
-            - Common library: reference/algorithms/input_control/_common.md
+            - Common library: reference/algorithms/input_control/common.md
             - FewShot: reference/algorithms/input_control/few_shot.md
             - PRewrite: reference/algorithms/input_control/prewrite.md
             - CPO: reference/algorithms/input_control/cpo.md
@@ -97,8 +99,9 @@ nav:
             - TRL wrapper: reference/algorithms/structural_control/trl_wrapper.md
         - State control:
             - Base classes: reference/algorithms/state_control/base_state_control.md
-            - Common library: reference/algorithms/state_control/_common.md
+            - Common library: reference/algorithms/state_control/common.md
             - ActAdd: reference/algorithms/state_control/act_add.md
+            - ActivationAdapter: reference/algorithms/state_control/activation_adapter.md
             - Angular Steering: reference/algorithms/state_control/angular_steering.md
             - CAA: reference/algorithms/state_control/caa.md
             - CAST: reference/algorithms/state_control/cast.md
@@ -107,11 +110,12 @@ nav:
             - PASTA: reference/algorithms/state_control/pasta.md
         - Output control:
             - Base classes: reference/algorithms/output_control/base_output_control.md
-            - Common library: reference/algorithms/output_control/_common.md
+            - Common library: reference/algorithms/output_control/common.md
             - BestOfN: reference/algorithms/output_control/best_of_n.md
             - BudgetForcing: reference/algorithms/output_control/budget_forcing.md
             - ContrastiveDecoding: reference/algorithms/output_control/contrastive_decoding.md
             - ContrastiveGuidance: reference/algorithms/output_control/contrastive_guidance.md
+            - ConstrainedDecoding: reference/algorithms/output_control/constrained_decoding.md
             - DeAL: reference/algorithms/output_control/deal.md
             - DExperts: reference/algorithms/output_control/dexperts.md
             - PhasedDecoding: reference/algorithms/output_control/phased_decoding.md
@@ -120,7 +124,6 @@ nav:
             - SASA: reference/algorithms/output_control/sasa.md
             - SearchDecoding: reference/algorithms/output_control/search_decoding.md
             - StoppingRules: reference/algorithms/output_control/stopping_rules.md
-            - ThinkingIntervention: reference/algorithms/output_control/thinking_intervention.md
             - ValueGuidance: reference/algorithms/output_control/value_guidance.md
     - Evaluation:
         - Metrics:

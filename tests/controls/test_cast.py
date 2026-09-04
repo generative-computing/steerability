@@ -3,7 +3,7 @@ import torch
 
 from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
 from aisteer360.algorithms.state_control.cast.control import CAST
-from aisteer360.algorithms.state_control._common.steering_vector import SteeringVector
+from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
 from tests.utils.sweep import build_param_grid
 
 PROMPT_TEXT = (
@@ -52,15 +52,14 @@ def test_cast(model_and_tokenizer, device: torch.device, conf: dict):
         condition_vector=condition_vector,
         condition_layer_ids=[1],
         condition_vector_threshold=conf['condition_vector_threshold'],
-        condition_comparator_threshold_is='larger',
+        condition_comparator_threshold_is='ge',
     )
     pipeline = SteeringPipeline(
         controls=[cast],
-        lazy_init=True,
         device_map=device,
+        model=model,
+        tokenizer=tokenizer,
     )
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
     pipeline.steer()
 
     # prepare prompt & runtime kwargs
@@ -104,9 +103,7 @@ def _tiny_pipeline(control, seed: int = 0):
     torch.manual_seed(seed)
     model = tiny_llama(num_layers=LAYERS, hidden=HIDDEN, heads=4)
     tokenizer = wordlevel_tokenizer()
-    pipeline = SteeringPipeline(controls=[control], lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=[control], model=model, tokenizer=tokenizer)
     pipeline.steer()
     return pipeline, model, tokenizer
 
@@ -146,9 +143,9 @@ class TestBehaviorTransformValidation:
         return CASTArgs(**kwargs)
 
     def _ablation(self, layers=(0, 1), **kwargs):
-        from aisteer360.algorithms.state_control._common.transforms import DirectionalAblationTransform
+        from aisteer360.algorithms.state_control.common.transforms import ProjectionTransform
 
-        return DirectionalAblationTransform(_steering_vector(seed=100, layers=layers), **kwargs)
+        return ProjectionTransform(_steering_vector(seed=100, layers=layers), **kwargs)
 
     def test_transform_plus_vector_raises(self):
         with pytest.raises(ValueError, match="carries its own artifact"):
@@ -175,7 +172,7 @@ class TestBehaviorTransformValidation:
 
     def test_nondefault_behavior_fit_is_inert(self):
         # behavior_fit is only read when fitting from behavior_data (absent here), so it does not raise
-        from aisteer360.algorithms.state_control._common.specs import VectorTrainSpec
+        from aisteer360.algorithms.state_control.common.fit_specs import VectorTrainSpec
 
         args = self._base(
             behavior_transform=self._ablation(),
@@ -194,14 +191,14 @@ class TestBehaviorTransformValidation:
 
 class TestBehaviorTransformApplication:
     def test_bound_instance_ablates_along_direction(self):
-        from aisteer360.algorithms.state_control._common.transforms import DirectionalAblationTransform
+        from aisteer360.algorithms.state_control.common.transforms import ProjectionTransform
 
         direction = _unit_vector(7)
-        transform = DirectionalAblationTransform({0: direction.unsqueeze(0), 1: _unit_vector(8).unsqueeze(0)})
+        transform = ProjectionTransform({0: direction.unsqueeze(0), 1: _unit_vector(8).unsqueeze(0)})
         control = CAST(behavior_transform=transform, behavior_layer_ids=[0, 1])
         pipeline, _, _ = _tiny_pipeline(control)
 
-        assert isinstance(control._transform, DirectionalAblationTransform)
+        assert isinstance(control._transform, ProjectionTransform)
         assert control._transform is transform  # bound at construction -> used as-is
 
         probe = _ProbeAblation(control._transform, direction, target_layer=0)
@@ -216,15 +213,16 @@ class TestBehaviorTransformApplication:
             assert post < 0.02 * pre + 1e-6
 
     def test_source_carrying_transform_bound_after_steer(self):
-        from aisteer360.algorithms.state_control._common.sources import ContrastiveFit
-        from aisteer360.algorithms.state_control._common.transforms import DirectionalAblationTransform
+        from aisteer360.algorithms.state_control.common.sources import ContrastiveFit
+        from aisteer360.algorithms.state_control.common.transforms import ProjectionTransform
 
-        source_transform = DirectionalAblationTransform(
+        source_transform = ProjectionTransform(
             ContrastiveFit(
                 data={"positives": ["yes indeed", "sure absolutely"], "negatives": ["no thanks", "never decline"]},
                 method="mean_diff",
                 accumulate="last_token",
                 prompt_format="raw",
+                location="layer_input",
             )
         )
         assert source_transform.is_bound is False
@@ -237,31 +235,28 @@ class TestBehaviorTransformApplication:
         pipeline.generate(input_ids=torch.tensor([[3, 4, 5]]), max_new_tokens=2)
 
     def test_factory_receives_context_and_result_applied(self):
-        from aisteer360.algorithms.state_control._common.transforms import (
-            DirectionalAblationTransform,
-            TransformContext,
-        )
+        from aisteer360.algorithms.state_control.common.transforms import ProjectionTransform, TransformContext
 
         seen = {}
 
         def _factory(ctx: TransformContext):
             seen["ctx"] = ctx
             sv = _steering_vector(11, ctx.layer_ids)
-            return DirectionalAblationTransform(ctx.resolve(sv), alpha=1.0)
+            return ProjectionTransform(ctx.resolve(sv), alpha=1.0)
 
         control = CAST(behavior_transform=_factory, behavior_layer_ids=[0, 1])
         pipeline, _, _ = _tiny_pipeline(control)
 
         ctx = seen["ctx"]
         assert sorted(ctx.layer_ids) == [0, 1]
-        assert isinstance(control._transform, DirectionalAblationTransform)
+        assert isinstance(control._transform, ProjectionTransform)
         assert control._transform.is_bound is True
         pipeline.generate(input_ids=torch.tensor([[3, 4, 5]]), max_new_tokens=2)
 
     def test_coverage_error_when_transform_misses_behavior_layer(self):
-        from aisteer360.algorithms.state_control._common.transforms import DirectionalAblationTransform
+        from aisteer360.algorithms.state_control.common.transforms import ProjectionTransform
 
-        transform = DirectionalAblationTransform(_steering_vector(seed=100, layers=[0]))  # missing layer 1
+        transform = ProjectionTransform(_steering_vector(seed=100, layers=[0]))  # missing layer 1
         control = CAST(behavior_transform=transform, behavior_layer_ids=[0, 1])
         with pytest.raises(ValueError, match="no direction for layer"):
             _tiny_pipeline(control)
@@ -269,21 +264,19 @@ class TestBehaviorTransformApplication:
 
 # reset() / get_hooks() gate re-sizing across consecutive generations
 def _conditional_cast() -> CAST:
-    """A conditional CAST whose row gate (`CacheOnceGate`) resizes per batch."""
+    """A conditional CAST whose row gate resizes per batch."""
     return CAST(
         behavior_vector=_steering_vector(seed=0, layers=range(LAYERS)),
         behavior_layer_ids=[0, 1],
         condition_vector=_steering_vector(seed=1, layers=range(LAYERS)),
         condition_layer_ids=[1],
         condition_vector_threshold=0.043,
-        condition_comparator_threshold_is="larger",
+        condition_comparator_threshold_is="ge",
     )
 
 
 def _cast_pipeline(control: CAST, model, tokenizer) -> SteeringPipeline:
-    pipeline = SteeringPipeline(controls=[control], lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=[control], model=model, tokenizer=tokenizer)
     pipeline.steer()
     return pipeline
 

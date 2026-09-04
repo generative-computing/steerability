@@ -4,19 +4,19 @@ Output control methods constrain or transform what leaves the decoder.
 
 ## Config first, subclass second
 
-The first design decision is **config first, subclass second**: before writing a class, check whether the method is an
+The first design decision is **config first, subclass second**. Before writing a class, check whether the method is an
 *assignment of a config* of one of the [generic controls](../../concepts/controls.md#generic-controls). Most output
-methods from the literature are:
+methods from the literature map onto one of them:
 
-- reshapes the next-token distribution from a per-candidate score → [`ValueGuidance`](../../concepts/controls.md#generic-controls) (FUDGE, ARGS, RAD, SASA);
-- mixes weighted full-vocabulary log-prob sources → [`ContrastiveGuidance`](../../concepts/controls.md#generic-controls) (DExperts, contrastive decoding, proxy-tuning);
-- changes the shape of the search (propose / score / keep / iterate) → [`SearchDecoding`](../../concepts/controls.md#generic-controls) (best-of-N, self-consistency, DeAL);
-- splices forced and generated segments → [`PhasedDecoding`](../../concepts/controls.md#generic-controls) (budget forcing, response prefill, thinking intervention);
-- stops on a substring / token / budget → [`StoppingRules`](../../concepts/controls.md#generic-controls).
+- a method that reshapes the next-token distribution from a per-candidate score is a [`ValueGuidance`](../../concepts/controls.md#generic-controls) config (FUDGE, ARGS, RAD, SASA);
+- one that mixes weighted full-vocabulary log-prob sources is a [`ContrastiveGuidance`](../../concepts/controls.md#generic-controls) config (DExperts, contrastive decoding, proxy-tuning);
+- one that changes the shape of the search (propose, score, keep, iterate) is a [`SearchDecoding`](../../concepts/controls.md#generic-controls) config (best-of-N, self-consistency, DeAL);
+- one that splices forced and generated segments is a [`PhasedDecoding`](../../concepts/controls.md#generic-controls) config (budget forcing, response prefill, thinking intervention);
+- one that stops on a substring, token, or budget is a [`StoppingRules`](../../concepts/controls.md#generic-controls) config.
 
 If so, ship the method as a config, not a class. When a config earns a name through use, promote it with a small preset
 subclass over the generic that maps its named args onto the generic's fields (the pattern the named methods already
-follow — `BestOfN` over `SearchDecoding`'s shape, `BudgetForcing` over `PhasedDecoding`'s):
+follow, with `BestOfN` over `SearchDecoding`'s shape and `BudgetForcing` over `PhasedDecoding`'s):
 
 ```python
 class BestOfN(SearchDecoding):
@@ -32,8 +32,8 @@ class BestOfN(SearchDecoding):
         self.tokenizer = None
 ```
 
-Write a full control class only when the method needs behavior no config expresses — a new candidate policy, a new
-value / source / scorer component, or a bespoke decode loop.
+Write a full control class only when the method needs behavior no config expresses: a new candidate policy, a new
+value/source/scorer component, or a bespoke decode loop.
 
 ## Contribute or drive?
 
@@ -74,7 +74,9 @@ STEERING_METHOD = {
 likely. It is a pure step-level edit of the distribution, so it is a step-level control.
 
 The args dataclass declares the hyper-parameters; the keyword strings are supplied at inference time (they are tied to
-the prompt), so they arrive via `runtime_kwargs`, not the constructor.
+the prompt), so they arrive via `runtime_kwargs`, not the constructor. The control declares the name it consumes in
+`RUNTIME_KWARGS_SCHEMA`; all controls read from the one `runtime_kwargs` dict, and the pipeline warns at `steer()`
+time when two controls declare the same name.
 
 ```python
 from dataclasses import dataclass, field
@@ -93,8 +95,8 @@ class KeywordBoosterArgs(BaseArgs):
             raise ValueError("`boost` must be non-negative.")
 ```
 
-The control returns a **fresh** processor from `get_logits_processors` on every call — the hook is invoked once per
-`generate()` / `compute_logprobs()`, precisely so that per-generation state is isolated. A processor is any callable
+The control returns a **fresh** processor from `get_logits_processors` on every call, since the hook is invoked once per
+`generate()`/`compute_logprobs()` precisely so that per-generation state is isolated. A processor is any callable
 `(input_ids, scores) -> scores` following the Hugging Face `LogitsProcessor` convention:
 
 ```python
@@ -108,6 +110,7 @@ class KeywordBooster(OutputControl):
     """Adds a fixed logit bias to a set of keyword tokens at every decoding step."""
 
     Args = KeywordBoosterArgs
+    RUNTIME_KWARGS_SCHEMA = [{"name": "keywords"}]
 
     tokenizer: PreTrainedTokenizer | None = None
 
@@ -141,7 +144,7 @@ loop.
     A processor must behave as a function of `(prefix_ids, scores)`. Drivers may restart, rewind, or reorder sequences
     (segment search re-enters from a shorter frontier; beam search permutes rows), and `compute_logprobs` replays
     prefixes teacher-forced, so any internal state must be memoization keyed on the prefix. Subclass
-    [`PrefixKeyedProcessor`](../../reference/algorithms/output_control/_common.md) to get this contract mechanically; it
+    [`PrefixKeyedProcessor`](../../reference/algorithms/output_control/common.md) to get this contract mechanically; it
     calls your `reset_state(input_ids)` whenever the observed prefix no longer extends the last one.
 
 By default a step-level control's logits edits also apply during `compute_logprobs`, so scoring reflects the steered
@@ -211,22 +214,23 @@ class ShortestOfN(DecodingDriver):
     every forward pass. `gen_kwargs` reaching `decode` never contains `logits_processor` / `stopping_criteria` (the
     pipeline pops caller-supplied ones and composes them into the stacks), so a driver that deep-copies its `gen_kwargs`
     is safe by construction. `decode` returns the full sequence ids (prompt + continuation); the pipeline strips the
-    prompt prefix. Resolve `model.generate` lazily (`runtime_kwargs.get("base_generate") or model.generate`) if you want
-    callers to inject a generate function in tests.
+    prompt prefix. The pipeline also passes `session=`, a `SteeredSession` carrying this generation's control
+    entries; resolve your rollout callable with `resolve_generate_callable(model, runtime_kwargs, session=session)` so
+    the driver's rollouts run steered on any backend whose session serves its rollout parameters.
 
-## Prefer the `_common` library
+## Prefer the `common` library
 
-Most methods do not start from scratch. The [`output_control._common`](../../reference/algorithms/output_control/_common.md)
+Most methods do not start from scratch. The [`output_control.common`](../../reference/algorithms/output_control/common.md)
 library factors the category into reusable components, and the shipped methods are thin recipes over them:
 
-- `ValueGuidedProcessor` (step-level candidate scoring) — `RAD`, `SASA`.
-- `ContrastiveMixtureProcessor` (mix full-vocabulary logit sources) — `DExperts`, `ContrastiveDecoding`.
-- `SearchDriver` (propose → score → keep top-k → iterate) — `DeAL`, `BestOfN`.
-- `PhasedDriver` (forced / generated segments with boundary rules) — `ThinkingIntervention`, `BudgetForcing`.
+- `ValueGuidedProcessor` (step-level candidate scoring): `RAD`, `SASA`.
+- `ContrastiveMixtureProcessor` (mix full-vocabulary logit sources): `DExperts`, `ContrastiveDecoding`.
+- `SearchDriver` (propose, score, keep top-k, iterate): `DeAL`, `BestOfN`.
+- `PhasedDriver` (forced/generated segments with boundary rules): `BudgetForcing`.
 
-A driver built on `SearchDriver` or `PhasedDriver` is a *preset*: it declares an `Args` dataclass, calls
+A driver built on `SearchDriver` or `PhasedDriver` is a *preset*. It declares an `Args` dataclass, calls
 `OutputControl.__init__` from its own `__init__`, and overrides `_configure()` to map its mirrored args onto the generic
-base's fields — so it never bypasses the parent constructor. See `deal/control.py` and `thinking_intervention/control.py`
+base's fields, so it never bypasses the parent constructor. See `deal/control.py` and `budget_forcing/control.py`
 for the pattern. An argument-free control (no hyper-parameters) sets `Args = None` and takes no constructor arguments.
 
 ## Running the control

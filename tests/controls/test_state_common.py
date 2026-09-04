@@ -6,9 +6,6 @@ Tests cover:
 - as_contrastive_pairs helper
 - make_token_mask for all scopes
 - get_model_layer_list against test model fixtures
-- AlwaysOpenGate behavior
-- MultiKeyThresholdGate behavior
-- CacheOnceGate behavior
 - projected_cosine_similarity
 - AdditiveTransform
 - NormPreservingTransform
@@ -19,22 +16,18 @@ from pathlib import Path
 import pytest
 import torch
 
-from aisteer360.algorithms.state_control._common import (
+from aisteer360.algorithms.state_control.common import (
     ContrastivePairs,
     SteeringVector,
     VectorTrainSpec,
     as_contrastive_pairs,
 )
-from aisteer360.algorithms.state_control._common.gates import AlwaysOpenGate
-from aisteer360.algorithms.state_control._common.hook_utils import (
+from aisteer360.algorithms.state_control.common.hook_utils import (
     extract_hidden_states,
     get_model_layer_list,
     replace_hidden_states,
 )
-from aisteer360.algorithms.state_control._common.token_scope import (
-    compute_prompt_lens,
-    make_token_mask,
-)
+from aisteer360.algorithms.state_control.common.token_scope import compute_prompt_lens, make_token_mask
 
 
 class TestSteeringVector:
@@ -539,189 +532,12 @@ class TestGetModelLayerList:
             assert all(n.startswith("transformer.h.") for n in names)
 
 
-class TestAlwaysOpenGate:
-    """Tests for AlwaysOpenGate."""
-
-    def test_is_open_always_true(self):
-        """Test that is_open() always returns True."""
-        gate = AlwaysOpenGate()
-        assert gate.is_open() is True
-
-        gate.update(0.5)
-        assert gate.is_open() is True
-
-        gate.reset()
-        assert gate.is_open() is True
-
-    def test_is_ready_always_true(self):
-        """Test that is_ready() returns True."""
-        gate = AlwaysOpenGate()
-        assert gate.is_ready() is True
-
-    def test_update_does_nothing(self):
-        """Test that update() is a no-op."""
-        gate = AlwaysOpenGate()
-        # should not raise
-        gate.update(0.5, key=0)
-        gate.update(-1.0, key=None)
-        assert gate.is_open() is True
-
-    def test_reset_does_nothing(self):
-        """Test that reset() is a no-op."""
-        gate = AlwaysOpenGate()
-        # should not raise
-        gate.reset()
-        assert gate.is_open() is True
-
-
-class TestMultiKeyThresholdGate:
-    """Tests for MultiKeyThresholdGate."""
-
-    def test_single_key_larger(self):
-        """Test single key with 'larger' comparator."""
-        from aisteer360.algorithms.state_control._common.gates import MultiKeyThresholdGate
-
-        gate = MultiKeyThresholdGate(threshold=0.5, comparator="larger")
-
-        gate.update(0.6, key=0)  # passes (0.6 >= 0.5)
-        assert gate.is_open() is True
-
-        gate.reset()
-        gate.update(0.4, key=0)  # fails (0.4 < 0.5)
-        assert gate.is_open() is False
-
-    def test_single_key_smaller(self):
-        """Test single key with 'smaller' comparator."""
-        from aisteer360.algorithms.state_control._common.gates import MultiKeyThresholdGate
-
-        gate = MultiKeyThresholdGate(threshold=0.5, comparator="smaller")
-
-        gate.update(0.4, key=0)  # passes (0.4 <= 0.5)
-        assert gate.is_open() is True
-
-        gate.reset()
-        gate.update(0.6, key=0)  # fails (0.6 > 0.5)
-        assert gate.is_open() is False
-
-    def test_multiple_keys_any(self):
-        """Test multiple keys with 'any' aggregation."""
-        from aisteer360.algorithms.state_control._common.gates import MultiKeyThresholdGate
-
-        gate = MultiKeyThresholdGate(
-            threshold=0.5,
-            comparator="larger",
-            expected_keys={0, 1},
-            aggregate="any",
-        )
-
-        gate.update(0.3, key=0)  # fails
-        assert gate.is_open() is False
-
-        gate.update(0.7, key=1)  # passes
-        assert gate.is_open() is True  # any(False, True) = True
-
-    def test_multiple_keys_all(self):
-        """Test multiple keys with 'all' aggregation."""
-        from aisteer360.algorithms.state_control._common.gates import MultiKeyThresholdGate
-
-        gate = MultiKeyThresholdGate(
-            threshold=0.5,
-            comparator="larger",
-            expected_keys={0, 1},
-            aggregate="all",
-        )
-
-        gate.update(0.7, key=0)  # passes
-        gate.update(0.3, key=1)  # fails
-        assert gate.is_open() is False  # all(True, False) = False
-
-        gate.reset()
-        gate.update(0.7, key=0)  # passes
-        gate.update(0.6, key=1)  # passes
-        assert gate.is_open() is True  # all(True, True) = True
-
-    def test_is_ready_with_expected_keys(self):
-        """Test is_ready() with expected_keys."""
-        from aisteer360.algorithms.state_control._common.gates import MultiKeyThresholdGate
-
-        gate = MultiKeyThresholdGate(
-            threshold=0.5,
-            comparator="larger",
-            expected_keys={0, 1, 2},
-        )
-
-        assert gate.is_ready() is False
-        gate.update(0.6, key=0)
-        assert gate.is_ready() is False
-        gate.update(0.6, key=1)
-        assert gate.is_ready() is False
-        gate.update(0.6, key=2)
-        assert gate.is_ready() is True
-
-    def test_empty_decisions_returns_false(self):
-        """Test that is_open() returns False when no decisions made."""
-        from aisteer360.algorithms.state_control._common.gates import MultiKeyThresholdGate
-
-        gate = MultiKeyThresholdGate(threshold=0.5, comparator="larger")
-        assert gate.is_open() is False
-
-
-class TestCacheOnceGate:
-    """Tests for CacheOnceGate."""
-
-    def test_caches_decision_when_ready(self):
-        """Test that decision is cached once inner gate is ready."""
-        from aisteer360.algorithms.state_control._common.gates import CacheOnceGate, MultiKeyThresholdGate
-
-        inner = MultiKeyThresholdGate(threshold=0.5, comparator="larger")
-        gate = CacheOnceGate(inner)
-
-        gate.update(0.6, key=0)  # inner becomes ready and passes
-        assert gate._cached is not None and bool(gate._cached.all())  # frozen [num_rows] tensor
-        assert gate.is_open() is True
-
-        # even after reset of inner (via update), cached stays
-        gate.update(0.3, key=0)  # this would fail threshold, but cached
-        assert gate.is_open() is True  # still True because cached
-
-    def test_reset_clears_cache(self):
-        """Test that reset() clears the cached decision."""
-        from aisteer360.algorithms.state_control._common.gates import CacheOnceGate, MultiKeyThresholdGate
-
-        inner = MultiKeyThresholdGate(threshold=0.5, comparator="larger")
-        gate = CacheOnceGate(inner)
-
-        gate.update(0.6, key=0)
-        assert gate._cached is not None and bool(gate._cached.all())
-
-        gate.reset()
-        assert gate._cached is None
-
-    def test_freezes_on_first_ready(self):
-        """Test that only first ready state is cached."""
-        from aisteer360.algorithms.state_control._common.gates import CacheOnceGate, MultiKeyThresholdGate
-
-        inner = MultiKeyThresholdGate(
-            threshold=0.5,
-            comparator="larger",
-            expected_keys={0, 1},
-        )
-        gate = CacheOnceGate(inner)
-
-        gate.update(0.3, key=0)  # fails
-        assert gate._cached is None  # not ready yet
-
-        gate.update(0.7, key=1)  # passes, now ready
-        assert gate._cached is not None and bool(gate._cached.all())  # any(False, True) = True
-        assert gate.is_ready() is True
-
-
 class TestProjectedCosineSimilarity:
     """Tests for projected_cosine_similarity function."""
 
     def test_known_values(self):
         """Test against known values."""
-        from aisteer360.algorithms.state_control._common.condition_scorers import projected_cosine_similarity
+        from aisteer360.algorithms.state_control.common.gating import projected_cosine_similarity
 
         # create a simple case
         hidden = torch.tensor([1.0, 0.0, 0.0])
@@ -739,7 +555,7 @@ class TestProjectedCosineSimilarity:
 
     def test_orthogonal_vectors(self):
         """Test with orthogonal vectors."""
-        from aisteer360.algorithms.state_control._common.condition_scorers import projected_cosine_similarity
+        from aisteer360.algorithms.state_control.common.gating import projected_cosine_similarity
 
         hidden = torch.tensor([1.0, 0.0, 0.0])
         direction = torch.tensor([0.0, 1.0, 0.0])
@@ -759,7 +575,7 @@ class TestAdditiveTransform:
 
     def test_applies_direction_with_mask(self):
         """Test that direction is added only where mask is True."""
-        from aisteer360.algorithms.state_control._common.transforms import AdditiveTransform
+        from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform
 
         hidden = torch.zeros(1, 4, 8)  # [B=1, T=4, H=8]
         directions = {0: torch.ones(8)}  # layer 0: all ones
@@ -780,7 +596,7 @@ class TestAdditiveTransform:
 
     def test_no_direction_returns_unchanged(self):
         """Test that missing layer direction returns hidden unchanged."""
-        from aisteer360.algorithms.state_control._common.transforms import AdditiveTransform
+        from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform
 
         hidden = torch.randn(2, 5, 16)
         transform = AdditiveTransform({0: torch.randn(16)}, strength=1.0)
@@ -792,7 +608,7 @@ class TestAdditiveTransform:
 
     def test_strength_scaling(self):
         """Test that strength parameter scales correctly."""
-        from aisteer360.algorithms.state_control._common.transforms import AdditiveTransform
+        from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform
 
         hidden = torch.zeros(1, 1, 4)
         directions = {0: torch.tensor([1.0, 2.0, 3.0, 4.0])}
@@ -804,8 +620,8 @@ class TestAdditiveTransform:
         torch.testing.assert_close(result, expected)
 
     def test_positional_mode_with_alignment(self):
-        """Test positional mode (T>1) with alignment parameter."""
-        from aisteer360.algorithms.state_control._common.transforms import AdditiveTransform
+        """Test positional mode with alignment parameter."""
+        from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform
 
         hidden = torch.zeros(1, 6, 4)  # [B=1, T=6, H=4]
         # positional steering vector with T=3 tokens
@@ -815,7 +631,7 @@ class TestAdditiveTransform:
             [0.0, 0.0, 3.0, 0.0],  # token 2
         ])}
         # inject starting at position 2
-        transform = AdditiveTransform(directions, strength=1.0, alignment=2)
+        transform = AdditiveTransform(directions, strength=1.0, alignment=2, positional=True)
         mask = torch.ones(1, 6, dtype=torch.bool)
 
         result = transform.apply(hidden, layer_id=0, token_mask=mask)
@@ -832,7 +648,7 @@ class TestAdditiveTransform:
 
     def test_positional_mode_clips_at_seq_end(self):
         """Test that positional mode clips steering vectors at sequence end."""
-        from aisteer360.algorithms.state_control._common.transforms import AdditiveTransform
+        from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform
 
         hidden = torch.zeros(1, 4, 4)  # [B=1, T=4, H=4]
         # steering vector with T=3, but aligned at position 2 so only 2 fit
@@ -841,7 +657,7 @@ class TestAdditiveTransform:
             [0.0, 2.0, 0.0, 0.0],
             [0.0, 0.0, 3.0, 0.0],  # won't fit
         ])}
-        transform = AdditiveTransform(directions, strength=1.0, alignment=2)
+        transform = AdditiveTransform(directions, strength=1.0, alignment=2, positional=True)
         mask = torch.ones(1, 4, dtype=torch.bool)
 
         result = transform.apply(hidden, layer_id=0, token_mask=mask)
@@ -852,16 +668,15 @@ class TestAdditiveTransform:
 
     def test_positional_mode_skips_when_out_of_range(self):
         """Test that positional mode returns unchanged when alignment is beyond seq_len."""
-        from aisteer360.algorithms.state_control._common.transforms import AdditiveTransform
+        from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform
 
         hidden = torch.zeros(1, 3, 4)  # [B=1, T=3, H=4]
-        # use T=2 to trigger positional mode (T>1)
         directions = {0: torch.tensor([
             [1.0, 2.0, 3.0, 4.0],
             [5.0, 6.0, 7.0, 8.0],
         ])}
         # alignment at position 5, but seq_len is only 3
-        transform = AdditiveTransform(directions, strength=1.0, alignment=5)
+        transform = AdditiveTransform(directions, strength=1.0, alignment=5, positional=True)
         mask = torch.ones(1, 3, dtype=torch.bool)
 
         result = transform.apply(hidden, layer_id=0, token_mask=mask)
@@ -875,10 +690,7 @@ class TestNormPreservingTransform:
 
     def test_preserves_norm_when_increased(self):
         """Test that norm is preserved when it would increase."""
-        from aisteer360.algorithms.state_control._common.transforms import (
-            AdditiveTransform,
-            NormPreservingTransform,
-        )
+        from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform, NormPreservingTransform
 
         # start with unit norm vectors
         hidden = torch.tensor([[[1.0, 0.0, 0.0, 0.0]]])  # norm = 1
@@ -896,10 +708,7 @@ class TestNormPreservingTransform:
 
     def test_does_not_scale_when_norm_decreases(self):
         """Test that scaling doesn't happen when norm decreases."""
-        from aisteer360.algorithms.state_control._common.transforms import (
-            AdditiveTransform,
-            NormPreservingTransform,
-        )
+        from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform, NormPreservingTransform
 
         # large initial norm
         hidden = torch.tensor([[[3.0, 0.0, 0.0, 0.0]]])  # norm = 3
@@ -917,8 +726,8 @@ class TestNormPreservingTransform:
 
     def test_raises_on_nan(self):
         """Test that NaN detection raises ValueError."""
-        from aisteer360.algorithms.state_control._common.transforms import NormPreservingTransform
-        from aisteer360.algorithms.state_control._common.transforms.base import BaseTransform
+        from aisteer360.algorithms.state_control.common.transforms import NormPreservingTransform
+        from aisteer360.algorithms.state_control.common.transforms.base import BaseTransform
 
         class NaNTransform(BaseTransform):
             def apply(self, hidden_states, *, layer_id, token_mask, **kwargs):
@@ -940,13 +749,13 @@ class TestTransformBinding:
         return SteeringVector(model_type="x", directions={0: torch.randn(k, self.HIDDEN), 1: torch.randn(k, self.HIDDEN)})
 
     def _stub_source(self, sv):
-        from aisteer360.algorithms.state_control._common.sources import _Precomputed
+        from aisteer360.algorithms.state_control.common.sources import _Precomputed
         return _Precomputed(sv)
 
     def _ctx(self, resolve_result=None):
         """A minimal TransformContext whose resolve returns a fixed vector (or coerces its input)."""
-        from aisteer360.algorithms.state_control._common.sources import _as_artifact_source
-        from aisteer360.algorithms.state_control._common.transforms.context import TransformContext
+        from aisteer360.algorithms.state_control.common.sources import _as_artifact_source
+        from aisteer360.algorithms.state_control.common.transforms.context import TransformContext
 
         def resolve(artifact):
             if resolve_result is not None:
@@ -959,19 +768,19 @@ class TestTransformBinding:
         )
 
     def test_additive_bound_from_dict_and_sv(self):
-        from aisteer360.algorithms.state_control._common.transforms import AdditiveTransform
+        from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform
         sv = self._sv()
         assert AdditiveTransform(sv).is_bound is True
         assert AdditiveTransform(sv).covered_layer_ids == {0, 1}
         assert AdditiveTransform({0: torch.randn(1, self.HIDDEN)}).covered_layer_ids == {0}
 
     def test_additive_bound_bind_returns_self(self):
-        from aisteer360.algorithms.state_control._common.transforms import AdditiveTransform
+        from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform
         t = AdditiveTransform(self._sv(), strength=2.0)
         assert t.bind(self._ctx()) is t
 
     def test_additive_source_binds_functionally(self):
-        from aisteer360.algorithms.state_control._common.transforms import AdditiveTransform
+        from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform
         sv = self._sv()
         src = self._stub_source(sv)
         t = AdditiveTransform(src, strength=2.0)
@@ -982,26 +791,26 @@ class TestTransformBinding:
         assert t.is_bound is False  # template untouched
 
     def test_unbound_apply_raises(self):
-        from aisteer360.algorithms.state_control._common.transforms import AdditiveTransform
+        from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform
         t = AdditiveTransform(self._stub_source(self._sv()))
         with pytest.raises(RuntimeError, match="unbound"):
             t.apply(torch.randn(1, 3, self.HIDDEN), layer_id=0, token_mask=torch.ones(1, 3, dtype=torch.bool))
 
     def test_directional_ablation_junk_positional(self):
-        from aisteer360.algorithms.state_control._common.transforms import DirectionalAblationTransform
+        from aisteer360.algorithms.state_control.common.transforms import ProjectionTransform
         with pytest.raises(TypeError, match="alpha"):
-            DirectionalAblationTransform(0.5)
+            ProjectionTransform(0.5)
 
     def test_additive_junk_positional(self):
-        from aisteer360.algorithms.state_control._common.transforms import AdditiveTransform
+        from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform
         with pytest.raises(TypeError, match="strength"):
             AdditiveTransform(2.0)
 
     def test_fresh_caches_per_bound_instance(self):
         """One template bound against two ctxs with different directions -> independent bases."""
-        from aisteer360.algorithms.state_control._common.transforms import DirectionalAblationTransform
+        from aisteer360.algorithms.state_control.common.transforms import ProjectionTransform
         src = self._stub_source(self._sv())
-        template = DirectionalAblationTransform(src, alpha=1.0)
+        template = ProjectionTransform(src, alpha=1.0)
 
         sv_a = SteeringVector(model_type="x", directions={0: torch.tensor([[1.0, 0, 0, 0, 0, 0, 0, 0]])})
         sv_b = SteeringVector(model_type="x", directions={0: torch.tensor([[0, 1.0, 0, 0, 0, 0, 0, 0]])})
@@ -1017,7 +826,7 @@ class TestTransformBinding:
 
     def test_rotation_deferred_validation(self):
         """A [1, H] (non-basis-pair) resolve errors at bind, matching the concrete __init__ error."""
-        from aisteer360.algorithms.state_control._common.transforms import RotationTransform
+        from aisteer360.algorithms.state_control.common.transforms import RotationTransform
         bad = SteeringVector(model_type="x", directions={0: torch.randn(1, self.HIDDEN)})
         # concrete bad shape errors at __init__
         with pytest.raises(ValueError, match=r"\[2, H\]"):
@@ -1029,15 +838,12 @@ class TestTransformBinding:
             t.bind(self._ctx())
 
     def test_head_additive_rejects_bare_mapping(self):
-        from aisteer360.algorithms.state_control._common.transforms import HeadAdditiveTransform
+        from aisteer360.algorithms.state_control.common.transforms import HeadAdditiveTransform
         with pytest.raises(ValueError, match="num_heads and head_dim"):
             HeadAdditiveTransform({0: torch.randn(2, 4)}, active_heads={0: {0}})
 
     def test_norm_preserving_delegates_binding(self):
-        from aisteer360.algorithms.state_control._common.transforms import (
-            AdditiveTransform,
-            NormPreservingTransform,
-        )
+        from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform, NormPreservingTransform
         inner = AdditiveTransform(self._stub_source(self._sv()))
         wrapper = NormPreservingTransform(inner)
         assert wrapper.is_bound is False and wrapper.covered_layer_ids is None
@@ -1046,10 +852,7 @@ class TestTransformBinding:
         assert bound.covered_layer_ids == {0, 1}
 
     def test_alignment_adaptive_two_part_binding(self):
-        from aisteer360.algorithms.state_control._common.transforms import (
-            AdditiveTransform,
-            AlignmentAdaptiveTransform,
-        )
+        from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform, AlignmentAdaptiveTransform
         sv = self._sv()
         # own concrete, inner unbound -> not bound (inner unbound)
         inner_unbound = AdditiveTransform(self._stub_source(sv))
@@ -1071,7 +874,7 @@ class TestLayerHeuristics:
 
     def test_late_third(self):
         """Test late_third returns correct layer range."""
-        from aisteer360.algorithms.state_control._common.selectors import late_third
+        from aisteer360.algorithms.state_control.common.selectors import late_third
 
         # 12 layers -> last third is layers 8-11
         result = late_third(12)
@@ -1105,27 +908,21 @@ class TestResolveTransformSlot:
         )
 
     def _stub_source(self, sv):
-        from aisteer360.algorithms.state_control._common.sources import _Precomputed
+        from aisteer360.algorithms.state_control.common.sources import _Precomputed
 
         return _Precomputed(sv)
 
     def test_bound_instance_passes_through(self):
-        from aisteer360.algorithms.state_control._common.transforms import (
-            AdditiveTransform,
-            resolve_transform_slot,
-        )
+        from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform, resolve_transform_slot
 
         transform = AdditiveTransform(self._sv(layers=(0, 1)), strength=1.5)
         built = resolve_transform_slot(transform, self._model(), None, [0, 1])
         assert built is transform  # already bound -> used as-is
 
     def test_source_carrying_instance_comes_back_bound(self):
-        from aisteer360.algorithms.state_control._common.transforms import (
-            DirectionalAblationTransform,
-            resolve_transform_slot,
-        )
+        from aisteer360.algorithms.state_control.common.transforms import ProjectionTransform, resolve_transform_slot
 
-        template = DirectionalAblationTransform(self._stub_source(self._sv(layers=(0, 1))), alpha=0.7)
+        template = ProjectionTransform(self._stub_source(self._sv(layers=(0, 1))), alpha=0.7)
         assert template.is_bound is False
         built = resolve_transform_slot(template, self._model(), None, [0, 1])
         assert built is not template
@@ -1134,10 +931,7 @@ class TestResolveTransformSlot:
         assert template.is_bound is False  # template untouched
 
     def test_factory_returning_bound_transform(self):
-        from aisteer360.algorithms.state_control._common.transforms import (
-            AdditiveTransform,
-            resolve_transform_slot,
-        )
+        from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform, resolve_transform_slot
 
         sv = self._sv(layers=(0, 1))
         built = resolve_transform_slot(
@@ -1149,49 +943,40 @@ class TestResolveTransformSlot:
 
     def test_factory_returning_source_carrying_transform_is_bound(self):
         # strict superset over old adapter behavior: an unbound factory result is bound here
-        from aisteer360.algorithms.state_control._common.transforms import (
-            DirectionalAblationTransform,
-            resolve_transform_slot,
-        )
+        from aisteer360.algorithms.state_control.common.transforms import ProjectionTransform, resolve_transform_slot
 
         source = self._stub_source(self._sv(layers=(0, 1)))
         built = resolve_transform_slot(
-            lambda ctx: DirectionalAblationTransform(source, alpha=1.0),
+            lambda ctx: ProjectionTransform(source, alpha=1.0),
             self._model(), None, [0, 1],
         )
-        assert isinstance(built, DirectionalAblationTransform)
+        assert isinstance(built, ProjectionTransform)
         assert built.is_bound is True
 
     def test_factory_returning_non_transform_raises(self):
-        from aisteer360.algorithms.state_control._common.transforms import resolve_transform_slot
+        from aisteer360.algorithms.state_control.common.transforms import resolve_transform_slot
 
         with pytest.raises(TypeError, match="must return a BaseTransform"):
             resolve_transform_slot(lambda ctx: object(), self._model(), None, [0, 1])
 
     def test_coverage_passes_when_layers_covered(self):
-        from aisteer360.algorithms.state_control._common.transforms import (
-            DirectionalAblationTransform,
-            resolve_transform_slot,
-        )
+        from aisteer360.algorithms.state_control.common.transforms import ProjectionTransform, resolve_transform_slot
 
-        transform = DirectionalAblationTransform(self._sv(layers=(0, 1, 2)))
+        transform = ProjectionTransform(self._sv(layers=(0, 1, 2)))
         built = resolve_transform_slot(transform, self._model(), None, [0, 1])
         assert built is transform
 
     def test_coverage_raises_when_layer_missing(self):
-        from aisteer360.algorithms.state_control._common.transforms import (
-            DirectionalAblationTransform,
-            resolve_transform_slot,
-        )
+        from aisteer360.algorithms.state_control.common.transforms import ProjectionTransform, resolve_transform_slot
 
-        transform = DirectionalAblationTransform(self._sv(layers=(0,)))
+        transform = ProjectionTransform(self._sv(layers=(0,)))
         with pytest.raises(ValueError, match="no direction for layer"):
             resolve_transform_slot(transform, self._model(), None, [0, 1])
 
     def test_coverage_opts_out_when_none(self):
         # a transform reporting covered_layer_ids=None is not coverage-checked
-        from aisteer360.algorithms.state_control._common.transforms import resolve_transform_slot
-        from aisteer360.algorithms.state_control._common.transforms.base import BaseTransform
+        from aisteer360.algorithms.state_control.common.transforms import resolve_transform_slot
+        from aisteer360.algorithms.state_control.common.transforms.base import BaseTransform
 
         class _NoCoverage(BaseTransform):
             def apply(self, hidden_states, *, layer_id, token_mask, **kwargs):
@@ -1203,10 +988,7 @@ class TestResolveTransformSlot:
         assert built is transform
 
     def test_context_exposes_resolved_layers_and_working_resolve(self):
-        from aisteer360.algorithms.state_control._common.transforms import (
-            AdditiveTransform,
-            resolve_transform_slot,
-        )
+        from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform, resolve_transform_slot
 
         seen = {}
 

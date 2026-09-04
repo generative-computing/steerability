@@ -15,10 +15,10 @@ import pytest
 import torch
 
 from aisteer360.algorithms.core.utils.auxiliary_pass import auxiliary_pass
-from aisteer360.algorithms.state_control._common.gates import AlwaysOpenGate, MultiKeyThresholdGate
-from aisteer360.algorithms.state_control._common.gates.base import BaseGate
-from aisteer360.algorithms.state_control._common.runtime import TransformHookRuntime
-from aisteer360.algorithms.state_control._common.token_scope import compute_prompt_lens
+from aisteer360.algorithms.state_control.common.gating import CallableReadout, Evidence, Gate, PerKeyThreshold
+from aisteer360.algorithms.state_control.common.runtime import TransformHookRuntime
+from aisteer360.algorithms.state_control.common.token_scope import compute_prompt_lens
+from tests.utils.runtime_helpers import NeverCompleteRule
 from tests.utils.runtime_helpers import RecordingTransform as _RecordingTransform
 from tests.utils.runtime_helpers import strip_clock
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
@@ -48,7 +48,7 @@ class TestPassOpenerOffset:
         """With three hooked layers, `after_prompt` steers every decode pass and no prefill pass."""
         model = tiny_llama(num_layers=LAYERS, hidden=HIDDEN, heads=HEADS)
         runtime = TransformHookRuntime(hook_point="layer_output")
-        gate = AlwaysOpenGate()
+        gate = None
         transforms = {lid: _RecordingTransform() for lid in (0, 1, 2)}
 
         input_ids = torch.arange(3, 7, dtype=torch.long).unsqueeze(0)  # prompt_len 4
@@ -90,7 +90,7 @@ class TestPassOpenerOffset:
         input_ids = torch.arange(3, 3 + prompt_len, dtype=torch.long).unsqueeze(0)
         runtime.reset(compute_prompt_lens(input_ids, None))
         hook = runtime.build_behavior_hook(
-            layer_id=1, transform=transform, gate=AlwaysOpenGate(),
+            layer_id=1, transform=transform, gate=None,
             token_scope="after_prompt", is_pass_opener=True)
         handles = _register(model, runtime, [(1, hook)], strip=strip)
         try:
@@ -111,7 +111,7 @@ class TestTokenScopes:
         input_ids = torch.arange(3, 3 + seq_len, dtype=torch.long).unsqueeze(0)
         runtime.reset(compute_prompt_lens(input_ids, None))
         hook = runtime.build_behavior_hook(
-            layer_id=1, transform=transform, gate=AlwaysOpenGate(), token_scope=token_scope,
+            layer_id=1, transform=transform, gate=None, token_scope=token_scope,
             is_pass_opener=True, **kw)
         handles = _register(model, runtime, [(1, hook)])
         try:
@@ -144,7 +144,7 @@ class TestBeamExpansion:
         input_ids = torch.arange(3, 7, dtype=torch.long).unsqueeze(0)
         runtime.reset(compute_prompt_lens(input_ids, None))
         hook = runtime.build_behavior_hook(
-            layer_id=1, transform=transform, gate=AlwaysOpenGate(),
+            layer_id=1, transform=transform, gate=None,
             token_scope="all", is_pass_opener=True)
         handles = _register(model, runtime, [(1, hook)])
         try:
@@ -166,7 +166,7 @@ class TestBareTensorOutput:
         transform = _RecordingTransform(value=2.0)
         runtime.reset(torch.tensor([4]))
         hook = runtime.build_behavior_hook(
-            layer_id=0, transform=transform, gate=AlwaysOpenGate(),
+            layer_id=0, transform=transform, gate=None,
             token_scope="all", is_pass_opener=True)
 
         hidden = torch.zeros(1, 4, HIDDEN)
@@ -179,7 +179,7 @@ class TestBareTensorOutput:
         transform = _RecordingTransform(value=2.0)
         runtime.reset(torch.tensor([4]))
         hook = runtime.build_behavior_hook(
-            layer_id=0, transform=transform, gate=AlwaysOpenGate(),
+            layer_id=0, transform=transform, gate=None,
             token_scope="all", is_pass_opener=True)
 
         hidden = torch.zeros(1, 4, HIDDEN)
@@ -207,7 +207,7 @@ class TestPreHookPath:
             return None
 
         hook = runtime.build_behavior_hook(
-            layer_id=2, transform=transform, gate=AlwaysOpenGate(),
+            layer_id=2, transform=transform, gate=None,
             token_scope="all", is_pass_opener=True)
         # register the steering pre-hook, then a capture pre-hook AFTER it to observe the edit
         h1 = model.model.layers[2].register_forward_pre_hook(hook, with_kwargs=True)
@@ -225,23 +225,28 @@ class TestPreHookPath:
 
 class TestConditionHook:
     def test_condition_hook_is_read_only_and_updates_gate(self):
-        """A condition hook computes a score, feeds the gate, and leaves hidden states untouched."""
+        """A condition hook pools, reads out per-row values, feeds the gate, and leaves hidden
+        states untouched."""
         runtime = TransformHookRuntime(hook_point="layer_output")
-        gate = MultiKeyThresholdGate(threshold=0.5, comparator="score_above", expected_keys={1})
-        runtime.reset(torch.tensor([4]))
-
         seen = {}
 
-        def _score(hidden, layer_id, *, prompt_mask=None):
-            seen["hidden"] = hidden
-            return torch.full((hidden.size(0),), 0.9)  # per-row; above threshold
+        def _readout(pooled, layer_id):
+            seen["pooled"] = pooled
+            return torch.full((pooled.size(0),), 0.9)  # per-row; above threshold
 
-        hook = runtime.build_condition_hook(layer_id=1, scorer=_score, gate=gate, is_pass_opener=True)
+        gate = Gate(
+            Evidence((1,), CallableReadout(_readout)),
+            PerKeyThreshold(threshold=0.5, comparator="ge"),
+        )
+        gate.reset(1)
+        runtime.reset(torch.tensor([4]))
+
+        hook = runtime.build_condition_hook(layer_id=1, gate=gate, is_pass_opener=True)
 
         hidden = torch.randn(1, 4, HIDDEN)
         out = hook(None, (), {}, hidden)
         assert out is hidden  # unmodified output returned as-is
-        assert seen["hidden"] is hidden
+        assert seen["pooled"].shape == (1, HIDDEN)
         assert gate.is_open()  # 0.9 >= 0.5 opens the gate
 
 
@@ -249,7 +254,7 @@ def _after_prompt_hook(runtime, transform, prompt_len=4):
     """Build an `after_prompt` opener behavior hook on a freshly reset runtime."""
     runtime.reset(torch.tensor([prompt_len]))
     return runtime.build_behavior_hook(
-        layer_id=0, transform=transform, gate=AlwaysOpenGate(),
+        layer_id=0, transform=transform, gate=None,
         token_scope="after_prompt", is_pass_opener=True)
 
 
@@ -349,49 +354,33 @@ class TestAuxiliaryPasses:
         assert runtime._offset == 0
 
 
-class _NeverReadyGate(BaseGate):
-    """Gate that never reports ready and records every update call."""
-
-    def __init__(self):
-        self.updates = []
-
-    def update(self, scores, *, key=None):
-        self.updates.append(self._coerce_scores(scores))
-
-    def open_rows(self):
-        return torch.ones(self.num_rows, dtype=torch.bool)
-
-    def is_ready(self):
-        return False
-
-
 class TestConditionHookAuxiliary:
     def _condition_hook(self):
         runtime = TransformHookRuntime(hook_point="layer_output")
-        gate = _NeverReadyGate()
+        readout_calls = []
+
+        def readout(pooled, layer_id):
+            readout_calls.append(tuple(pooled.shape))
+            return torch.zeros(pooled.size(0))
+
+        gate = Gate(Evidence((0,), CallableReadout(readout)), NeverCompleteRule(open=True))
         gate.reset(1)
-        scorer_calls = []
-
-        def scorer(hidden, layer_id, *, prompt_mask=None):
-            scorer_calls.append(tuple(hidden.shape))
-            return torch.zeros(hidden.size(0))
-
         runtime.reset(torch.tensor([4]), prompt_mask=torch.ones(1, 4, dtype=torch.bool))
-        hook = runtime.build_condition_hook(layer_id=0, scorer=scorer, gate=gate, is_pass_opener=True)
-        return gate, scorer_calls, hook
+        hook = runtime.build_condition_hook(layer_id=0, gate=gate, is_pass_opener=True)
+        return gate, readout_calls, hook
 
     @pytest.mark.parametrize("with_clock", [True, False], ids=["clock", "fallback"])
     @pytest.mark.parametrize("aligned", [True, False], ids=["aligned", "detached"])
     @pytest.mark.parametrize("seq_len", [2, 6])
     def test_condition_ignores_auxiliary_passes(self, aligned, with_clock, seq_len):
         """No scoring, no gate update, no accounting; a variant prompt of any length never raises."""
-        gate, scorer_calls, hook = self._condition_hook()
+        gate, readout_calls, hook = self._condition_hook()
         hidden = torch.zeros(1, seq_len, HIDDEN)
         kwargs = {"cache_position": torch.arange(seq_len)} if with_clock else {}
         with auxiliary_pass(aligned=aligned):
             hook(None, (), kwargs, (hidden,))
-        assert not scorer_calls
-        assert not gate.updates
+        assert not readout_calls
+        assert gate.evidence_values() == {}
 
 
 class TestFallbackMultiCallHeuristic:
@@ -417,118 +406,3 @@ class TestFallbackMultiCallHeuristic:
             warnings.simplefilter("always")
             hook(None, (), {}, (hidden,))
         assert not [w for w in caught if "Multiple generate calls" in str(w.message)]
-
-
-class TestResetBetweenGenerations:
-    def test_noop_before_first_reset(self):
-        """Before any `reset(prompt_lens, ...)` there is nothing to preserve; the call is a no-op."""
-        runtime = TransformHookRuntime(hook_point="layer_output")
-        runtime.reset_between_generations()
-        assert runtime._prompt_lens is None
-        assert runtime._prompt_mask is None
-        assert runtime.num_logical_rows == 0
-
-    def test_reclears_counters_and_preserves_lens_and_mask(self):
-        """After a `reset`, it re-clears the per-generation counters and keeps lens/mask."""
-        runtime = TransformHookRuntime(hook_point="layer_output")
-        prompt_lens = torch.tensor([4, 3])
-        prompt_mask = torch.tensor([[1, 1, 1, 1], [1, 1, 1, 0]], dtype=torch.bool)
-        runtime.reset(prompt_lens, prompt_mask)
-
-        # dirty the per-generation counters as a live generation would
-        runtime._offset = 5
-        runtime._pass_offset = 2
-        runtime._prefill_seen = True
-        runtime._opener_built = True
-        runtime._clock_seen = True
-        runtime._warned = {"clock_disappeared"}
-
-        runtime.reset_between_generations()
-
-        assert runtime._offset == 0
-        assert runtime._pass_offset == 0
-        assert runtime._prefill_seen is False
-        assert runtime._opener_built is False
-        assert runtime._clock_seen is False
-        assert runtime._warned == set()
-        # stored prompt state survives the between-generations reset
-        assert torch.equal(runtime._prompt_lens, prompt_lens)
-        assert runtime._prompt_mask is not None
-        assert torch.equal(runtime._prompt_mask, prompt_mask)
-
-
-class _RecordingGate(BaseGate):
-    """Gate that records each `reset(num_rows)` call and always reports open."""
-
-    def __init__(self):
-        self.reset_calls: list[int] = []
-
-    def reset(self, num_rows: int = 1) -> None:
-        self.reset_calls.append(num_rows)
-        super().reset(num_rows)
-
-    def update(self, scores, *, key=None):
-        pass
-
-    def open_rows(self):
-        return torch.ones(self.num_rows, dtype=torch.bool)
-
-    def is_ready(self):
-        return True
-
-
-class TestDefaultStateControlReset:
-    """The base `StateControl.reset` duck-types over the `_gate`/`_runtime` convention."""
-
-    def _make_control(self):
-        from aisteer360.algorithms.state_control.base import StateControl
-
-        class _Bare(StateControl):
-            def get_hooks(self, input_ids, runtime_kwargs=None, **__):
-                return {"pre": [], "forward": [], "backward": []}
-
-        return _Bare()
-
-    def test_reset_noops_without_attrs(self):
-        """A pasta-shaped control exposing neither `_gate` nor `_runtime` resets without error."""
-        control = self._make_control()
-        assert not hasattr(control, "_gate")
-        assert not hasattr(control, "_runtime")
-        control.reset()  # must not raise
-
-    def test_reset_clears_gate_and_reclears_runtime(self):
-        """With both attrs present, `reset` clears the gate and re-clears the runtime counters."""
-        control = self._make_control()
-        gate = _RecordingGate()
-        runtime = TransformHookRuntime(hook_point="layer_output")
-        runtime.reset(torch.tensor([4]))
-        runtime._offset = 7
-        runtime._prefill_seen = True
-        control._gate = gate
-        control._runtime = runtime
-
-        control.reset()
-
-        assert gate.reset_calls == [1]  # gate cleared to its default single row
-        assert runtime._offset == 0  # runtime counters re-cleared
-        assert runtime._prefill_seen is False
-        assert torch.equal(runtime._prompt_lens, torch.tensor([4]))  # lens preserved
-
-    def test_reset_gate_only(self):
-        """A control with a gate but no runtime clears the gate and does not raise."""
-        control = self._make_control()
-        gate = _RecordingGate()
-        control._gate = gate
-        control.reset()
-        assert gate.reset_calls == [1]
-
-    def test_reset_runtime_only(self):
-        """A control with a runtime but no gate re-clears the runtime and does not raise."""
-        control = self._make_control()
-        runtime = TransformHookRuntime(hook_point="layer_output")
-        runtime.reset(torch.tensor([2, 5]))
-        runtime._pass_offset = 3
-        control._runtime = runtime
-        control.reset()
-        assert runtime._pass_offset == 0
-        assert torch.equal(runtime._prompt_lens, torch.tensor([2, 5]))

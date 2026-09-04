@@ -26,13 +26,10 @@ import pytest
 import torch
 
 from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.input_control.base import InputControl, NoInputControl
+from aisteer360.algorithms.core.utils.assembly import _warn_on_provenance_mismatch
+from aisteer360.algorithms.input_control.base import InputControl
 from aisteer360.algorithms.output_control.base import OutputControl
-from aisteer360.algorithms.state_control.base import NoStateControl
-from aisteer360.algorithms.structural_control.base import (
-    NoStructuralControl,
-    StructuralControl,
-)
+from aisteer360.algorithms.structural_control.base import StructuralControl
 from tests.conftest import (
     MockInputControl,
     MockOutputControl,
@@ -70,11 +67,11 @@ def _patch_hf_loaders(monkeypatch):
 
 
 def _tiny_pipeline(controls=()) -> SteeringPipeline:
-    """Build a lazy pipeline over a hub-free tiny Llama model and WordLevel tokenizer."""
+    """Build a pipeline over a hub-free tiny Llama model and WordLevel tokenizer."""
     torch.manual_seed(0)
-    pipeline = SteeringPipeline(controls=list(controls), lazy_init=True)
-    pipeline.model = tiny_llama(num_layers=2, hidden=16, heads=2)
-    pipeline.tokenizer = wordlevel_tokenizer()
+    pipeline = SteeringPipeline(
+        controls=list(controls), model=tiny_llama(num_layers=2, hidden=16, heads=2), tokenizer=wordlevel_tokenizer(),
+    )
     return pipeline
 
 
@@ -82,10 +79,11 @@ def _tiny_pipeline(controls=()) -> SteeringPipeline:
 class TestPipelineInitialization:
     """Tests for `SteeringPipeline` construction."""
 
-    def test_loads_model_and_tokenizer(self, monkeypatch):
+    def test_steer_loads_model_and_tokenizer(self, monkeypatch):
         model_loader, tokenizer_loader, model, tokenizer = _patch_hf_loaders(monkeypatch)
 
         pipeline = SteeringPipeline(model_name_or_path="test-model")
+        pipeline.steer()
 
         model_loader.from_pretrained.assert_called_once()
         assert model_loader.from_pretrained.call_args.args == ("test-model",)
@@ -95,9 +93,9 @@ class TestPipelineInitialization:
         )
         assert pipeline.model is model
         assert pipeline.tokenizer is tokenizer
-        assert not pipeline._is_steered
+        assert pipeline._is_steered
 
-    def test_model_name_required_when_not_lazy(self):
+    def test_model_source_required_without_structural_control(self):
         with pytest.raises(ValueError, match="model_name_or_path"):
             SteeringPipeline()
 
@@ -113,6 +111,7 @@ class TestPipelineInitialization:
         model_loader, _, model, _ = _patch_hf_loaders(monkeypatch)
 
         pipeline = SteeringPipeline(model_name_or_path="test-model", device="cpu")
+        pipeline.steer()
 
         assert "device_map" not in model_loader.from_pretrained.call_args.kwargs
         model.to.assert_called_once_with("cpu")
@@ -124,7 +123,7 @@ class TestPipelineInitialization:
         SteeringPipeline(
             model_name_or_path="test-model",
             hf_model_kwargs={"torch_dtype": "float16"},
-        )
+        ).steer()
 
         kwargs = model_loader.from_pretrained.call_args.kwargs
         assert kwargs["torch_dtype"] == "float16"
@@ -132,45 +131,36 @@ class TestPipelineInitialization:
     def test_trust_remote_code_forwarded_to_tokenizer(self, monkeypatch):
         _, tokenizer_loader, _, _ = _patch_hf_loaders(monkeypatch)
 
-        SteeringPipeline(model_name_or_path="test-model", trust_remote_code=True)
+        SteeringPipeline(model_name_or_path="test-model", trust_remote_code=True).steer()
 
         assert tokenizer_loader.from_pretrained.call_args.kwargs["trust_remote_code"] is True
 
     def test_tokenizer_name_or_path_used(self, monkeypatch):
         _, tokenizer_loader, _, _ = _patch_hf_loaders(monkeypatch)
 
-        SteeringPipeline(model_name_or_path="test-model", tokenizer_name_or_path="test-tokenizer")
+        SteeringPipeline(model_name_or_path="test-model", tokenizer_name_or_path="test-tokenizer").steer()
 
         assert tokenizer_loader.from_pretrained.call_args.args == ("test-tokenizer",)
 
-    def test_lazy_init_defers_loading(self, monkeypatch):
+    def test_construction_defers_loading(self, monkeypatch):
         model_loader, tokenizer_loader, _, _ = _patch_hf_loaders(monkeypatch)
 
-        pipeline = SteeringPipeline(model_name_or_path="test-model", lazy_init=True)
+        pipeline = SteeringPipeline(model_name_or_path="test-model")
 
         model_loader.from_pretrained.assert_not_called()
         tokenizer_loader.from_pretrained.assert_not_called()
         assert pipeline.model is None
         assert pipeline.tokenizer is None
 
-    def test_lazy_init_loads_named_tokenizer(self, monkeypatch):
-        model_loader, tokenizer_loader, _, tokenizer = _patch_hf_loaders(monkeypatch)
-
-        pipeline = SteeringPipeline(lazy_init=True, tokenizer_name_or_path="test-tokenizer")
-
-        model_loader.from_pretrained.assert_not_called()
-        tokenizer_loader.from_pretrained.assert_called_once()
-        assert pipeline.tokenizer is tokenizer
-
     def test_controls_sorted_into_categories(self):
         input_ctrl = MockInputControl()
         state_ctrl = MockStateControl()
 
-        pipeline = SteeringPipeline(controls=[input_ctrl, state_ctrl], lazy_init=True)
+        pipeline = SteeringPipeline(model_name_or_path="test-model", controls=[input_ctrl, state_ctrl])
 
         assert pipeline.input_controls == [input_ctrl]
         assert pipeline.state_controls == [state_ctrl]
-        assert isinstance(pipeline.structural_controls[0], NoStructuralControl)
+        assert pipeline.structural_controls == []
         assert pipeline.output_controls == []
 
     def test_all_four_categories(self):
@@ -181,7 +171,6 @@ class TestPipelineInitialization:
 
         pipeline = SteeringPipeline(
             controls=[input_ctrl, structural_ctrl, state_ctrl, output_ctrl],
-            lazy_init=True,
         )
 
         assert pipeline.input_controls == [input_ctrl]
@@ -193,7 +182,7 @@ class TestPipelineInitialization:
         _, _, _, tokenizer = _patch_hf_loaders(monkeypatch)
         control = MockInputControl()  # class-level `tokenizer` is None
 
-        SteeringPipeline(model_name_or_path="test-model", controls=[control])
+        SteeringPipeline(model_name_or_path="test-model", controls=[control]).steer()
 
         assert control.tokenizer is tokenizer
 
@@ -309,8 +298,12 @@ class TestPipelineSteer:
         assert pipeline.model is replacement
         assert pipeline.model is not original
 
-    def test_lazy_without_model_raises(self):
-        pipeline = SteeringPipeline(lazy_init=True)
+    def test_structural_control_returning_no_model_raises(self):
+        class _NoModelStructural(MockStructuralControl):
+            def steer(self, model=None, tokenizer=None, **kwargs):
+                return None
+
+        pipeline = SteeringPipeline(controls=[_NoModelStructural()])
 
         with pytest.raises(RuntimeError, match="No model is available after steering"):
             pipeline.steer()
@@ -366,13 +359,13 @@ class TestPipelineGenerate:
         assert control._runtime_kwargs_received == runtime_kwargs
 
     def test_hooks_removed_after_generate(self):
+        """No hooks leak onto the model once the session's execution of the work ends."""
         control = MockStateControl(target_layers=[0])
         pipeline = _tiny_pipeline([control])
         pipeline.steer()
 
         pipeline.generate(input_ids=torch.tensor([[3, 4, 5]]), max_new_tokens=1)
 
-        assert control.registered == []
         assert len(pipeline.model.model.layers[0]._forward_pre_hooks) == 0
 
     def test_adapted_prompt_returned_in_output(self):
@@ -537,9 +530,7 @@ class TestPipelineComputeLogprobs:
         batched = _tiny_pipeline()
         batched.steer()
 
-        sequential = SteeringPipeline(controls=[MockInputControl()], lazy_init=True)
-        sequential.model = batched.model
-        sequential.tokenizer = batched.tokenizer
+        sequential = SteeringPipeline(controls=[MockInputControl()], model=batched.model, tokenizer=batched.tokenizer)
         sequential.steer()
         assert not sequential.supports_batching
 
@@ -572,20 +563,20 @@ class TestPipelineSupportsBatching:
     """Tests for the `supports_batching` property."""
 
     def test_default_controls_support_batching(self):
-        pipeline = SteeringPipeline(controls=[], lazy_init=True)
+        pipeline = SteeringPipeline(model_name_or_path="test-model", controls=[])
         assert pipeline.supports_batching
 
     def test_non_batching_control_disables_batching(self):
-        pipeline = SteeringPipeline(controls=[MockInputControl()], lazy_init=True)
+        pipeline = SteeringPipeline(model_name_or_path="test-model", controls=[MockInputControl()])
         assert not pipeline.supports_batching
 
     def test_all_batching_controls_enables_batching(self):
-        pipeline = SteeringPipeline(controls=[MockStateControl()], lazy_init=True)
+        pipeline = SteeringPipeline(model_name_or_path="test-model", controls=[MockStateControl()])
         assert pipeline.supports_batching
 
     def test_mixed_batching_support(self):
         pipeline = SteeringPipeline(
-            controls=[MockStateControl(), MockInputControl()], lazy_init=True
+            model_name_or_path="test-model", controls=[MockStateControl(), MockInputControl()]
         )
         assert not pipeline.supports_batching
 
@@ -593,7 +584,7 @@ class TestPipelineSupportsBatching:
         control = MockInputControl()
         control.enabled = False
 
-        pipeline = SteeringPipeline(controls=[control], lazy_init=True)
+        pipeline = SteeringPipeline(model_name_or_path="test-model", controls=[control])
         assert pipeline.supports_batching
 
 
@@ -605,9 +596,7 @@ class TestDuplicateBosGuard:
         torch.manual_seed(0)
         model = tiny_llama(num_layers=2, hidden=16, heads=2)
         tokenizer = wordlevel_tokenizer()  # bos_token_id == 0
-        pipeline = SteeringPipeline(lazy_init=True)
-        pipeline.model = model
-        pipeline.tokenizer = tokenizer
+        pipeline = SteeringPipeline(model=model, tokenizer=tokenizer)
         pipeline.steer()
         return pipeline, tokenizer
 
@@ -646,8 +635,8 @@ class TestSameModelForwardsMetadata:
     """`same_model_forwards` is declarative component metadata on the declaring classes."""
 
     def test_declared_flags(self):
-        from aisteer360.algorithms.output_control._common.logit_sources import PromptVariantSource
-        from aisteer360.algorithms.output_control._common.values.subspace_margin import SubspaceMarginValue
+        from aisteer360.algorithms.output_control.common.logit_sources import PromptVariantSource
+        from aisteer360.algorithms.output_control.common.values.subspace_margin import SubspaceMarginValue
         from aisteer360.algorithms.output_control.sasa.control import SASA
 
         assert SASA.same_model_forwards is True
@@ -656,8 +645,145 @@ class TestSameModelForwardsMetadata:
         assert OutputControl.same_model_forwards is False
 
     def test_prompt_variant_source_construction_emits_no_warning(self):
-        from aisteer360.algorithms.output_control._common.logit_sources import PromptVariantSource
+        from aisteer360.algorithms.output_control.common.logit_sources import PromptVariantSource
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             PromptVariantSource(lambda text: text)
+
+
+class _RecorderBackend:
+    """Fake backend recording `release()` calls; release is idempotent."""
+
+    def __init__(self):
+        self.release_calls = 0
+        self.spec = None
+
+    def release(self):
+        self.release_calls += 1
+
+
+class TestReleaseBackends:
+    """`release_backends()`, reconstruct-on-next-use, steer-failure release, and the context manager."""
+
+    def test_release_backends_releases_and_empties_cache(self):
+        pipeline = _tiny_pipeline()
+        pipeline.steer()
+        recorder = _RecorderBackend()
+        pipeline._backends["dummy"] = recorder
+
+        pipeline.release_backends()
+
+        assert recorder.release_calls == 1
+        assert pipeline._backends == {}
+
+        pipeline.release_backends()  # second call is a no-op
+        assert recorder.release_calls == 1
+
+    def test_release_backends_survives_a_failing_release(self):
+        class _FailingBackend(_RecorderBackend):
+            def release(self):
+                super().release()
+                raise RuntimeError("boom")
+
+        pipeline = _tiny_pipeline()
+        pipeline.steer()
+        failing = _FailingBackend()
+        pipeline._backends["dummy"] = failing
+
+        pipeline.release_backends()  # swallows the failure and empties the cache
+
+        assert failing.release_calls == 1
+        assert pipeline._backends == {}
+
+    def test_reconstruct_on_next_use(self):
+        """After releasing, the in-process backend re-adopts the live model and generate() works."""
+        pipeline = _tiny_pipeline()
+        pipeline.steer()
+        pipeline.generate(input_ids=torch.tensor([[3, 4, 5]]), max_new_tokens=1)
+
+        pipeline.release_backends()
+        assert pipeline._backends == {}
+
+        out = pipeline.generate(input_ids=torch.tensor([[3, 4, 5]]), max_new_tokens=1)
+        assert out.shape[0] == 1
+
+    def test_steer_failure_releases_constructed_backends(self):
+        """A control whose steer() raises leaves the backend cache empty and re-raises unchanged."""
+
+        class _RaisingInputControl(MockInputControl):
+            def steer(self, model=None, tokenizer=None, **kwargs):
+                raise ValueError("steer failed")
+
+        pipeline = _tiny_pipeline([_RaisingInputControl()])
+
+        with pytest.raises(ValueError, match="steer failed"):
+            pipeline.steer()
+
+        assert pipeline._backends == {}
+        assert not pipeline._is_steered
+
+    def test_context_manager_releases_on_exit(self):
+        pipeline = _tiny_pipeline()
+        pipeline.steer()
+        recorder = _RecorderBackend()
+        pipeline._backends["dummy"] = recorder
+
+        with pipeline as entered:
+            assert entered is pipeline
+        assert recorder.release_calls == 1
+        assert pipeline._backends == {}
+
+    def test_context_manager_releases_when_body_raises(self):
+        pipeline = _tiny_pipeline()
+        pipeline.steer()
+        recorder = _RecorderBackend()
+        pipeline._backends["dummy"] = recorder
+
+        with pytest.raises(RuntimeError, match="body error"):
+            with pipeline:
+                raise RuntimeError("body error")
+        assert recorder.release_calls == 1
+
+
+class TestProvenanceMismatchWarnings:
+    """`_warn_on_provenance_mismatch` against a serving engine's model block."""
+
+    @staticmethod
+    def _control_with_meta(meta):
+        artifact = MagicMock()
+        artifact.meta = meta
+        control = MagicMock()
+        control._steering_vector = artifact
+        return control
+
+    @staticmethod
+    def _absent_fingerprint():
+        try:
+            from vllm_hook_plugins.core.fingerprints import chat_template_fingerprint
+        except ImportError:
+            import hashlib
+            return f"sha256:{hashlib.sha256(b'').hexdigest()}"
+        return chat_template_fingerprint(None)
+
+    def test_differing_chat_template_fingerprints_warn(self):
+        control = self._control_with_meta({"chat_template_fingerprint": "sha256:aaa"})
+        with pytest.warns(UserWarning, match="chat_template_fingerprint"):
+            _warn_on_provenance_mismatch(
+                control, {"chat_template_fingerprint": "sha256:bbb"},
+            )
+
+    def test_absent_served_chat_template_fingerprint_does_not_warn(self):
+        control = self._control_with_meta({"chat_template_fingerprint": "sha256:aaa"})
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            _warn_on_provenance_mismatch(
+                control, {"chat_template_fingerprint": self._absent_fingerprint()},
+            )
+
+    def test_differing_config_fingerprints_still_warn(self):
+        control = self._control_with_meta({"config_fingerprint": "sha256:aaa"})
+        with pytest.warns(UserWarning, match="config_fingerprint"):
+            _warn_on_provenance_mismatch(
+                control, {"config_fingerprint": "sha256:bbb"},
+            )

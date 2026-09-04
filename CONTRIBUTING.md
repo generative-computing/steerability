@@ -48,7 +48,7 @@ We use [MkDocs](https://www.mkdocs.org/) to write documentation.
 To run the documentation server, run:
 
 ```bash
-uv run mkdocs serve 
+uv run mkdocs serve
 ```
 
 The server will be available at [http://localhost:8000](http://localhost:8000).

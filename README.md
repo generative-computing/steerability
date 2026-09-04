@@ -10,40 +10,27 @@
 
 ---
 
-Welcome to AI Steerability 360 (AISteer360), a toolkit for steering large language models.
+The AI Steerability 360 toolkit is an open source Python package for steering large language models.
 
-AISteer360 provides an expressive library of reusable components (termed generics) across four model control surfaces 
-(input, structural, state, and output). This allows for the modular construction of novel steering methods, composition 
-of steering methods into steering pipelines, and benchmarking of pipelines on custom use cases and metrics (including 
-measurement of steering side effects). 
+The toolkit enables the development and evaluation of a wide range of steering methods through an expressive library of
+reusable components across four model control surfaces (input, structure, state, and output). Features include modular abstractions for the
+construction of steering methods, functionality for composition of steering methods into [steering pipelines](docs/concepts/steering_pipelines.md),
+and benchmarking of pipelines on custom use cases and metrics (including measurement of steering side effects).
 
 To get started, please see the documentation at <https://ibm.github.io/AISteer360/> and the [example notebooks](examples/index.md).
 
 ## Installation
 
-The toolkit uses [uv](https://docs.astral.sh/uv/) as the package manager (Python 3.11+). After installing `uv`, install
-the toolkit by running:
+The toolkit uses [uv](https://docs.astral.sh/uv/) as the package manager (Python 3.11+). After installing `uv` and cloning the repo,
+install the toolkit by running:
 
 ```commandline
 uv venv --python 3.11 && uv pip install .
 ```
-Activate by running `source .venv/bin/activate`. Note that on Windows, you may need to split the above script into two
-separate commands (instead of chained via `&&`).
 
-Optional features are available via extra. Install everything with `uv pip install ".[all]"`.
-
-Inference is facilitated by Hugging Face. Before steering, create a `.env` file in the root directory for your Hugging
-Face API key in the following format:
-```
-HUGGINGFACE_TOKEN=hf_***
-```
-
-Some Hugging Face models (e.g. `meta-llama/Meta-Llama-3.1-8B-Instruct`) are behind an access gate. Check that you have
-access via the model's Hub page with the same account whose token you pass to the toolkit.
-
-> [!NOTE]
-> AISteer360 runs the model inside your process. For efficient inference, please run the toolkit from a machine that
-> has enough GPU memory for both the base checkpoint and the extra overhead your steering method/pipeline adds.
+By default, pipelines load and run the model *in process* (via Hugging Face `transformers`). The toolkit additionally provides
+support for inference through vLLM (either offline engine or server) via [vLLM-Hook](https://github.com/IBM/vLLM-Hook). To enable this,
+install the extra with `uv pip install ".[vllm]"`.
 
 ## Contributing
 

@@ -5,7 +5,6 @@ from typing import Any
 
 from aisteer360.evaluation.metrics.base import Metric
 
-
 _ARTICLES_RE = re.compile(r"\b(a|an|the)\b", re.UNICODE)
 _PUNCTUATION = set(string.punctuation)
 
@@ -67,7 +66,7 @@ class ShortAnswerMatch(Metric):
     "The capital of France is Paris." against "Paris"), giving a smooth, non-saturating signal
     that rewards concise, correct answers.
 
-    Each reference may be a single string or a list of acceptable strings. Scores are returned as 
+    Each reference may be a single string or a list of acceptable strings. Scores are returned as
     fractions in `[0, 1]`.
 
     Rajpurkar, P., Zhang, J., Lopyrev, K. and Liang, P., 2016. SQuAD: 100,000+ questions for machine

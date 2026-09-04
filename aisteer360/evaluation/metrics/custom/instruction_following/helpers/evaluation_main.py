@@ -23,9 +23,7 @@ from typing import Dict, Optional, Union
 
 from absl import app, flags, logging
 
-from aisteer360.evaluation.metrics.custom.instruction_following.helpers import (
-    instructions_registry,
-)
+from aisteer360.evaluation.metrics.custom.instruction_following.helpers import instructions_registry
 
 _INPUT_DATA = flags.DEFINE_string(
     "input_data", None, "path to input data", required=True

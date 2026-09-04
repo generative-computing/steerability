@@ -12,11 +12,7 @@ import torch
 from aisteer360.algorithms.core.internals.capture import layerwise_tokenwise_hidden
 from aisteer360.algorithms.core.internals.encoding import tokenize_texts
 from aisteer360.algorithms.core.internals.fingerprint import model_fingerprint
-from aisteer360.algorithms.core.internals.pooling import (
-    get_last_token_positions,
-    masked_mean,
-    select_at_positions,
-)
+from aisteer360.algorithms.core.internals.pooling import get_last_token_positions, masked_mean, select_at_positions
 from aisteer360.algorithms.core.internals.stats import ActivationStats, StatsSpec
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 

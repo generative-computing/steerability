@@ -17,14 +17,11 @@ What is your score?
 
 
 class Factuality(LLMJudgeMetric):
-    """
-    Judge factual correctness of a response to a prompt.
+    """Judge factual correctness of a response to a prompt.
+
+    Pass the judge model at construction, e.g. `Factuality(model="Qwen/Qwen2.5-7B-Instruct")` or
+    `Factuality(backend=BackendSpec(kind="vllm", model=...))`.
     """
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(
-            *args,
-            prompt_template=_PROMPT,
-            scale=(1, 5),
-            **kwargs,
-        )
+    prompt_template = _PROMPT
+    scale = (1, 5)

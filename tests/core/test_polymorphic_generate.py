@@ -8,9 +8,10 @@ import warnings
 import pytest
 import torch
 
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
 from aisteer360.algorithms.core.output import Output
+from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
 from aisteer360.algorithms.input_control.base import InputControl
+from tests.utils.runtime_helpers import script_session_generate
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 TINY_MODEL = "hf-internal-testing/tiny-random-LlamaForCausalLM"
@@ -365,9 +366,7 @@ def tiny_pipeline():
     torch.manual_seed(0)
     model = tiny_llama(num_layers=2, hidden=16, heads=2)
     tokenizer = wordlevel_tokenizer()
-    pipeline = SteeringPipeline(lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(model=model, tokenizer=tokenizer)
     pipeline.steer()
     return pipeline
 
@@ -396,3 +395,112 @@ class TestReturnSemantics:
         for k in (1, 3, 6):
             cont = tiny_pipeline.generate(input_ids=ids, max_new_tokens=k, do_sample=False)
             assert cont.shape[1] == k
+
+
+class TestChatTemplateKwargs:
+    """The reserved `chat_template_kwargs` key threads to `apply_chat_template` and is validated."""
+
+    def test_passthrough_reaches_apply_chat_template(self, pipeline, monkeypatch):
+        calls = []
+        original = pipeline.tokenizer.apply_chat_template
+
+        def spy(*args, **kwargs):
+            calls.append((args, kwargs))
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(pipeline.tokenizer, "apply_chat_template", spy)
+        pipeline.generate(
+            messages=[{"role": "user", "content": "hi"}],
+            max_new_tokens=2,
+            do_sample=False,
+            chat_template_kwargs={"enable_thinking": False},
+        )
+        assert calls, "apply_chat_template was not called"
+        seen = calls[-1][1]
+        # the four pipeline-owned kwargs and the forwarded kwarg all arrive
+        assert seen["return_tensors"] == "pt"
+        assert seen["padding"] is True
+        assert seen["add_generation_prompt"] is True
+        assert seen["return_dict"] is True
+        assert seen["enable_thinking"] is False
+
+    def test_key_popped_before_backend_normalization(self, pipeline, monkeypatch):
+        seen_gen_kwargs = {}
+
+        def fake_generate(input_ids, attention_mask=None, **gen_kwargs):
+            seen_gen_kwargs.update(gen_kwargs)
+            return torch.cat([input_ids, input_ids[:, :1]], dim=1)
+
+        script_session_generate(monkeypatch, fake_generate)
+        pipeline.generate(
+            messages=[{"role": "user", "content": "hi"}],
+            max_new_tokens=2,
+            do_sample=False,
+            chat_template_kwargs={"enable_thinking": False},
+        )
+        assert "chat_template_kwargs" not in seen_gen_kwargs
+
+    def test_empty_dict_is_noop(self, pipeline, monkeypatch):
+        calls = []
+        original = pipeline.tokenizer.apply_chat_template
+
+        def spy(*args, **kwargs):
+            calls.append((args, kwargs))
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(pipeline.tokenizer, "apply_chat_template", spy)
+        pipeline.generate(
+            messages=[{"role": "user", "content": "hi"}],
+            max_new_tokens=2,
+            do_sample=False,
+            chat_template_kwargs={},
+        )
+        assert calls
+        # an empty mapping adds nothing beyond the four pipeline-owned kwargs
+        seen = calls[-1][1]
+        assert set(seen) == {"return_tensors", "padding", "add_generation_prompt", "return_dict"}
+
+    def test_non_mapping_raises_typeerror(self, pipeline):
+        with pytest.raises(
+            TypeError,
+            match=r"chat_template_kwargs must be a mapping of chat-template keyword arguments; got list\.",
+        ):
+            pipeline.generate(
+                messages=[{"role": "user", "content": "hi"}],
+                max_new_tokens=1,
+                chat_template_kwargs=["enable_thinking"],
+            )
+
+    def test_pairing_with_text_raises_typeerror(self, pipeline):
+        with pytest.raises(
+            TypeError,
+            match=r"chat_template_kwargs is only valid with chat input \(messages=\); "
+            r"text= and input_ids= are already templated or template-free\.",
+        ):
+            pipeline.generate(
+                text="hi", max_new_tokens=1, chat_template_kwargs={"enable_thinking": False}
+            )
+
+    def test_pairing_with_input_ids_raises_typeerror(self, pipeline):
+        with pytest.raises(
+            TypeError,
+            match=r"chat_template_kwargs is only valid with chat input \(messages=\); "
+            r"text= and input_ids= are already templated or template-free\.",
+        ):
+            pipeline.generate(
+                input_ids=torch.tensor([[1, 2, 3]]),
+                max_new_tokens=1,
+                chat_template_kwargs={"enable_thinking": False},
+            )
+
+    def test_collision_with_pipeline_owned_kwarg_raises_valueerror(self, pipeline):
+        with pytest.raises(
+            ValueError,
+            match=r"chat_template_kwargs may not override pipeline-owned template arguments: "
+            r"add_generation_prompt, padding\.",
+        ):
+            pipeline.generate(
+                messages=[{"role": "user", "content": "hi"}],
+                max_new_tokens=1,
+                chat_template_kwargs={"padding": False, "add_generation_prompt": False},
+            )

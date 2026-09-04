@@ -61,8 +61,13 @@ class TestBoundaryIndexing:
                 handle.remove()
 
         hidden = layerwise_tokenwise_hidden(model, dict(enc), location="layer_input")
+        # layerwise extraction zeroes rows outside the attention mask, so it matches the raw
+        # pre-hook view (which carries computed pad-row values) only at in-mask positions
+        in_mask = enc["attention_mask"].bool().reshape(-1)
         for lid in range(NUM_LAYERS):
-            torch.testing.assert_close(hidden[lid], captured[lid])
+            hidden_rows = hidden[lid].reshape(-1, hidden[lid].size(-1))[in_mask]
+            captured_rows = captured[lid].reshape(-1, captured[lid].size(-1))[in_mask]
+            torch.testing.assert_close(hidden_rows, captured_rows)
 
 
 class TestBatching:

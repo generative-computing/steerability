@@ -2,19 +2,13 @@ from typing import Any
 
 import torch
 from peft import LoraConfig, PeftType
-from transformers import (
-    AutoModelForSequenceClassification,
-    PreTrainedModel,
-    PreTrainedTokenizer,
-)
+from transformers import AutoModelForSequenceClassification, PreTrainedModel, PreTrainedTokenizer
 from trl import PPOConfig, PPOTrainer
 
-from aisteer360.utils.tokenization import ensure_pad_token
 from aisteer360.algorithms.structural_control.base import StructuralControl
 from aisteer360.algorithms.structural_control.wrappers.trl.base_mixin import TRLMixin
-from aisteer360.algorithms.structural_control.wrappers.trl.utils.prompt_schema import (
-    standardize_prompt_dataset,
-)
+from aisteer360.algorithms.structural_control.wrappers.trl.utils.prompt_schema import standardize_prompt_dataset
+from aisteer360.utils.tokenization import ensure_pad_token
 
 
 class PPOTrainerMixin(TRLMixin, StructuralControl):
@@ -45,9 +39,8 @@ class PPOTrainerMixin(TRLMixin, StructuralControl):
         ref_model: PreTrainedModel | None = None,
         **_,
     ) -> torch.nn.Module:
-        self.model = model
         self.tokenizer = tokenizer or (getattr(model, "tokenizer", None) if model is not None else None)
-        self._resolve_model_tokenizer(self.model, self.tokenizer)
+        model, self.tokenizer = self._resolve_model_tokenizer(model, self.tokenizer)
         self.tokenizer = ensure_pad_token(self.tokenizer)
 
         # reward + value models (sequence-classification heads)
@@ -81,7 +74,7 @@ class PPOTrainerMixin(TRLMixin, StructuralControl):
             trainer = PPOTrainer(
                 args=training_config,
                 processing_class=self.tokenizer,
-                model=self.model,
+                model=model,
                 ref_model=ref_model,
                 reward_model=reward_model,
                 value_model=value_model,
@@ -93,11 +86,11 @@ class PPOTrainerMixin(TRLMixin, StructuralControl):
 
             # recover the trained policy so it can be used for generation
             trained_model = trainer.accelerator.unwrap_model(trainer.model)
-            self.model = getattr(trained_model, "policy", trained_model)
+            model = getattr(trained_model, "policy", trained_model)
             self._maybe_save_trained_artifacts(trainer)
-            self._maybe_merge_lora_in_place()
+            model = self._maybe_merge_lora_in_place(model)
 
-        return self._post_train_freeze()
+        return self._post_train_freeze(model)
 
     def _check_scoring_vocab(self, reward_model, value_model) -> None:
         """Verify the reward/value models can index every policy token id.

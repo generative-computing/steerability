@@ -3,14 +3,8 @@
 Provides a randomly initialized tiny Llama and a hand-built WordLevel tokenizer so
 that hook-level behavioral tests can run without downloading models from the HF Hub.
 """
-from transformers import (
-    GPT2Config,
-    GPT2LMHeadModel,
-    LlamaConfig,
-    LlamaForCausalLM,
-    PreTrainedTokenizerFast,
-)
 from tokenizers import Tokenizer, models, pre_tokenizers, processors
+from transformers import GPT2Config, GPT2LMHeadModel, LlamaConfig, LlamaForCausalLM, PreTrainedTokenizerFast
 
 
 def tiny_llama(num_layers=4, hidden=32, heads=4, vocab=100):

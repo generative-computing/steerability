@@ -101,9 +101,7 @@ class TestPRewriteInferenceStrategy:
             strategy="inference",
             rewriter_gen_kwargs={"max_new_tokens": 4, "do_sample": False},
         )
-        pipeline = SteeringPipeline(controls=[prewrite], lazy_init=True)
-        pipeline.model = model
-        pipeline.tokenizer = tokenizer
+        pipeline = SteeringPipeline(controls=[prewrite], model=model, tokenizer=tokenizer)
         pipeline.steer()
 
         assert prewrite.memory is not None
@@ -125,9 +123,7 @@ class TestPRewriteSearchStrategy:
             rewriter_gen_kwargs={"max_new_tokens": 4, "do_sample": True, "temperature": 0.9},
             eval_gen_kwargs={"max_new_tokens": 2, "do_sample": False},
         )
-        pipeline = SteeringPipeline(controls=[prewrite], lazy_init=True)
-        pipeline.model = model
-        pipeline.tokenizer = tokenizer
+        pipeline = SteeringPipeline(controls=[prewrite], model=model, tokenizer=tokenizer)
         pipeline.steer()
 
         assert prewrite.memory is not None
@@ -146,9 +142,7 @@ class TestPRewriteAdaptMessages:
             strategy="inference",
             rewriter_gen_kwargs={"max_new_tokens": 2, "do_sample": False},
         )
-        pipeline = SteeringPipeline(controls=[prewrite], lazy_init=True)
-        pipeline.model = model
-        pipeline.tokenizer = tokenizer
+        pipeline = SteeringPipeline(controls=[prewrite], model=model, tokenizer=tokenizer)
         pipeline.steer()
 
         adapted = prewrite.adapt_messages([[{"role": "user", "content": "?"}]])
@@ -165,9 +159,7 @@ class TestPRewriteAdaptMessages:
             strategy="inference",
             rewriter_gen_kwargs={"max_new_tokens": 2, "do_sample": False},
         )
-        pipeline = SteeringPipeline(controls=[prewrite], lazy_init=True)
-        pipeline.model = model
-        pipeline.tokenizer = tokenizer
+        pipeline = SteeringPipeline(controls=[prewrite], model=model, tokenizer=tokenizer)
         pipeline.steer()
 
         chat = [
@@ -177,3 +169,26 @@ class TestPRewriteAdaptMessages:
         adapted = prewrite.adapt_messages([chat])
         assert adapted[0][0]["content"] != "OLD"
         assert adapted[0][0]["content"] == prewrite.memory["instruction"]
+
+
+class TestPRewriteSessionOnlySteer:
+    """The steer phase completes with model=None against a session-only fake (ROLLOUTS)."""
+
+    def test_steer_completes_with_model_none(self):
+        from tests.utils.runtime_helpers import ScriptedSession
+        from tests.utils.tiny_models import wordlevel_tokenizer
+
+        tokenizer = wordlevel_tokenizer()
+
+        def fake_generate(input_ids=None, attention_mask=None, **gen_kwargs):
+            continuation = torch.full((input_ids.size(0), 2), 3, dtype=torch.long)
+            return torch.cat([input_ids, continuation], dim=1)
+
+        prewrite = PRewrite(
+            initial_instruction="be helpful",
+            strategy="inference",
+            rewriter_gen_kwargs={"max_new_tokens": 2, "do_sample": False},
+        )
+        prewrite.steer(model=None, tokenizer=tokenizer, session=ScriptedSession(fake_generate, tokenizer=tokenizer))
+        assert prewrite.memory is not None
+        assert len(prewrite.memory["instruction"]) > 0

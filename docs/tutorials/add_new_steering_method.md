@@ -94,10 +94,19 @@ them into class attributes.
 [^1]: This is intended to minimize boilerplate code (parameter/argument parsing and validation) that would otherwise need to live in each control's `__init__` method.
 
 Any one-time preparation of the steering method is done in the `.steer()` method of the control. This is optional for all
-control categories *except* structural control methods; the `.steer()` method in a structural control method contains
+control categories except structural control methods; the `.steer()` method in a structural control method contains
 the necessary logic for modifying the model's weights/architecture. Note that while including a steer method is optional
 in every control type other than structural, it is often useful to include one for attaching necessary objects to the
 control for later use (e.g., the tokenizer). This is illustrated in the tutorials below.
+
+A control's steer step declares one of four access levels via `steer_access()`: `facts` (layout and tokenizer),
+`rollouts` (generate and score through the session), `capture` (hidden states), or `module` (the model as a live
+`torch.nn.Module`). Declare the highest rung your steer touches; intervention templates derive it from their sources,
+and structural controls are `module` by definition. The pipeline hands your `steer()` a session scoped to that rung
+(and the model itself only at `module`), and arranges residency so that on an engine backend, module-level steps run on
+a temporary in-process model that is freed before the engine starts, with exported artifacts as the handoff. Do not hold
+the model past `steer()` unless your generate phase requires `IN_PROCESS_TORCH`. Generate- and score-phase
+requirements are unchanged.
 
 The implementation of a control method depends on its steering category. Specific instructions for how to add a method
 under each of the four categories, via a simple example implementation, is detailed below:
@@ -110,7 +119,7 @@ under each of the four categories, via a simple example implementation, is detai
 
     Input control methods adapt the input (prompt) before the model is called.
 
-    *Required override*: `adapt`
+    **Required override**: `adapt`
 
     [:octicons-arrow-right-24: Add your own input control method](./add_method_by_category/add_new_input_control.md)
 
@@ -120,7 +129,7 @@ under each of the four categories, via a simple example implementation, is detai
 
     Structural control methods adapt the model's weights/architecture.
 
-    *Required override*: `steer`
+    **Required override**: `steer`
 
     [:octicons-arrow-right-24: Add your own structural control method](./add_method_by_category/add_new_structural_control.md)
 
@@ -130,7 +139,7 @@ under each of the four categories, via a simple example implementation, is detai
 
     State control methods influence the model's internal states (activation, attentions, etc.) at inference time.
 
-    *Required override*: `get_hooks`
+    **Required override**: `get_hooks`
 
     [:octicons-arrow-right-24: Add your own state control method](./add_method_by_category/add_new_state_control.md)
 
@@ -140,14 +149,14 @@ under each of the four categories, via a simple example implementation, is detai
 
     Output control methods influence the model's generations via the decoding process.
 
-    *Required override*: `generate`
+    **Required override**: `get_logits_processors` and/or `get_stopping_criteria` (step-level), or `decode` (decoding driver)
 
     [:octicons-arrow-right-24: Add your own output control method](./add_method_by_category/add_new_output_control.md)
 
 </div>
 
 !!! note
-    If your steering method requires two distinct control knobs, e.g., both tweaks the prompt *and* constrains
+    If your steering method requires two distinct control knobs, e.g., both tweaks the prompt and constrains
     decoding, split it into two small controls and chain them together in `controls=[...]`.
 
 
@@ -169,7 +178,7 @@ brief description of the method, a reference to the method's paper/documentation
 
 ```python
 """
-Implementation of DeAL (Decoding-time Alignment) from Deng et al., 2024.
+Implementation of DeAL (Decoding-time Alignment) from Huang et al., 2024.
 
 DeAL performs controlled text generation through iterative lookahead search and reward-guided beam selection. Unlike
 training-time alignment methods, DeAL operates purely at inference time to steer language model outputs toward
@@ -185,15 +194,18 @@ alignment with the desired objective (e.g., helpfulness, safety).
 3. **Iterative Refinement**: Select the top-k highest-scoring beams and repeat the process until termination
 conditions are met (EOS token, max length, or max iterations reached).
 
-This approach allows for flexible alignment with various objectives without requiring model retraining or
-fine-tuning.
+DeAL is a decoding driver, a thin preset of the generic `SearchDriver` that maps DeAL's args onto
+`(scorer, segment_len, num_candidates, keep_k, max_iterations, propose_mode="beam")`. The driver forwards the
+composed logits/stopping stacks into every lookahead rollout, so a step-level control such as RAD steers every DeAL
+rollout. The `reward_params` runtime override is honored. The per-iteration deepcopy of `gen_kwargs`
+is safe because the composed stacks travel as explicit `decode()` parameters and never inside `gen_kwargs`.
 
 Args:
     reward_func (Callable): Function that scores generated continuations. Should accept
         (prompt: str, continuations: list[str], reward_params: dict) and return list[float].
-    lookahead (int): Number of tokens to generate in each lookahead step. Defaults to 4.
-    init_beams (int): Number of initial beams to generate at each iteration. Defaults to 8.
-    topk (int): Number of top-scoring beams to retain for the next iteration. Defaults to 4.
+    lookahead (int): Number of tokens to generate in each lookahead step. Defaults to 10.
+    init_beams (int): Number of initial beams to generate at each iteration. Defaults to 5.
+    topk (int): Number of top-scoring beams to retain for the next iteration. Defaults to 3.
     max_iterations (int): Maximum number of search iterations before termination. Defaults to 10.
 
 Reference:
@@ -206,7 +218,7 @@ https://arxiv.org/abs/2402.06147
 ```
 
 
-Show off how cool your method is by writing a notebook (in `../examples/notebooks/algorithms/`). A good notebook
+Demonstrate your method by writing a notebook (in `../examples/notebooks/algorithms/`). A good notebook
 should contain the following:
 
 - A description of what the method does and how it works
@@ -214,4 +226,9 @@ should contain the following:
 - A simple example of it working; it's helpful to illustrate how the steered behavior compares with the baseline
 (non-steered) behavior
 
-See the [DeAL notebook](`../examples/notebooks/algorithms/deal.ipynb`) for an example.
+See the [DeAL notebook](../examples/notebooks/algorithms/deal.ipynb) for an example.
+
+A new method also needs its documentation surfaces updated: a reference page
+`docs/reference/algorithms/<category>_control/<method>.md` (copy the mkdocstrings block from an existing page), a nav
+entry in `docs/.nav.yml`, a mention in the category's list in `docs/concepts/controls.md`, and an entry for the
+notebook in `examples/index.md`.

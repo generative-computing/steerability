@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass, field
 
 from aisteer360.algorithms.core.base_args import BaseArgs
@@ -13,7 +14,8 @@ class SASAArgs(BaseArgs):
     )
     wv_path: str | None = field(
         default=None,
-        metadata={"help": "Path to a saved probe (`.probe` JSON or `.pt` tensor checkpoint)."},
+        metadata={"help": "Path to a saved probe: a probe directory (safetensors plus JSON sidecar), a "
+                          "`.probe` JSON file, or a legacy `.pt` tensor checkpoint."},
     )
     gen_wv_data_path: str | None = field(
         default="Jigsaw_data/",
@@ -43,7 +45,11 @@ class SASAArgs(BaseArgs):
     def __post_init__(self):
         if self.beta < 0:
             raise ValueError("'beta' must be non-negative.")
-        if self.wv_path is not None and not self.wv_path.endswith((".pt", ".probe")):
-            raise ValueError("wv_path must point to a .pt tensor checkpoint or a .probe JSON file.")
+        if self.wv_path is not None and not (
+            os.path.isdir(self.wv_path) or self.wv_path.endswith((".pt", ".probe"))
+        ):
+            raise ValueError(
+                "wv_path must be a probe directory, a .pt tensor checkpoint, or a .probe JSON file."
+            )
         if self.wv_path is None and self.gen_wv_batch_size < 0:
             raise ValueError("'gen_wv_batch_size' must be non-negative.")

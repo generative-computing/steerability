@@ -1,30 +1,22 @@
-"""ActivationAdapter: assemble an activation-steering recipe from `_common` components."""
+"""ActivationAdapter: assemble an activation-steering recipe from `common` components."""
 from __future__ import annotations
 
 import logging
 
-import torch
-from transformers import PreTrainedModel, PreTrainedTokenizerBase
-
-from aisteer360.algorithms.core.internals.fingerprint import model_fingerprint
-from aisteer360.algorithms.state_control.base import StateControl
-from aisteer360.algorithms.state_control._common.gates import AlwaysOpenGate
-from aisteer360.algorithms.state_control._common.hook_utils import get_model_layer_list
-from aisteer360.algorithms.state_control._common.runtime import TransformHookRuntime
-from aisteer360.algorithms.state_control._common.selectors import ConditionPointSelector
-from aisteer360.algorithms.state_control._common.token_scope import compute_prompt_lens
-from aisteer360.algorithms.state_control._common.transforms.base import BaseTransform
-from aisteer360.algorithms.state_control._common.transforms.context import resolve_transform_slot
+from aisteer360.algorithms.state_control.base import InterventionControl
+from aisteer360.algorithms.state_control.common.gating import Gate
+from aisteer360.algorithms.state_control.common.selectors import ConditionPointSelector
+from aisteer360.algorithms.state_control.common.specs import Intervention, TokenScope
 
 from .args import ActivationAdapterArgs
 
 logger = logging.getLogger(__name__)
 
 
-class ActivationAdapter(StateControl):
+class ActivationAdapter(InterventionControl):
     """Composable activation-steering control (single-behavior atom).
 
-    `ActivationAdapter` wires together the `state_control/_common` component families (a transform
+    `ActivationAdapter` wires together the `state_control/common` component families (a transform
     that carries its own steering artifact, a selector, a gate, and a token scope) so an
     activation-steering recipe can be assembled directly without writing a new control class. It
     edits the residual stream at one or more layers during generation, applying the transform at
@@ -32,16 +24,27 @@ class ActivationAdapter(StateControl):
 
     The transform is the sole artifact carrier. It holds a concrete `SteeringVector` / directions
     mapping (bound at construction), or an `ArtifactSource` such as `ContrastiveFit(data=...)` that
-    the adapter resolves once at `steer()` time and binds via `transform.bind(ctx)`. The adapter has
-    no artifact slots and never sees a `SteeringVector` directly.
+    is resolved once at `steer()` time. The adapter has no artifact slots and never sees a
+    `SteeringVector` directly.
 
-    Steering multiple behaviors is done by placing multiple adapters in a pipeline's `controls` list
-    (each adapter owns exactly one transform chain / gate / token scope). Joint conditioning is
-    achieved by sharing one gate instance across adapters. One driver declares the condition path
-    (`condition_layer_ids` + `score_fn`) and updates the gate; N followers pass the same gate
-    instance with `gate_driven_externally=True` and read its decision. Gate reads are
-    side-effect-free and `reset()` is idempotent, so the pipeline's per-control reset double-resets
-    harmlessly.
+    Gating is likewise self-describing. A `Gate` carries its evidence (condition layers, pooling,
+    and a readout mapping pooled hidden states to per-row values) and a rule deciding over the
+    values; `gate_from_probe` and `Probe.as_gate` assemble one from a fitted probe, and a
+    `GateSource` (e.g. `ConditionPointSearch`) resolves one at `steer()` time. The gate freezes
+    its decision once every evidence layer has reported on the prompt and holds it for the
+    generation.
+
+    The control is declarative: `_configure` maps the validated args onto one `Intervention`
+    (transform, layers, scope, and gate), and the base class binds it at `steer()`, verifying the
+    transform covers every behavior layer.
+
+    Steering multiple behaviors is done by placing multiple adapters in a pipeline's `controls`
+    list (each adapter owns exactly one transform chain / gate / token scope). Joint conditioning
+    is achieved by sharing one `Gate` instance across adapters. One driver carries the gate and
+    feeds it through its condition hooks; N followers pass the same gate instance with
+    `gate_driven_externally=True` and read its decision. Gate reads are side-effect-free and gate
+    reset is idempotent, so the shared instance is reset harmlessly once per adapter when hooks
+    are built.
 
     Within a forward pass, a follower's behavior hook at layer L reads `is_open()` when L forwards,
     so it observes driver evidence only from condition layers `< L`. Evidence from layers `>= L`
@@ -49,184 +52,64 @@ class ActivationAdapter(StateControl):
     driver before the follower in the pipeline's `controls` list (registration order = execution
     order).
 
-    The adapter operates in two phases:
-
-    1. **Preparation (`steer`, offline)**: resolve the behavior layers (from `layer_ids` or the
-       `layer_selector`), build the `TransformContext` (sizes + a resolver closure over the model),
-       bind the transform (or invoke the factory), verify the transform covers every behavior layer,
-       and construct the shared hook runtime.
-    2. **Inference (`get_hooks`, online)**: emit condition hooks (read-only, feeding the gate) and
-       behavior hooks (applying the transform) at the resolved layers.
-
     Batching is native (`supports_batching = True`); gates are row-vectorized, so a gated adapter
-    scores and gates each prompt of a batch independently. The gate rejects scalar scores for
-    multi-row batches, so a mis-specified scorer fails loudly rather than silently applying one
+    scores and gates each prompt of a batch independently. The gate rejects scalar values for
+    multi-row batches, so a mis-specified readout fails loudly rather than silently applying one
     decision batch-wide.
     """
 
     Args = ActivationAdapterArgs
     supports_batching = True
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        # populated in steer()
-        self._transform: BaseTransform | None = None
-        self._layer_names: list[str] = []
-        self._layer_ids: list[int] = []
-        self._condition_layer_ids: list[int] = []
-        self._gate = AlwaysOpenGate()
-        self._pad_token_id: int | None = None
-        self._runtime: TransformHookRuntime | None = None
-
-    def steer(
-        self,
-        model: PreTrainedModel,
-        tokenizer: PreTrainedTokenizerBase | None = None,
-        **__,
-    ) -> PreTrainedModel:
-        """Resolve the behavior layers, bind the transform, verify coverage, and build the hook runtime.
-
-        Args:
-            model: The base language model to be steered.
-            tokenizer: Tokenizer for encoding training data (when the transform carries a source).
-
-        Returns:
-            The input model, unchanged.
-        """
-        _, layer_names = get_model_layer_list(model)
-        self._layer_names = layer_names
-        num_layers = len(layer_names)
-
-        # behavior-layer resolution
+    def _configure(self):
         if self.layer_ids is not None:
-            layer_ids = sorted(set(int(lid) for lid in self.layer_ids))
+            layers = tuple(sorted(set(int(lid) for lid in self.layer_ids)))
         else:
             if isinstance(self.layer_selector, ConditionPointSelector):
                 raise ValueError(
                     "ConditionPointSelector returns a ConditionPoint for gating, not a behavior layer; "
                     "supply layer_ids or a layer selector that returns layer id(s)."
                 )
-            selected = self.layer_selector.select(num_layers=num_layers)
-            layer_ids = sorted(set(selected)) if isinstance(selected, (list, tuple, set)) else [int(selected)]
-        self._layer_ids = layer_ids
+            layers = self.layer_selector
 
-        for lid in layer_ids:
-            if not 0 <= lid < num_layers:
-                raise ValueError(f"layer_id {lid} out of range [0, {num_layers}).")
+        self._template = (Intervention(
+            layers=layers,
+            transform=self.transform,
+            scope=TokenScope(self.token_scope, last_k=self.last_k, from_position=self.from_position),
+            gate=self.gate,
+            gate_driven_externally=self.gate_driven_externally,
+            boundary=self.hook_point,
+        ),)
 
-        self._condition_layer_ids = sorted(set(int(lid) for lid in self.condition_layer_ids or []))
-        for lid in self._condition_layer_ids:
-            if not 0 <= lid < num_layers:
-                raise ValueError(f"condition_layer_id {lid} out of range [0, {num_layers}).")
-
-        # optional scorer attributes (see ConditionScorer): a scorer that records the boundary
-        # or model identity it was fitted at is validated against this adapter and model
-        scorer_location = getattr(self.score_fn, "location", None)
-        if scorer_location is not None and scorer_location != self.hook_point:
-            raise ValueError(
-                f"Condition scorer expects features at '{scorer_location}' but this adapter "
-                f"hooks '{self.hook_point}'. Construct the adapter with "
-                f"hook_point='{scorer_location}', or refit the probe with "
-                f"location='{self.hook_point}'."
+    @property
+    def hook_only_hint(self) -> str:
+        gate = self.gate
+        if isinstance(gate, Gate) and gate.wire_kinds() is None:
+            readout_name = type(gate.evidence.readout).__name__
+            rule_name = type(gate.rule).__name__
+            offender = readout_name if type(gate.evidence.readout).wire_kind is None else rule_name
+            return (
+                f"gating through {offender} has no intervention-spec form; run on the "
+                "huggingface backend"
             )
-        scorer_fingerprint = getattr(self.score_fn, "model_fingerprint", None)
-        if scorer_fingerprint is not None:
-            live_fingerprint = model_fingerprint(model)
-            if scorer_fingerprint != live_fingerprint:
-                raise ValueError(
-                    f"Condition scorer was fitted on a different model (fingerprint "
-                    f"{scorer_fingerprint!r} vs {live_fingerprint!r}). Refit the probe on this "
-                    "model, or disarm the check with allow_model_mismatch=True on "
-                    "probe_condition() or Probe.as_condition()."
-                )
+        return (
+            "this transform configuration has no intervention-spec form; run on the "
+            "huggingface backend"
+        )
 
-        # transform resolution (no artifact logic; the transform carries its own)
-        self._transform = resolve_transform_slot(self.transform, model, tokenizer, layer_ids)
+    @property
+    def _layer_ids(self) -> list[int]:
+        """The resolved behavior layers (empty before `steer()`)."""
+        return list(self.interventions[0].layers) if self.interventions else []
 
-        self._gate = self.gate if self.gate is not None else AlwaysOpenGate()
-        self._pad_token_id = getattr(tokenizer, "pad_token_id", None) if tokenizer else None
-        self._runtime = TransformHookRuntime(hook_point=self.hook_point)
-
-        return model
-
-    def get_hooks(
-        self,
-        input_ids: torch.Tensor,
-        runtime_kwargs: dict | None = None,
-        attention_mask: torch.Tensor | None = None,
-        **__,
-    ) -> dict[str, list]:
-        """Emit condition (read-only) and behavior hooks for the current generation.
-
-        Condition hooks are registered before behavior hooks so that, at a shared layer, the gate
-        update precedes the transform application (registration order = execution order for same-module
-        hooks of the same phase).
-
-        Args:
-            input_ids: Prompt token ids of shape `[B, T]` or `[T]`.
-            runtime_kwargs: Unused.
-            attention_mask: The prompt attention mask matching `input_ids` (forwarded by the
-                pipeline). Handed to condition scorers on the prefill pass so condition scores
-                align with real (non-pad) prompt positions.
-
-        Returns:
-            Hook specifications with "pre", "forward", "backward" keys.
-        """
-        ids = input_ids if isinstance(input_ids, torch.Tensor) else input_ids["input_ids"]
-        if ids.ndim == 1:
-            ids = ids.unsqueeze(0)
-
-        prompt_lens = compute_prompt_lens(ids, self._pad_token_id)
-        if attention_mask is not None:
-            am = attention_mask if isinstance(attention_mask, torch.Tensor) else torch.as_tensor(attention_mask)
-            prompt_mask = (am.unsqueeze(0) if am.ndim == 1 else am).to(torch.bool)
-        else:
-            prompt_mask = None
-        self._gate.reset(ids.size(0))
-        self._runtime.reset(prompt_lens, prompt_mask)
-
-        # pass opener = lowest hooked layer (over behavior ∪ condition); exactly one hook may
-        # open each pass — at a shared opener layer the condition hook registers (and therefore
-        # fires) first, so it takes the opener role
-        all_layers = self._layer_ids + self._condition_layer_ids
-        opener = min(all_layers) if all_layers else None
-        behavior_opener = opener if opener not in self._condition_layer_ids else None
-
-        phase = "forward" if self.hook_point == "layer_output" else "pre"
-        hooks: dict[str, list] = {"pre": [], "forward": [], "backward": []}
-
-        # condition hooks first (so gate.update precedes transform at a shared layer)
-        for lid in self._condition_layer_ids:
-            hooks[phase].append({
-                "module": self._layer_names[lid],
-                "hook_func": self._runtime.build_condition_hook(
-                    layer_id=lid,
-                    scorer=self.score_fn,
-                    gate=self._gate,
-                    is_pass_opener=(lid == opener),
-                ),
-            })
-
-        for lid in self._layer_ids:
-            hooks[phase].append({
-                "module": self._layer_names[lid],
-                "hook_func": self._runtime.build_behavior_hook(
-                    layer_id=lid,
-                    transform=self._transform,
-                    gate=self._gate,
-                    token_scope=self.token_scope,
-                    last_k=self.last_k,
-                    from_position=self.from_position,
-                    is_pass_opener=(lid == behavior_opener),
-                ),
-            })
-
-        return hooks
-
-
+    @property
+    def _condition_layer_ids(self) -> list[int]:
+        """The gate's evidence layers (empty when ungated)."""
+        gate = self.interventions[0].gate if self.interventions else self.gate
+        if isinstance(gate, Gate):
+            return list(gate.evidence.layer_ids)
+        return []
 
     def cleanup(self) -> None:
-        """Drop references to the bound transform and runtime."""
-        self._transform = None
-        self._runtime = None
+        """Drop references to the bound interventions."""
+        self.interventions = ()

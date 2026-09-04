@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
-from aisteer360.algorithms.output_control._common.drivers.phased import Fixed, Generated, PhasedDriver
 from aisteer360.algorithms.output_control.base import OutputControl
 from aisteer360.algorithms.output_control.budget_forcing.args import BudgetForcingArgs
+from aisteer360.algorithms.output_control.common.drivers.phased import Fixed, Generated, PhasedDriver
 
 
 class BudgetForcing(PhasedDriver):

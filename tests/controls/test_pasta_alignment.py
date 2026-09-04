@@ -15,9 +15,7 @@ from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 def _pasta_pipeline(model, tokenizer, **pasta_kwargs):
     pasta = PASTA(**pasta_kwargs)
-    pipeline = SteeringPipeline(controls=[pasta], lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=[pasta], model=model, tokenizer=tokenizer)
     pipeline.steer()
     return pipeline, pasta
 
@@ -198,9 +196,7 @@ class TestArchAndFailFast:
         tokenizer = wordlevel_tokenizer()
 
         pasta = PASTA(head_config=[0], alpha=2.0)
-        pipeline = SteeringPipeline(controls=[pasta], lazy_init=True)
-        pipeline.model = model
-        pipeline.tokenizer = tokenizer
+        pipeline = SteeringPipeline(controls=[pasta], model=model, tokenizer=tokenizer)
         with pytest.raises(ValueError, match="eager"):
             pipeline.steer()
 

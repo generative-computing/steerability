@@ -8,29 +8,20 @@ from typing import Any
 
 import torch
 
-from aisteer360.algorithms.input_control._common.formatters.system_prompt import (
-    SystemPromptFormatter,
-)
-from aisteer360.algorithms.input_control._common.memory.text import TextMemory
-from aisteer360.algorithms.input_control._common.proposers.llm_meta_prompt import (
-    LLMMetaPromptProposer,
-)
-from aisteer360.algorithms.input_control._common.proposers.utils.parsing import parse_fenced_or_whole
-from aisteer360.algorithms.input_control._common.budget import RolloutBudget
-from aisteer360.algorithms.input_control._common.generation import (
-    generate_with_system_prompt,
-)
+from aisteer360.algorithms.core.execution.access import ModelAccess
+from aisteer360.algorithms.core.execution.session_utils import SessionLM
 from aisteer360.algorithms.input_control.base import InputControl
+from aisteer360.algorithms.input_control.common.budget import RolloutBudget
+from aisteer360.algorithms.input_control.common.formatters.system_prompt import SystemPromptFormatter
+from aisteer360.algorithms.input_control.common.generation import generate_with_system_prompt
+from aisteer360.algorithms.input_control.common.memory.text import TextMemory
+from aisteer360.algorithms.input_control.common.proposers.llm_meta_prompt import LLMMetaPromptProposer
+from aisteer360.algorithms.input_control.common.proposers.utils.parsing import parse_fenced_or_whole
 from aisteer360.algorithms.input_control.gepa.args import GEPAArgs
-from aisteer360.algorithms.input_control.gepa.utils import (
-    pareto_sampling,
-    reflective_meta_prompt,
-)
+from aisteer360.algorithms.input_control.gepa.utils import pareto_sampling, reflective_meta_prompt
 from aisteer360.algorithms.input_control.gepa.utils.pool import CandidatePool
 from aisteer360.algorithms.input_control.gepa.utils.reflective_dataset import build_records
-from aisteer360.algorithms.input_control.gepa.utils.reflective_meta_prompt import (
-    render_records,
-)
+from aisteer360.algorithms.input_control.gepa.utils.reflective_meta_prompt import render_records
 
 logger = logging.getLogger(__name__)
 
@@ -101,23 +92,26 @@ class GEPA(InputControl):
     memory: TextMemory | None = None
     tokenizer: Any = None
     _formatter: SystemPromptFormatter | None = None
-    _task_lm: Any = None
-    _task_tokenizer: Any = None
+
+    def steer_access(self) -> ModelAccess:
+        """`ModelAccess.ROLLOUTS`; task rollouts and reflection generate through the session,
+        and adaptation is a formatter."""
+        return ModelAccess.ROLLOUTS
 
     def steer(
         self,
         model=None,
         tokenizer=None,
+        session=None,
         **kwargs,
     ) -> None:
         rng = random.Random(self.seed) if self.seed is not None else random.Random()
         self.tokenizer = tokenizer
-        self._task_lm = model
-        self._task_tokenizer = tokenizer
+        task_lm = SessionLM(session) if session is not None else model
 
         if self.reflection_lm is None:
             logger.info("GEPA: no `reflection_lm` supplied; reflection falls back to the task model.")
-        reflection_lm = self.reflection_lm if self.reflection_lm is not None else model
+        reflection_lm = self.reflection_lm if self.reflection_lm is not None else task_lm
         reflection_tok = self.reflection_tokenizer if self.reflection_tokenizer is not None else tokenizer
         proposer = LLMMetaPromptProposer(
             llm=reflection_lm,
@@ -136,7 +130,7 @@ class GEPA(InputControl):
         budget = RolloutBudget(self.budget)
 
         pool = CandidatePool()
-        _, seed_scores, _ = self._run(self.seed_instruction, d_pareto, with_feedback=False)
+        _, seed_scores, _ = self._run(task_lm, self.seed_instruction, d_pareto, with_feedback=False)
         budget.charge(len(d_pareto))
         pool.add(self.seed_instruction, seed_scores)
 
@@ -157,7 +151,7 @@ class GEPA(InputControl):
                 break
 
             parent_outputs, parent_scores, parent_feedback = self._run(
-                pool.candidates[parent_idx], minibatch, with_feedback=True
+                task_lm, pool.candidates[parent_idx], minibatch, with_feedback=True
             )
             budget.charge(len(minibatch))
             parent_mb_mean = mean(parent_scores)
@@ -175,7 +169,7 @@ class GEPA(InputControl):
 
             if budget.remaining < len(minibatch):
                 break
-            _, cand_scores, _ = self._run(new_text, minibatch, with_feedback=False)
+            _, cand_scores, _ = self._run(task_lm, new_text, minibatch, with_feedback=False)
             budget.charge(len(minibatch))
             cand_mb_mean = mean(cand_scores)
             if cand_mb_mean <= parent_mb_mean:  # strict improvement
@@ -189,7 +183,7 @@ class GEPA(InputControl):
 
             if budget.remaining < len(d_pareto):
                 break
-            _, cand_full, _ = self._run(new_text, d_pareto, with_feedback=False)
+            _, cand_full, _ = self._run(task_lm, new_text, d_pareto, with_feedback=False)
             budget.charge(len(d_pareto))
             pool.add(new_text, cand_full)
             step += 1
@@ -205,6 +199,7 @@ class GEPA(InputControl):
 
     def _run(
         self,
+        task_lm,
         instruction: str,
         batch: list[dict],
         *,
@@ -212,7 +207,7 @@ class GEPA(InputControl):
     ) -> tuple[list[str], list[float], list[str] | None]:
         queries = [self._format_query(row) for row in batch]
         outputs = generate_with_system_prompt(
-            self._task_lm, self._task_tokenizer, instruction, queries, gen_kwargs=self.gen_kwargs
+            task_lm, self.tokenizer, instruction, queries, gen_kwargs=self.gen_kwargs
         )
         scores = [float(self.row_scorer(out, row)) for out, row in zip(outputs, batch)]
         feedback: list[str] | None = None

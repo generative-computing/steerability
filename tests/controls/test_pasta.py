@@ -45,9 +45,7 @@ def test_pasta(model_and_tokenizer, device: torch.device, conf: dict):
         alpha=conf["alpha"],
         scale_position=conf["scale_position"]
     )
-    pipeline = SteeringPipeline(controls=[pasta], lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=[pasta], model=model, tokenizer=tokenizer)
     pipeline.steer()
 
     # prepare prompt & runtime kwargs

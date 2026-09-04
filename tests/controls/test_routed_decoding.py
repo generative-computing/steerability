@@ -8,27 +8,23 @@ probe run. Empty probe `meta` keeps the fingerprint checks dormant except where 
 import pytest
 import torch
 
-from aisteer360.algorithms.core.internals.fingerprint import model_fingerprint
-from aisteer360.algorithms.core.internals.probes import (
-    P,
-    Probe,
-    ProbeFitSpec,
-    ProbeSet,
-    ProbeSetFit,
-    RoutingRules,
-    Rule,
-)
 from aisteer360.algorithms.core.internals.data import ContrastivePairs
+from aisteer360.algorithms.core.internals.fingerprint import model_fingerprint
+from aisteer360.algorithms.core.internals.probes import Probe, ProbeFitSpec, ProbeSet, ProbeSetFit
 from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
 from aisteer360.algorithms.core.utils.auxiliary_pass import current_auxiliary_pass
-from aisteer360.algorithms.output_control._common.drivers.phased import Fixed
+from aisteer360.algorithms.output_control.common.drivers.phased import Fixed
 from aisteer360.algorithms.output_control.routed_decoding import (
+    P,
+    Route,
     RoutedDecoding,
+    Router,
     generate,
     prefix,
     respond,
 )
 from aisteer360.algorithms.structural_control.base import StructuralControl
+from tests.utils.runtime_helpers import script_session_generate
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 HIDDEN = 32
@@ -66,9 +62,7 @@ def _make_pipeline(probes, rules, seed: int = 0):
     model = tiny_llama(num_layers=LAYERS, hidden=HIDDEN, heads=4)
     tokenizer = wordlevel_tokenizer()
     router = RoutedDecoding(probes=probes, rules=rules)
-    pipeline = SteeringPipeline(controls=[router], lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=[router], model=model, tokenizer=tokenizer)
     pipeline.steer()
     return pipeline, router, model, tokenizer
 
@@ -90,17 +84,18 @@ class _GenerateSpy:
 
 
 class TestRespond:
-    def test_canned_tokens_exact_and_no_decode_steps(self):
-        rules = RoutingRules(
-            rules=[Rule("canned", when=P("always"), action=respond("the cat sat"))],
+    def test_canned_tokens_exact_and_no_decode_steps(self, monkeypatch):
+        rules = Router(
+            routes=[Route("canned", when=P("always"), action=respond("the cat sat"))],
             default_action=generate(),
         )
         pipeline, router, model, tokenizer = _make_pipeline(_forced_probes(), rules)
         spy = _GenerateSpy(model)
+        script_session_generate(monkeypatch, spy)
 
         out = pipeline.generate(
             input_ids=torch.tensor([[3, 4, 5]]),
-            runtime_kwargs={"base_generate": spy},
+            runtime_kwargs={},
             max_new_tokens=4,
         )
 
@@ -110,17 +105,18 @@ class TestRespond:
 
 
 class TestPrefix:
-    def test_prefix_tokens_then_generated_tail(self):
-        rules = RoutingRules(
-            rules=[Rule("note", when=P("always"), action=prefix("the dog ran"))],
+    def test_prefix_tokens_then_generated_tail(self, monkeypatch):
+        rules = Router(
+            routes=[Route("note", when=P("always"), action=prefix("the dog ran"))],
             default_action=generate(),
         )
         pipeline, router, model, tokenizer = _make_pipeline(_forced_probes(), rules)
         spy = _GenerateSpy(model)
+        script_session_generate(monkeypatch, spy)
 
         out = pipeline.generate(
             input_ids=torch.tensor([[3, 4, 5]]),
-            runtime_kwargs={"base_generate": spy},
+            runtime_kwargs={},
             max_new_tokens=4,
         )
 
@@ -133,15 +129,13 @@ class TestPrefix:
 
 class TestDefaultParity:
     def test_default_route_matches_plain_pipeline(self):
-        rules = RoutingRules(
-            rules=[Rule("unreached", when=P("never"), action=respond("the mat"))],
+        rules = Router(
+            routes=[Route("unreached", when=P("never"), action=respond("the mat"))],
             default_action=generate(),
         )
         pipeline, router, model, tokenizer = _make_pipeline(_forced_probes(), rules)
 
-        plain = SteeringPipeline(controls=[], lazy_init=True)
-        plain.model = model
-        plain.tokenizer = tokenizer
+        plain = SteeringPipeline(controls=[], model=model, tokenizer=tokenizer)
         plain.steer()
 
         prompt = torch.tensor([[3, 4, 5, 6]])
@@ -158,7 +152,7 @@ class TestMixedBatch:
     def _row_scores(self):
         """Per-row scores for the separating probe, read from a forced probe run."""
         probes = ProbeSet({"sep": _probe([1], bias=0.0, seed=400)})
-        rules = RoutingRules(rules=[], default_action=generate())
+        rules = Router(routes=[], default_action=generate())
         pipeline, router, _, _ = _make_pipeline(probes, rules)
         pipeline.generate(input_ids=self.PROMPTS, max_new_tokens=1)
         return router.probes.latest.scores["sep"].tolist()
@@ -176,10 +170,10 @@ class TestMixedBatch:
             "hi": _probe([1], bias=-thr_hi, seed=400),
             "mid": _probe([1], bias=-thr_mid, seed=400),
         })
-        rules = RoutingRules(
-            rules=[
-                Rule("respond_route", when=P("hi"), action=respond("the mat")),
-                Rule("prefix_route", when=P("mid"), action=prefix("the dog")),
+        rules = Router(
+            routes=[
+                Route("respond_route", when=P("hi"), action=respond("the mat")),
+                Route("prefix_route", when=P("mid"), action=prefix("the dog")),
             ],
             default_action=generate(),
         )
@@ -202,8 +196,8 @@ class TestMixedBatch:
 
 class TestCannedOverrides:
     def _rules(self):
-        return RoutingRules(
-            rules=[Rule("canned", when=P("always"), action=respond("the cat sat"))],
+        return Router(
+            routes=[Route("canned", when=P("always"), action=respond("the cat sat"))],
             default_action=generate(),
         )
 
@@ -229,8 +223,8 @@ class TestCannedOverrides:
 
 class TestPaddedBatches:
     def test_mixed_length_batch_left_padding_tokenizer(self):
-        rules = RoutingRules(
-            rules=[Rule("canned", when=P("always"), action=respond("the cat sat"))],
+        rules = Router(
+            routes=[Route("canned", when=P("always"), action=respond("the cat sat"))],
             default_action=generate(),
         )
         pipeline, router, model, tokenizer = _make_pipeline(_forced_probes(), rules)
@@ -248,8 +242,8 @@ class TestPaddedBatches:
             assert all(t == tokenizer.pad_token_id for t in row[len(canned_ids):])
 
     def test_mixed_routes_mixed_lengths_continuations_exact(self):
-        rules = RoutingRules(
-            rules=[Rule("unreached", when=P("never"), action=respond("the mat"))],
+        rules = Router(
+            routes=[Route("unreached", when=P("never"), action=respond("the mat"))],
             default_action=generate(),
         )
         pipeline, router, model, tokenizer = _make_pipeline(_forced_probes(), rules)
@@ -266,9 +260,9 @@ class TestPaddedBatches:
 
 class TestRawPhasePlans:
     def test_list_of_phases_accepted_as_action(self):
-        rules = RoutingRules(
-            rules=[
-                Rule("raw", when=P("always"),
+        rules = Router(
+            routes=[
+                Route("raw", when=P("always"),
                      action=[Fixed("the cat", add_special_tokens=False)]),
             ],
             default_action=generate(),
@@ -278,8 +272,8 @@ class TestRawPhasePlans:
         assert out[0].tolist() == _text_ids(tokenizer, "the cat")
 
     def test_unloadable_action_raises(self):
-        rules = RoutingRules(
-            rules=[Rule("bad", when=P("always"), action=123)],
+        rules = Router(
+            routes=[Route("bad", when=P("always"), action=123)],
             default_action=generate(),
         )
         pipeline, _, _, _ = _make_pipeline(_forced_probes(), rules)
@@ -287,9 +281,9 @@ class TestRawPhasePlans:
             pipeline.generate(input_ids=torch.tensor([[3, 4, 5]]), max_new_tokens=2)
 
     def test_replacing_fixed_phase_rejected(self):
-        rules = RoutingRules(
-            rules=[
-                Rule("rewrite", when=P("always"),
+        rules = Router(
+            routes=[
+                Route("rewrite", when=P("always"),
                      action=[Fixed("the dog", replace=True, add_special_tokens=False)]),
             ],
             default_action=generate(),
@@ -321,8 +315,8 @@ class TestValidation:
     }
 
     def test_bad_rule_name_fails_at_construction_probe_set(self):
-        rules = RoutingRules(
-            rules=[Rule("r", when=P("ghost"), action=generate())],
+        rules = Router(
+            routes=[Route("r", when=P("ghost"), action=generate())],
             default_action=generate(),
         )
         with pytest.raises(ValueError, match="ghost"):
@@ -330,8 +324,8 @@ class TestValidation:
 
     def test_bad_rule_name_fails_at_construction_probe_set_fit(self):
         recipe = ProbeSetFit(data=self.DATA, spec=ProbeFitSpec(method="mean_diff"))
-        rules = RoutingRules(
-            rules=[Rule("r", when=P("ghost"), action=generate())],
+        rules = Router(
+            routes=[Route("r", when=P("ghost"), action=generate())],
             default_action=generate(),
         )
         with pytest.raises(ValueError, match="ghost"):
@@ -342,8 +336,8 @@ class TestValidation:
             data=self.DATA,
             spec=ProbeFitSpec(method="mean_diff", candidate_layers=[1]),
         )
-        rules = RoutingRules(
-            rules=[Rule("r", when=P("topic"), action=respond("the mat"))],
+        rules = Router(
+            routes=[Route("r", when=P("topic"), action=respond("the mat"))],
             default_action=generate(),
         )
         pipeline, router, model, _ = _make_pipeline(recipe, rules)
@@ -364,13 +358,13 @@ class TestValidation:
             data=self.DATA,
             spec=ProbeFitSpec(method="mean_diff", candidate_layers=[1]),
         )
-        rules = RoutingRules(
-            rules=[Rule("r", when=P("topic"), action=respond("the mat"))],
+        rules = Router(
+            routes=[Route("r", when=P("topic"), action=respond("the mat"))],
             default_action=generate(),
         )
         router = RoutedDecoding(probes=recipe, rules=rules)
         pipeline = SteeringPipeline(
-            controls=[_SwapModelControl(model_b), router], lazy_init=True
+            controls=[_SwapModelControl(model_b), router]
         )
         pipeline.model = model_a
         pipeline.tokenizer = tokenizer
@@ -382,8 +376,8 @@ class TestValidation:
 
     def test_eager_set_passes_through_steer_unchanged(self):
         probes = _forced_probes()
-        rules = RoutingRules(
-            rules=[Rule("r", when=P("always"), action=respond("the mat"))],
+        rules = Router(
+            routes=[Route("r", when=P("always"), action=respond("the mat"))],
             default_action=generate(),
         )
         _, router, _, _ = _make_pipeline(probes, rules)
@@ -395,8 +389,8 @@ class TestValidation:
         probes = ProbeSet({
             "always": _probe([1], bias=1e9, meta={"model_fingerprint": model_fingerprint(other)}),
         })
-        rules = RoutingRules(
-            rules=[Rule("r", when=P("always"), action=respond("the mat"))],
+        rules = Router(
+            routes=[Route("r", when=P("always"), action=respond("the mat"))],
             default_action=generate(),
         )
         with pytest.raises(ValueError, match="different model than this pipeline produced"):
@@ -406,16 +400,14 @@ class TestValidation:
         model = tiny_llama(num_layers=LAYERS, hidden=HIDDEN, heads=4)
         tokenizer = wordlevel_tokenizer()
         router = RoutedDecoding(probes=probes, rules=rules, allow_model_mismatch=True)
-        pipeline = SteeringPipeline(controls=[router], lazy_init=True)
-        pipeline.model = model
-        pipeline.tokenizer = tokenizer
+        pipeline = SteeringPipeline(controls=[router], model=model, tokenizer=tokenizer)
         pipeline.steer()
         out = pipeline.generate(input_ids=torch.tensor([[3, 4, 5]]), max_new_tokens=2)
         assert out[0].tolist() == _text_ids(tokenizer, "the mat")
 
     def test_probe_pass_is_auxiliary(self):
-        rules = RoutingRules(
-            rules=[Rule("note", when=P("always"), action=prefix("the dog"))],
+        rules = Router(
+            routes=[Route("note", when=P("always"), action=prefix("the dog"))],
             default_action=generate(),
         )
         pipeline, _, model, _ = _make_pipeline(_forced_probes(), rules)
@@ -435,13 +427,13 @@ class TestValidation:
         assert all(info is None for info in recorded[1:])
 
     def test_args_require_probes_instance(self):
-        rules = RoutingRules(rules=[], default_action=generate())
+        rules = Router(routes=[], default_action=generate())
         with pytest.raises(TypeError, match="ProbeSet"):
             RoutedDecoding(probes="not probes", rules=rules)
 
     def test_args_require_routing_rules(self):
-        with pytest.raises(TypeError, match="RoutingRules"):
+        with pytest.raises(TypeError, match="Router"):
             RoutedDecoding(
                 probes=_forced_probes(),
-                rules=[Rule("r", when=P("always"), action=generate())],
+                rules=[Route("r", when=P("always"), action=generate())],
             )

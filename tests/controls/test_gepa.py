@@ -8,7 +8,7 @@ import pytest
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from aisteer360.algorithms.input_control._common.pareto import ParetoFrontier
+from aisteer360.algorithms.input_control.common.pareto import ParetoFrontier
 from aisteer360.algorithms.input_control.gepa import GEPA, GEPAArgs
 from aisteer360.algorithms.input_control.gepa.utils import pareto_sampling
 from aisteer360.algorithms.input_control.gepa.utils.pool import CandidatePool
@@ -229,9 +229,7 @@ class TestGEPASteer:
             seen_contexts.append((context or {}).get("records", ""))
             return ["be concise"]
 
-        from aisteer360.algorithms.input_control._common.proposers.llm_meta_prompt import (
-            LLMMetaPromptProposer,
-        )
+        from aisteer360.algorithms.input_control.common.proposers.llm_meta_prompt import LLMMetaPromptProposer
         monkeypatch.setattr(LLMMetaPromptProposer, "propose", capturing_propose)
 
         # gold target lives in a distinctive sentinel field; format_query returns only the input.
@@ -277,12 +275,10 @@ class TestGEPASteer:
         def fake_propose(self, seed, n=1, context=None):
             return ["x" * 200]
 
-        from aisteer360.algorithms.input_control._common.proposers.llm_meta_prompt import (
-            LLMMetaPromptProposer,
-        )
+        from aisteer360.algorithms.input_control.common.proposers.llm_meta_prompt import LLMMetaPromptProposer
         monkeypatch.setattr(LLMMetaPromptProposer, "propose", fake_propose)
 
-        def scored_run(self, instruction, batch, *, with_feedback):
+        def scored_run(self, task_lm, instruction, batch, *, with_feedback):
             outputs = [""] * len(batch)
             scores = [min(1.0, len(instruction) / 200.0)] * len(batch)
             feedback = [f"score={s:.4f}" for s in scores] if with_feedback else None
@@ -341,9 +337,7 @@ class TestGEPAImprovementAcceptance:
         def fake_propose(self, seed, n=1, context=None):
             return [target_instruction]
 
-        from aisteer360.algorithms.input_control._common.proposers.llm_meta_prompt import (
-            LLMMetaPromptProposer,
-        )
+        from aisteer360.algorithms.input_control.common.proposers.llm_meta_prompt import LLMMetaPromptProposer
         monkeypatch.setattr(LLMMetaPromptProposer, "propose", fake_propose)
 
         gepa = GEPA(
@@ -357,7 +351,7 @@ class TestGEPAImprovementAcceptance:
         )
 
         # score by instruction length so the long target strictly beats the short seed and is accepted.
-        def scored_run(self, instruction, batch, *, with_feedback):
+        def scored_run(self, task_lm, instruction, batch, *, with_feedback):
             outputs = [""] * len(batch)
             scores = [min(1.0, len(instruction) / 200.0)] * len(batch)
             feedback = [f"score={s:.4f}" for s in scores] if with_feedback else None
@@ -388,9 +382,9 @@ class TestGEPABudget:
 
         original_run = GEPA._run
 
-        def counting_run(self, instruction, batch, *, with_feedback):
+        def counting_run(self, task_lm, instruction, batch, *, with_feedback):
             calls.append(len(batch))
-            return original_run(self, instruction, batch, with_feedback=with_feedback)
+            return original_run(self, task_lm, instruction, batch, with_feedback=with_feedback)
 
         gepa._run = counting_run.__get__(gepa, GEPA)
         gepa.steer(model=model, tokenizer=tokenizer)
@@ -443,3 +437,32 @@ class TestGEPAAdapt:
         )
         with pytest.raises(RuntimeError, match="before .steer"):
             gepa.adapt(torch.tensor([[1, 2, 3]]))
+
+
+class TestGEPASessionOnlySteer:
+    """The steer phase completes with model=None against a session-only fake (ROLLOUTS)."""
+
+    def test_steer_completes_with_model_none(self):
+        from tests.utils.runtime_helpers import ScriptedSession
+        from tests.utils.tiny_models import wordlevel_tokenizer
+
+        tokenizer = wordlevel_tokenizer()
+
+        def fake_generate(input_ids=None, attention_mask=None, **gen_kwargs):
+            continuation = torch.full((input_ids.size(0), 2), 4, dtype=torch.long)
+            return torch.cat([input_ids, continuation], dim=1)
+
+        gepa = GEPA(
+            seed_instruction="seed instruction",
+            train_set=[{"input": "the cat"}, {"input": "the dog"}],
+            row_scorer=lambda out, row: float(len(out)),
+            budget=4,
+            minibatch_size=1,
+            pareto_set_size=1,
+            seed=0,
+            gen_kwargs={"max_new_tokens": 2, "do_sample": False},
+            proposer_gen_kwargs={"max_new_tokens": 2, "do_sample": False},
+        )
+        gepa.steer(model=None, tokenizer=tokenizer, session=ScriptedSession(fake_generate, tokenizer=tokenizer))
+        assert gepa.memory is not None
+        assert len(gepa.memory["instruction"]) > 0

@@ -7,14 +7,27 @@ from typing import Sequence
 import torch
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
-from aisteer360.algorithms.state_control._common.model_layout import resolve_model_layout
-from aisteer360.algorithms.state_control.base import StateControl
+from aisteer360.algorithms.core.execution.access import ModelAccess
+from aisteer360.algorithms.core.execution.contracts import Capability, Requirements, SpecConstraint, needs
+from aisteer360.algorithms.core.execution.spec import BackendSpec
+from aisteer360.algorithms.state_control.base import HookControl
+from aisteer360.algorithms.state_control.common.model_layout import resolve_model_layout
 from aisteer360.algorithms.state_control.pasta.args import PASTAArgs
 
 logger = logging.getLogger(__name__)
 
+SUPPORTED_ATTN_IMPLEMENTATIONS = ("eager", "sdpa")
 
-class PASTA(StateControl):
+
+def _attn_implementation_supported(spec: BackendSpec) -> bool:
+    """True unless a huggingface spec configures an attention implementation PASTA cannot steer."""
+    if spec.kind != "huggingface":
+        return True
+    impl = spec.get_option("hf_model_kwargs", "attn_implementation")
+    return impl is None or impl in SUPPORTED_ATTN_IMPLEMENTATIONS
+
+
+class PASTA(HookControl):
     """
     Implementation of PASTA (Post-hoc Attention STeering Approach) from Zhang et al., 2023.
 
@@ -83,6 +96,37 @@ class PASTA(StateControl):
     _layers: list[int] | None = None
     _attn_module_names: dict[int, str] | None = None
     _scale_constant: torch.Tensor | None = None
+
+    def requirements(self) -> Requirements:
+        """Backend requirements for attention-map editing.
+
+        PASTA writes into attention maps through torch hooks, which fused paged-attention
+        kernels never materialize, so the generate phase requires `Capability.IN_PROCESS_TORCH`.
+        The spec constraint reports a configured incompatible attention implementation
+        (`hf_model_kwargs["attn_implementation"]` outside `"eager"`/`"sdpa"`) at `check()` time,
+        before any model loads; the same condition is re-checked against the live model in
+        `steer()`.
+
+        Returns:
+            The control's phase-keyed requirements.
+        """
+        return Requirements(
+            generate=needs(Capability.IN_PROCESS_TORCH),
+            spec_constraints=(
+                SpecConstraint(
+                    description=(
+                        "PASTA requires attn_implementation 'eager' or 'sdpa' to inject a 4D "
+                        "attention mask; set attn_implementation=\"eager\" in hf_model_kwargs."
+                    ),
+                    predicate=_attn_implementation_supported,
+                ),
+            ),
+        )
+
+    def steer_access(self) -> ModelAccess:
+        """`ModelAccess.MODULE`; the attention module paths resolve on the live model, which
+        is retained for the hook closures (the generate phase is in-process)."""
+        return ModelAccess.MODULE
 
     def steer(
         self, model: PreTrainedModel, tokenizer: PreTrainedTokenizer | None = None, **__

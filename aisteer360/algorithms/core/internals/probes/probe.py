@@ -219,23 +219,22 @@ class Probe:
             meta=metadata["meta"],
         )
 
-    def as_condition(self, *, cache_once: bool = True, allow_model_mismatch: bool = False) -> dict:
-        """Condition-port kwargs for `ActivationAdapter`, driving steering with this probe.
+    def as_gate(self, *, allow_model_mismatch: bool = False):
+        """A steering gate reproducing this probe's decision, for gated interventions.
 
-        Returns the `{"score_fn", "gate", "condition_layer_ids"}` mapping accepted by
-        `ActivationAdapter`, so an intervention fires only where the probe's decision is open.
+        The gate reads the probe's layers at the probe's pooling, scores each pooled state
+        against the probe's weights, and opens where the summed contributions plus the
+        calibrated bias are at or above zero (ties open). The decision is evaluated on the
+        prompt and holds for the whole generation.
 
         Args:
-            cache_once: When True, the gate decision is frozen after the prompt is scored and
-                holds for the whole generation.
-            allow_model_mismatch: When True, the adapter's model-identity check for this probe
-                is disarmed.
+            allow_model_mismatch: When True, the intervention's model-identity check for this
+                probe is disarmed.
 
         Returns:
-            Keyword arguments for `ActivationAdapter`: a per-layer contribution scorer
-            (`"score_fn"`), the summing gate (`"gate"`), and `"condition_layer_ids"`.
+            A `Gate` for an `Intervention`'s gate slot (e.g. `ActivationAdapter`'s `gate=`).
         """
         # the single sanctioned function-local import from core/internals into a category package
-        from aisteer360.algorithms.state_control._common.condition_scorers import probe_condition
+        from aisteer360.algorithms.state_control.common.gating import gate_from_probe
 
-        return probe_condition(self, cache_once=cache_once, allow_model_mismatch=allow_model_mismatch)
+        return gate_from_probe(self, allow_model_mismatch=allow_model_mismatch)

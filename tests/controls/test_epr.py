@@ -8,8 +8,8 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.input_control._common.memory.pool import PoolMemory
-from aisteer360.algorithms.input_control._common.selectors.base import BaseSelector
+from aisteer360.algorithms.input_control.common.memory.pool import PoolMemory
+from aisteer360.algorithms.input_control.common.selectors.base import BaseSelector
 from aisteer360.algorithms.input_control.few_shot import FewShot
 from aisteer360.algorithms.input_control.few_shot.selectors.epr import EPRSelector
 from aisteer360.algorithms.input_control.few_shot.selectors.epr.utils import bm25_index
@@ -68,10 +68,9 @@ class TestEPRSelector:
             selector.select([{"input": "a", "output": "b"}], query="q", k=1)
 
     def test_subclass_is_dense_retrieval_selector(self):
-        from aisteer360.algorithms.input_control._common.selectors.dense_retrieval import (
-            DenseRetrievalSelector,
-        )
         from inspect import isclass
+
+        from aisteer360.algorithms.input_control.common.selectors.dense_retrieval import DenseRetrievalSelector
         assert issubclass(EPRSelector, DenseRetrievalSelector)
         assert issubclass(EPRSelector, BaseSelector)
         assert isclass(EPRSelector)
@@ -162,9 +161,7 @@ class TestEPRWithFewShot:
             k_positive=1,
             selector=epr,
         )
-        pipeline = SteeringPipeline(controls=[fewshot], lazy_init=True)
-        pipeline.model = scoring_lm
-        pipeline.tokenizer = scoring_tok
+        pipeline = SteeringPipeline(controls=[fewshot], model=scoring_lm, tokenizer=scoring_tok)
         pipeline.steer()
 
         # capture the actual query passed into the selector during adapt
@@ -206,9 +203,7 @@ class TestEPRWithFewShot:
             k_positive=1,
             selector=epr,
         )
-        pipeline = SteeringPipeline(controls=[fewshot], lazy_init=True)
-        pipeline.model = scoring_lm
-        pipeline.tokenizer = scoring_tok
+        pipeline = SteeringPipeline(controls=[fewshot], model=scoring_lm, tokenizer=scoring_tok)
         pipeline.steer()
 
         # adapt_messages should now use the trained encoder for retrieval

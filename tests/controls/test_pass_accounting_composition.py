@@ -13,19 +13,19 @@ import warnings
 import pytest
 import torch
 
+from aisteer360.algorithms.core.execution.access import ModelAccess
 from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.output_control._common.candidate_forward import CandidateForward
-from aisteer360.algorithms.output_control._common.logit_sources import PromptVariantSource
 from aisteer360.algorithms.output_control.base import OutputControl
+from aisteer360.algorithms.output_control.common.candidate_forward import CandidateForward
+from aisteer360.algorithms.output_control.common.logit_sources import PromptVariantSource
 from aisteer360.algorithms.output_control.contrastive_guidance.control import ContrastiveGuidance
 from aisteer360.algorithms.output_control.phased_decoding.control import PhasedDecoding
 from aisteer360.algorithms.output_control.search_decoding.control import SearchDecoding
-from aisteer360.algorithms.state_control._common.gates import AlwaysOpenGate
-from aisteer360.algorithms.state_control._common.gates.base import BaseGate
-from aisteer360.algorithms.state_control._common.runtime import TransformHookRuntime
-from aisteer360.algorithms.state_control._common.token_scope import compute_prompt_lens
 from aisteer360.algorithms.state_control.base import StateControl
-from tests.utils.runtime_helpers import RecordingTransform
+from aisteer360.algorithms.state_control.common.gating import CallableReadout, Evidence, Gate
+from aisteer360.algorithms.state_control.common.runtime import TransformHookRuntime
+from aisteer360.algorithms.state_control.common.token_scope import compute_prompt_lens
+from tests.utils.runtime_helpers import NeverCompleteRule, RecordingTransform
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 HIDDEN = 32
@@ -36,24 +36,12 @@ PROMPT_IDS = torch.arange(3, 7, dtype=torch.long).unsqueeze(0)  # prompt_len 4
 GEN_KWARGS = {"do_sample": False, "eos_token_id": None}
 
 
-class _NeverReadyGate(BaseGate):
-    """Gate that never reports ready and keeps every row open."""
-
-    def update(self, scores, *, key=None):
-        pass
-
-    def open_rows(self):
-        return torch.ones(self.num_rows, dtype=torch.bool)
-
-    def is_ready(self):
-        return False
-
-
 class _RecordingStateControl(StateControl):
     """Real state control on the shared runtime: records token masks and adds a constant.
 
     With `with_condition=True`, a condition hook on `model.layers.0` (the pass opener) feeds a
-    never-ready gate through a counting scorer, and the behavior hook follows as a non-opener.
+    never-complete gate through a counting readout, and the behavior hook follows as a
+    non-opener.
     """
 
     Args = None
@@ -70,26 +58,29 @@ class _RecordingStateControl(StateControl):
         self.from_position = from_position
         self.runtime = TransformHookRuntime(hook_point=hook_point)
         self.transform = RecordingTransform(value=0.5)
-        self.gate = _NeverReadyGate() if with_condition else AlwaysOpenGate()
         self.scorer_calls: list[tuple] = []
+        self.gate = None
+        if with_condition:
+            def readout(pooled, layer_id):
+                self.scorer_calls.append(tuple(pooled.shape))
+                return torch.zeros(pooled.size(0))
+
+            self.gate = Gate(Evidence((0,), CallableReadout(readout)), NeverCompleteRule(open=True))
 
     def get_hooks(self, input_ids, runtime_kwargs, attention_mask=None, **kwargs):
         ids = input_ids if isinstance(input_ids, torch.Tensor) else input_ids["input_ids"]
         if ids.ndim == 1:
             ids = ids.unsqueeze(0)
         self.runtime.reset(compute_prompt_lens(ids, None))
-        self.gate.reset(self.runtime.num_logical_rows)
+        if self.gate is not None:
+            self.gate.reset(self.runtime.num_logical_rows)
 
         specs = {"pre": [], "forward": [], "backward": []}
         if self.with_condition:
-            def scorer(hidden, layer_id, *, prompt_mask=None):
-                self.scorer_calls.append(tuple(hidden.shape))
-                return torch.zeros(hidden.size(0))
-
             specs["forward"].append({
                 "module": "model.layers.0",
                 "hook_func": self.runtime.build_condition_hook(
-                    layer_id=0, scorer=scorer, gate=self.gate, is_pass_opener=True),
+                    layer_id=0, gate=self.gate, is_pass_opener=True),
             })
         behavior_hook = self.runtime.build_behavior_hook(
             layer_id=1, transform=self.transform, gate=self.gate,
@@ -110,6 +101,9 @@ class _SameModelScoringControl(OutputControl):
     Args = None
     same_model_forwards = True
 
+    def steer_access(self) -> ModelAccess:
+        return ModelAccess.MODULE
+
     def steer(self, model, tokenizer=None, **kwargs):
         self.model = model
         return model
@@ -126,9 +120,7 @@ class _SameModelScoringControl(OutputControl):
 
 
 def _steered_pipeline(model, tokenizer, controls) -> SteeringPipeline:
-    pipeline = SteeringPipeline(controls=controls, lazy_init=True)
-    pipeline.model = model
-    pipeline.tokenizer = tokenizer
+    pipeline = SteeringPipeline(controls=controls, model=model, tokenizer=tokenizer)
     pipeline.steer()
     return pipeline
 

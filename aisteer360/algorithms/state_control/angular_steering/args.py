@@ -5,9 +5,9 @@ from typing import Literal
 
 from aisteer360.algorithms.core.base_args import BaseArgs
 from aisteer360.algorithms.core.internals.data import ContrastivePairs, as_contrastive_pairs
-from aisteer360.algorithms.state_control._common.specs import VectorTrainSpec
-from aisteer360.algorithms.state_control._common.steering_vector import SteeringVector
-from aisteer360.algorithms.state_control._common.token_scope import TokenScope
+from aisteer360.algorithms.state_control.common.fit_specs import VectorTrainSpec
+from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
+from aisteer360.algorithms.state_control.common.token_scope import ScopeKind
 
 
 @dataclass
@@ -36,6 +36,12 @@ class AngularSteeringArgs(BaseArgs):
             raw projection.
         layer_range: Half-open `[start, end)` range of layers to steer. If None, steer every
             layer for which a plane exists.
+        intervention_point: Where the rotation applies. `"norms"` (default) pre-hooks each
+            active layer's two normalization sub-modules, rotating the stream entering the
+            layer and the mid-layer stream after attention. `"layer_output"` forward-hooks each
+            active decoder layer, rotating its residual-stream output once per layer; this is
+            the only placement with an intervention-spec form, since the mid-layer boundary
+            exists only inside the in-process forward pass.
         use_norm_preservation: If True, additionally wrap in `NormPreservingTransform` as a guard
             against float drift (rotation already preserves norm by construction).
         token_scope: Which tokens to steer (see `make_token_mask`).
@@ -65,10 +71,11 @@ class AngularSteeringArgs(BaseArgs):
 
     # layer / norm configuration
     layer_range: tuple[int, int] | None = None  # half-open [start, end)
+    intervention_point: Literal["norms", "layer_output"] = "norms"
     use_norm_preservation: bool = False
 
     # inference configuration
-    token_scope: TokenScope = "all"
+    token_scope: ScopeKind = "all"
     last_k: int | None = None
     from_position: int | None = None
 
@@ -112,6 +119,12 @@ class AngularSteeringArgs(BaseArgs):
         # validate mode
         if self.mode not in ("target", "offset"):
             raise ValueError(f"mode must be 'target' or 'offset'; got {self.mode!r}.")
+
+        # validate intervention point
+        if self.intervention_point not in ("norms", "layer_output"):
+            raise ValueError(
+                f"intervention_point must be 'norms' or 'layer_output'; got {self.intervention_point!r}."
+            )
 
         # validate layer_range
         if self.layer_range is not None:

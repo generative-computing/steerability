@@ -3,7 +3,7 @@
 Pins the consolidated construction contract: the null-argument guard and its message, args-field
 mirroring (with reachability via `self.args`), the `@property`-name skip in every category, the
 `_configure()` hook firing on both the null and non-null paths in every category, the class-attribute
-defaults, and `NoStateControl`'s inert empty hook state.
+defaults.
 """
 from dataclasses import dataclass
 
@@ -13,7 +13,7 @@ from aisteer360.algorithms.core.base_args import BaseArgs
 from aisteer360.algorithms.core.base_control import BaseControl
 from aisteer360.algorithms.input_control.base import InputControl
 from aisteer360.algorithms.output_control.base import OutputControl
-from aisteer360.algorithms.state_control.base import NoStateControl, StateControl
+from aisteer360.algorithms.state_control.base import StateControl
 from aisteer360.algorithms.structural_control.base import StructuralControl
 
 
@@ -106,9 +106,3 @@ class TestConstruction:
 def test_all_categories_subclass_base_control():
     for base in (InputControl, StructuralControl, StateControl, OutputControl):
         assert issubclass(base, BaseControl)
-
-
-def test_no_state_control_carries_inert_hook_state():
-    control = NoStateControl()
-    assert control.hooks == {"pre": [], "forward": [], "backward": []}
-    assert control.registered == []

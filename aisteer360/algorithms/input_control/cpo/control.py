@@ -18,28 +18,18 @@ from typing import Any
 import numpy as np
 import torch
 
+from aisteer360.algorithms.core.execution.access import ModelAccess
+from aisteer360.algorithms.core.execution.contracts import Capability, Requirements, needs
+from aisteer360.algorithms.core.execution.session_utils import SessionLM
 from aisteer360.algorithms.input_control.base import InputControl
-from aisteer360.algorithms.input_control._common.formatters.system_prompt import (
-    SystemPromptFormatter,
-)
-from aisteer360.algorithms.input_control._common.memory.text import TextMemory
-from aisteer360.algorithms.input_control._common.proposers.llm_meta_prompt import (
-    LLMMetaPromptProposer,
-)
-from aisteer360.algorithms.input_control._common.proposers.utils.parsing import (
-    parse_concise_instruction,
-)
-from aisteer360.algorithms.input_control._common.scorers.task_evaluation import (
-    TaskEvaluationScorer,
-)
+from aisteer360.algorithms.input_control.common.formatters.system_prompt import SystemPromptFormatter
+from aisteer360.algorithms.input_control.common.memory.text import TextMemory
+from aisteer360.algorithms.input_control.common.proposers.llm_meta_prompt import LLMMetaPromptProposer
+from aisteer360.algorithms.input_control.common.proposers.utils.parsing import parse_concise_instruction
+from aisteer360.algorithms.input_control.common.scorers.task_evaluation import TaskEvaluationScorer
 from aisteer360.algorithms.input_control.cpo.args import CPOArgs
-from aisteer360.algorithms.input_control.cpo.utils import (
-    causal_reward,
-    refinement_meta_prompt,
-)
-from aisteer360.algorithms.input_control.cpo.utils.causal_reward import (
-    CausalRewardScorer,
-)
+from aisteer360.algorithms.input_control.cpo.utils import causal_reward, refinement_meta_prompt
+from aisteer360.algorithms.input_control.cpo.utils.causal_reward import CausalRewardScorer
 from aisteer360.algorithms.input_control.cpo.utils.embeddings import TextEncoder
 
 logger = logging.getLogger(__name__)
@@ -119,31 +109,59 @@ class CPO(InputControl):
     _proposer: LLMMetaPromptProposer | None = None
     _encoder: TextEncoder | None = None
 
+    def requirements(self) -> Requirements:
+        """Backend requirements computed from this instance's configuration, per phase.
+
+        With `prompt_lm` supplied the proposer is a control-owned auxiliary and every phase is
+        prompt-only. With `prompt_lm` unset the live pipeline model is bound as the proposer at
+        steer and consulted per query at adapt, so the generate phase requires
+        `Capability.IN_PROCESS_TORCH`."""
+        if self.prompt_lm is not None:
+            return Requirements()
+        return Requirements(generate=needs(
+            Capability.IN_PROCESS_TORCH,
+            hint="set prompt_lm to run CPO's per-query search off the pipeline model",
+        ))
+
+    def steer_access(self) -> ModelAccess:
+        """`ModelAccess.ROLLOUTS` with `prompt_lm` supplied (offline data generation rides the
+        session); `ModelAccess.MODULE` with `prompt_lm` unset (the live model is bound as the
+        proposer)."""
+        if self.prompt_lm is not None:
+            return ModelAccess.ROLLOUTS
+        return ModelAccess.MODULE
+
     def steer(
         self,
         model=None,
         tokenizer=None,
+        session=None,
         **kwargs,
     ) -> None:
         self.tokenizer = tokenizer
 
-        encoder_device = next(model.parameters()).device if model is not None else None
+        if self.prompt_lm is not None:
+            proposer_lm = self.prompt_lm
+            encoder_device = None
+        else:
+            proposer_lm = model
+            encoder_device = next(model.parameters()).device if model is not None else None
         self._encoder = TextEncoder(
             self.embedding_model,
             device=encoder_device,
             trust_remote_code=self.trust_remote_code,
         )
 
-        prompt_lm = self.prompt_lm if self.prompt_lm is not None else model
         self._proposer = LLMMetaPromptProposer(
-            llm=prompt_lm,
+            llm=proposer_lm,
             tokenizer=tokenizer,
             meta_prompt_template=self.refinement_meta_prompt or refinement_meta_prompt.CPO_DEFAULT,
             gen_kwargs=self.proposer_gen_kwargs,
             parse_fn=parse_concise_instruction,
         )
 
-        offline_data = self.offline_data or self._generate_offline_data(model, tokenizer)
+        task_lm = model if model is not None else (SessionLM(session) if session is not None else None)
+        offline_data = self.offline_data or self._generate_offline_data(task_lm, tokenizer)
         scorer = causal_reward.train(
             offline_data=offline_data,
             embedding_model=self.embedding_model,
@@ -158,7 +176,7 @@ class CPO(InputControl):
         self.memory = CPOMemory(causal_scorer=scorer)
         self._formatter = SystemPromptFormatter()
 
-    def _generate_offline_data(self, model, tokenizer) -> list[dict]:
+    def _generate_offline_data(self, task_lm, tokenizer) -> list[dict]:
         """Build ⟨query, prompt, score⟩ rows from `train_dataset` × proposer × metric.
 
         Each training row contributes `n_prompts_per_query` ⟨q, p, s⟩ triples (including the seed
@@ -184,7 +202,7 @@ class CPO(InputControl):
                 )
 
             scorer = TaskEvaluationScorer(
-                task_lm=model,
+                task_lm=task_lm,
                 tokenizer=tokenizer,
                 dev_set=[dev_row],
                 metric=self.metric,

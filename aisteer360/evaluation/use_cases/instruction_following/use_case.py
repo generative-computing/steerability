@@ -5,6 +5,7 @@ from typing import Any
 
 from aisteer360.evaluation.use_cases.base import UseCase
 from aisteer360.evaluation.utils.generation_utils import (
+    DEFAULT_EVAL_BATCH_SIZE,
     batch_retry_generate,
     log_truncation_count,
     output_record_fields,
@@ -55,19 +56,24 @@ class InstructionFollowing(UseCase):
         model_or_pipeline,
         tokenizer,
         gen_kwargs: dict | None = None,
-        runtime_overrides: dict[tuple[str, str], str] | None = None,
+        runtime_overrides: dict[str, dict[str, Any]] | None = None,
+        batch_size: int = DEFAULT_EVAL_BATCH_SIZE,
         **kwargs
     ) -> list[dict[str, Any]]:
         """Generates model responses for instruction following prompts.
 
         Processes evaluation data to create chat-formatted prompts and generates model responses.
 
+        The constructed chat ``"prompt"`` key on each prompt row shadows the instance's raw ``"prompt"`` string
+        column, so a ``runtime_overrides`` column must be named distinctly from ``"prompt"`` to reach the raw text.
+
         Args:
             model_or_pipeline: Either a HuggingFace model or SteeringPipeline instance to use for generation.
             tokenizer: Tokenizer for encoding/decoding text.
             gen_kwargs: Optional generation parameters passed to the model's generate method.
-            runtime_overrides: Optional runtime parameter overrides for steering controls, structured as
-                {(pipeline_name, param_name): value}.
+            runtime_overrides: Optional runtime parameter overrides for steering controls, keyed by control class name
+                as ``{control_class_name: {variable: column_name}}``; each column resolves against the prompt rows.
+            batch_size: Generation batch size.
 
         Returns:
             List of generation dictionaries, each containing:
@@ -77,27 +83,27 @@ class InstructionFollowing(UseCase):
                 - "instructions": List of specific instructions the model should follow
                 - "instruction_id_list": Identifiers for each instruction type
                 - "kwargs": Additional metadata for instruction evaluation
+                - "thinking": Reasoning segment split from the continuation, or None if no think tag
+                    is present. This constructed key shadows any same-named instance column.
         """
         if not self.evaluation_data:
             logger.warning("No evaluation data provided")
             return []
         gen_kwargs = dict(gen_kwargs or {})
-        batch_size: int = int(kwargs["batch_size"])
 
-        # form prompt data
+        # form prompt data; the constructed chat "prompt" shadows the instance's raw "prompt" column
         prompt_data = []
         for instance in self.evaluation_data:
-            user_prompt = [{"role": "user", "content": instance["prompt"]}]
-            prompt_data.append({"prompt": user_prompt})
+            prompt_data.append({**instance, "prompt": [{"role": "user", "content": instance["prompt"]}]})
 
-        responses, _, outputs = batch_retry_generate(
+        responses, _, outputs, thinking = batch_retry_generate(
             prompt_data=prompt_data,
             model_or_pipeline=model_or_pipeline,
             tokenizer=tokenizer,
             gen_kwargs=gen_kwargs,
             runtime_overrides=runtime_overrides,
-            evaluation_data=self.evaluation_data,
             return_outputs=True,
+            return_thinking=True,
             batch_size=batch_size
         )
 
@@ -110,9 +116,10 @@ class InstructionFollowing(UseCase):
                 "instructions": eval_data["instructions"],
                 "instruction_id_list": eval_data["instruction_id_list"],
                 "kwargs": eval_data["kwargs"],
+                "thinking": think,
                 **output_record_fields(output, tokenizer),
             }
-            for eval_data, response, output in zip(self.evaluation_data, responses, outputs)
+            for eval_data, response, output, think in zip(self.evaluation_data, responses, outputs, thinking)
         ]
 
         return generations

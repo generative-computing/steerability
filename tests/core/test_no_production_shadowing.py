@@ -9,7 +9,7 @@ Flags, anywhere under `tests/`:
 
 The module also runs standalone against an arbitrary directory
 (`python3 tests/core/test_no_production_shadowing.py <directory>`), printing findings and
-exiting nonzero when any are present. 
+exiting nonzero when any are present.
 """
 import ast
 import sys
@@ -18,14 +18,31 @@ from pathlib import Path
 PRODUCTION_CLASSES = {
     "BaseArgs", "BaseControl", "Metric", "UseCase",
     "InputControl", "StructuralControl", "StateControl", "OutputControl",
-    "DecodingDriver", "HFGenerateDriver",
-    "NoInputControl", "NoStructuralControl", "NoStateControl",
+    "DecodingDriver",
+    "InterventionControl", "HookControl", "SteeredSession",
     "SteeringPipeline", "Benchmark", "ControlSpec", "Output",
+    "Backend", "BackendSpec", "BackendCapabilities", "Capability",
+    "InterventionKinds", "ProcessorKinds", "CaptureKinds",
+    "Requirements", "SpecConstraint", "SupportReport", "SupportFailure",
+    "ConstrainedDecoding",
+    "ConstraintSource",
+    "ConstraintKinds",
+    "ConstraintEntry",
+    "InterventionSpec",
+    "InterventionEntry",
+    "HFBackend", "ExclusiveSession", "SteeringSession", "ModelLayout", "ModelFacts",
+    "PreparedPrompt", "GenerationParams", "GenerationItem", "ScoringItem",
+    "ItemResult", "CaptureResult", "HookEntry", "StackEntry",
+    "VLLMBackend", "VLLMServeBackend", "VLLMOfflineSession", "VLLMServeSession",
+    "PartialBatchError", "TransportError",
+    "Artifact", "ArtifactProvenance", "ModelArtifact", "CheckpointArtifact", "LoRAArtifact",
 }
 
 PRODUCTION_FUNCTIONS = {
     "merge_controls", "ensure_pad_token", "warn_if_adapt_messages_bypassed",
     "infer_attention_mask_from_ids", "to_left_pad", "warn_if_duplicate_bos",
+    "derive_item_seed", "run_bounded", "with_transport_retries",
+    "render_vllm_sampling_args", "truncate_at_stop_strings", "merge_lowered_params",
 }
 
 
