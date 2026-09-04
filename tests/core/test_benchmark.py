@@ -521,7 +521,7 @@ class TestBenchmarkCheckpointing:
 
         with (tmp_path / "checkpoint.json").open(encoding="utf-8") as handle:
             saved = json.load(handle)
-        saved_params = saved["baseline"][0]["params"]
+        saved_params = saved["profiles"]["baseline"][0]["params"]
         assert saved_params[0] == "models/base"
         assert sorted(saved_params[1]["layers"]) == [1, 2]
 
