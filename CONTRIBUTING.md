@@ -25,9 +25,9 @@ Signed-off-by: Random J Developer <random@developer.example.org>
 
 
 ## Development setup
-Install the toolkit with the `dev` extra (which pulls in the full feature set via `all`, plus the test and
-pre-commit tooling):
-`uv pip install -e ".[dev]"`
+Install the toolkit with the `all` extra and the default `dev` dependency group (pytest, pre-commit, and notebook
+tooling):
+`uv sync --extra all`
 
 Coding Style Guidelines
 We are using tools to enforce code style:
@@ -41,7 +41,7 @@ To run the checks on-demand, run:
 `pre-commit run --all-files`
 
 ## Contributing to documentation
-`uv pip install  -e ".[docs]"`
+`uv sync --extra all --group docs`
 
 We use [MkDocs](https://www.mkdocs.org/) to write documentation.
 

@@ -64,14 +64,14 @@ steerability/
 ├── spipe/                       # .spipe serialization: SPipe, manifest format, value codec,
 │                                # content-addressed artifact store, freeze orchestration
 ├── backends/                    # huggingface/ (HFBackend, ExclusiveSession); vllm/ (VLLMBackend, VLLMServeBackend)
-├── evaluation/                  # Inspect AI stack (optional `inspect` extra; __init__ stays empty)
+├── evaluation/                  # Inspect AI stack (optional `eval` extra; __init__ stays empty)
 │   ├── provider.py              # ProviderOptions, SteeringPipelineModelAPI, as_inspect_model
 │   ├── batching.py              # lock-leader collator (batched dispatch over concurrent requests)
 │   ├── solvers.py               # runtime_kwargs_solver (per-sample runtime kwargs)
 │   ├── scorers.py               # sample_scorer_from_inspect (Inspect scorers as SampleScorer rewards)
 │   ├── suite.py                 # InspectSuite (task sets over eval_set)
 │   ├── runner.py                # SteeringEval (configs x trials x suites, results frame, runs_frame)
-│   └── plotting.py              # summary-frame plots over runs_frame output (optional `viz` extra)
+│   └── plotting.py              # summary-frame plots over runs_frame output (optional `eval` extra)
 └── utils/                       # tokenization, rendering, thinking, optional-dependency guard, verbosity
                                  # (opt-in package logging)
 
@@ -86,32 +86,29 @@ tests/                           # controls/, core/, internals/, evaluation/, ut
 Python 3.12+ with `uv` as the package manager:
 
 ```bash
-uv venv --python 3.12 && uv pip install -e ".[dev]"
+uv sync --extra all
 source .venv/bin/activate
 ```
 
-On Windows, run the two chained commands separately.
+Optional extras, in three tiers:
 
-Optional extras:
+- backends: `vllm`, the vLLM backends plus the `vllm_hook_plugins` core; pulls in `trl[vllm]` so the resolved vLLM
+  stays inside trl's supported vLLM range
+- workflows: `eval`, the Inspect AI evaluation stack plus matplotlib and seaborn for `evaluation/plotting.py`
+- method-specific: `merging` (MergeKit)
+- `all`: `eval`
 
-- `merging`: MergeKit
-- `cpo`: econml
-- `inspect`: the Inspect AI evaluation stack
-- `vllm`: the vLLM backends plus the `vllm_hook_plugins` core; pulls in `trl[vllm]` so the resolved vLLM stays
-  inside trl's supported vLLM range
-- `guided`: xgrammar, for in-process constrained decoding
-- `viz`: matplotlib and seaborn, for `evaluation/plotting.py`
-- `all`: `cpo`, `inspect`, and `viz`
-- `dev`: `all` plus the plugin core, pytest, pre-commit, and notebook
-- `docs`: site tooling
+Contributor tooling lives in `[dependency-groups]`: `dev` (pytest, pre-commit, the plugin core, and the `notebooks`
+group), `notebooks` (notebook, ipywidgets, textstat, nltk), and `docs` (site tooling). `uv sync` installs `dev` by
+default; add `--group docs` or `--group notebooks` as needed.
 
-`merging` cannot share an environment with `inspect` (MergeKit pins an older pydantic than Inspect requires), so it
-stays out of `all`, `dev`, `docs`, and `vllm`; `pyproject.toml` declares these as `[tool.uv] conflicts`. The
-optional-module-to-extra mapping lives in `OPTIONAL_MODULE_EXTRAS` (`steerability/utils/optional.py`).
+`merging` cannot share an environment with `eval` (MergeKit pins an older pydantic than Inspect requires), so it stays
+out of `all` and `vllm`; `pyproject.toml` declares these as `[tool.uv] conflicts`. The optional-module-to-extra mapping
+lives in `OPTIONAL_MODULE_EXTRAS` (`steerability/utils/optional.py`).
 
-Hugging Face access uses a `.env` file at the repo root containing `HUGGINGFACE_TOKEN=hf_***` (see
-`.env.example`). Some models (e.g. `meta-llama/*`) are gated; the account behind the token needs access on the
-model's Hub page. Never commit tokens; a detect-secrets pre-commit hook scans against `.secrets.baseline`.
+Hugging Face access uses the standard mechanism: `hf auth login` once, or `HF_TOKEN=hf_***` in the environment. Some
+models (e.g. `meta-llama/*`) are gated; the account behind the token needs access on the model's Hub page. Never commit
+tokens; a detect-secrets pre-commit hook scans against `.secrets.baseline`.
 
 Models run inside the current process on the default Hugging Face backend; the vLLM backends execute on a local
 engine or a remote server instead. Real steering runs need GPU memory for the base checkpoint plus the method's
@@ -126,7 +123,7 @@ pytest tests/controls/test_pasta.py       # one control
 pytest tests/core/ tests/internals/       # pipeline, registry, probes
 pre-commit install                        # once per clone
 pre-commit run --all-files                # detect-secrets, whitespace/EOF fixers, large files, isort (black profile)
-uv pip install -e ".[docs]" && uv run mkdocs serve   # docs at localhost:8000
+uv sync --extra all --group docs && uv run mkdocs serve   # docs at localhost:8000
 ```
 
 Tests parametrize over the models in `tests/utils/ci_models.yaml` and over devices (`cpu`, `cuda`, `mps`); unavailable
@@ -396,7 +393,7 @@ loaded.steer()
 
 ### Evaluation
 
-Evaluation runs steered pipelines on [Inspect AI](https://inspect.aisi.org.uk/) tasks (optional `inspect` extra).
+Evaluation runs steered pipelines on [Inspect AI](https://inspect.aisi.org.uk/) tasks (optional `eval` extra).
 `as_inspect_model(pipeline)` wraps a steered pipeline as a generation-only Inspect model; an `InspectSuite` names a
 set of tasks; `SteeringEval` runs configurations (fixed controls, `ControlSpec` sweeps, and the empty-list baseline
 arm) x trials x suites, sequentially, one GPU-resident pipeline at a time:
@@ -423,7 +420,7 @@ runs = runner.runs_frame(metrics={"accuracy": "choice/accuracy"})  # one row per
 ```
 
 `summarize_runs` (in `evaluation/runner.py`) aggregates the per-trial frame into one row per configuration with
-`{metric}_mean` / `{metric}_std` columns, the contract every function in `evaluation/plotting.py` consumes (`viz`
+`{metric}_mean` / `{metric}_std` columns, the contract every function in `evaluation/plotting.py` consumes (`eval`
 extra).
 
 Every generation flows through `pipeline.generate()`. Prompts enter as `messages=` when the tokenizer has a chat
@@ -575,10 +572,13 @@ STEERING_METHOD = {
 ```
 
 The registry crawls the category directories at import time, requires the `name`, `control`, and `args` keys, and
-rejects duplicate names. For a method with a heavy optional dependency, import it through
-`steerability.utils.optional.require("<module>")` at the module boundary and add the extra to `pyproject.toml` (and to
-`OPTIONAL_MODULE_EXTRAS` in `steerability/utils/optional.py`); discovery then skips the method with an actionable hint
-when the dependency is absent instead of failing.
+rejects duplicate names. A dependency a control needs goes in core when it installs everywhere the toolkit does without
+conflict (xgrammar, trl, peft). It gets its own extra when it conflicts with other dependencies, is platform-limited,
+or is very large; import it through `steerability.utils.optional.require("<module>")` at the module boundary and map it
+in `OPTIONAL_MODULE_EXTRAS` (`steerability/utils/optional.py`), and discovery then skips the method with an actionable
+hint when the dependency is absent instead of failing. A dependency a control runs without (an alternative estimator or
+an enhancement) is not declared at all; raise a `ModuleNotFoundError` naming the package and its tested range, as CPO's
+`use_dml` does.
 
 ### Generics before new machinery
 

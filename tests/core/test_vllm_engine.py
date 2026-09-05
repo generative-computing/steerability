@@ -122,7 +122,6 @@ class TestConstraintParityOnEngine:
 
         from steerability.algorithms.output_control.constrained_decoding import ConstrainedDecoding
 
-        pytest.importorskip("xgrammar")
         schema = {
             "type": "object",
             "properties": {"ok": {"type": "boolean"}},

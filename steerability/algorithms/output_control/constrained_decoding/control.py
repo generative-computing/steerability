@@ -23,8 +23,9 @@ class ConstrainedDecoding(OutputControl):
     or engine grammar backend) is the documented difference between the arms.
 
     A control constructed with a live `automaton` object has no declarative form and runs in
-    process only. The in-process compilation requires the `xgrammar` optional dependency
-    (`steerability[guided]`); a vLLM-only pipeline never compiles client-side.
+    process only. In process the constraint compiles to a client-side xgrammar automaton; a
+    vLLM-only pipeline never compiles client-side and lowers the constraint to native
+    structured outputs.
 
     Structured outputs do not apply to prompt logprobs, so `include_in_scoring=True` requires
     the in-process backend at score; `include_in_scoring=False` opts out of scoring.

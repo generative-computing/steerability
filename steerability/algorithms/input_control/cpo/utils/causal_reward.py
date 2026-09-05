@@ -7,7 +7,8 @@ to a fixed seed prompt. We expose a single `CausalRewardScorer` that conforms to
 
 When `econml` is installed we use `CausalForestDML`. Otherwise we fall back to a plain
 `GradientBoostingRegressor` over the concatenated (query, prompt) features, regressing on score
-directly. The fallback drops the causal interpretation but keeps the `[cpo]` extra genuinely optional.
+directly. The fallback drops the causal interpretation. `econml` is not a toolkit dependency; users who
+want the paper's estimator install it separately.
 """
 from __future__ import annotations
 
@@ -24,7 +25,6 @@ from sklearn.ensemble import GradientBoostingRegressor
 
 from steerability.algorithms.input_control.common.scorers.base import BaseScorer
 from steerability.algorithms.input_control.cpo.utils.embeddings import TextEncoder, fit_pca
-from steerability.utils.optional import require
 
 logger = logging.getLogger(__name__)
 
@@ -196,8 +196,12 @@ def train(
 
     DML = _try_import_dml() if use_dml is None else (_try_import_dml() if use_dml else None)
     if use_dml is True and DML is None:
-        require("econml")  # raises ImportError naming the [cpo] extra when econml is absent
-        raise ImportError("CPO with use_dml=True requires `econml.dml.CausalForestDML`.")
+        raise ModuleNotFoundError(
+            "CPO with use_dml=True requires econml's CausalForestDML, which is not installed. "
+            'Install it separately with `pip install "econml>=0.16,<0.17"` (the range the toolkit '
+            "has been run with), or leave use_dml=None to fall back to GradientBoostingRegressor.",
+            name="econml",
+        )
 
     if DML is not None:
         treatment = prompt_red - seed_prompt_red[None, :]

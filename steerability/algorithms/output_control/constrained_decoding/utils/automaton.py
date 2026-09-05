@@ -10,10 +10,10 @@ import re
 from typing import Any
 
 import torch
+import xgrammar
 from transformers import PreTrainedTokenizerBase
 
 from steerability.algorithms.core.execution.payloads import ConstraintSource
-from steerability.utils.optional import require
 
 
 class XGrammarAutomaton:
@@ -31,8 +31,6 @@ class XGrammarAutomaton:
     """
 
     def __init__(self, compiled: Any, vocab_size: int, stop_token_ids: list[int]):
-        xgrammar = require("xgrammar")
-        self._xgrammar = xgrammar
         self._compiled = compiled
         self._vocab_size = vocab_size
         self._stop_token_ids = list(stop_token_ids)
@@ -42,7 +40,7 @@ class XGrammarAutomaton:
 
     def reset(self, prefix_ids: torch.Tensor) -> None:
         """Start a fresh matcher; `prefix_ids` is the prompt the constraint begins after."""
-        self._matcher = self._xgrammar.GrammarMatcher(self._compiled)
+        self._matcher = xgrammar.GrammarMatcher(self._compiled)
         self._consumed = prefix_ids.size(-1)
 
     def allowed(self, prefix_ids: torch.Tensor) -> torch.Tensor:
@@ -53,7 +51,7 @@ class XGrammarAutomaton:
         self._consumed = row.size(-1)
         if self._matcher.is_terminated():
             return torch.tensor(self._stop_token_ids, dtype=torch.long)
-        self._xgrammar.reset_token_bitmask(self._bitmask)
+        xgrammar.reset_token_bitmask(self._bitmask)
         self._matcher.fill_next_token_bitmask(self._bitmask)
         mask_row = self._bitmask[0]
         bits = ((mask_row.unsqueeze(1) >> torch.arange(32)) & 1).to(torch.bool)
@@ -69,12 +67,7 @@ def compile_constraint_automaton(source: ConstraintSource, tokenizer: PreTrained
 
     Returns:
         The compiled automaton.
-
-    Raises:
-        ModuleNotFoundError: If `xgrammar` is not installed. The message names the
-            `steerability[guided]` extra.
     """
-    xgrammar = require("xgrammar")
     vocab_size = max(len(tokenizer), getattr(tokenizer, "vocab_size", 0) or 0)
     tokenizer_info = xgrammar.TokenizerInfo.from_huggingface(tokenizer, vocab_size=vocab_size)
     compiler = xgrammar.GrammarCompiler(tokenizer_info)

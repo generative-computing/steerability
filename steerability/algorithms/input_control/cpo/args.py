@@ -108,8 +108,8 @@ class CPOArgs(BaseArgs):
         default=None,
         metadata={
             "help": (
-                "If True, require econml's CausalForestDML. If False, force the GradientBoostingRegressor "
-                "fallback. None auto-detects."
+                'If True, require econml\'s CausalForestDML (installed separately: `pip install "econml>=0.16,'
+                '<0.17"`). If False, force the GradientBoostingRegressor fallback. None auto-detects.'
             )
         },
     )

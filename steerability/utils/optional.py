@@ -9,14 +9,12 @@ from types import ModuleType
 
 OPTIONAL_MODULE_EXTRAS: dict[str, str] = {
     "mergekit": "merging",
-    "econml": "cpo",
-    "inspect_ai": "inspect",
-    "inspect_evals": "inspect",
+    "inspect_ai": "eval",
+    "inspect_evals": "eval",
     "vllm": "vllm",
     "vllm_hook_plugins": "vllm",
-    "xgrammar": "guided",
-    "matplotlib": "viz",
-    "seaborn": "viz",
+    "matplotlib": "eval",
+    "seaborn": "eval",
 }
 
 
@@ -24,7 +22,7 @@ def require(module_name: str) -> ModuleType:
     """Import `module_name` or raise `ModuleNotFoundError` naming the extra that provides it.
 
     Args:
-        module_name: The importable module name (e.g., ``"mergekit"`` or ``"econml.dml"``).
+        module_name: The importable module name (e.g., ``"mergekit"`` or ``"inspect_ai"``).
 
     Returns:
         The imported module.

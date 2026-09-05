@@ -99,7 +99,6 @@ class TestRequirements:
 class TestInProcessArm:
 
     def test_choice_constraint_masks_generation(self, model, tokenizer):
-        pytest.importorskip("xgrammar")
         control = ConstrainedDecoding(choice=["cat", "dog"], include_in_scoring=False)
         pipeline = SteeringPipeline(controls=[control], model=model, tokenizer=tokenizer)
         pipeline.steer()

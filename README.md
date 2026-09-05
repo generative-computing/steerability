@@ -27,7 +27,8 @@ uv venv --python 3.12 && uv pip install .
 
 By default, pipelines load and run the model *in process* (via Hugging Face `transformers`). The toolkit additionally provides
 support for inference through vLLM via [vLLM-Hook](https://github.com/IBM/vLLM-Hook). To enable this,
-install the extra with `uv pip install ".[vllm]"`.
+install the extra with `uv pip install ".[vllm]"`. The `eval` extra adds the Inspect AI evaluation stack; `all` installs
+every extra that can share one environment.
 
 ## Contributing
 
