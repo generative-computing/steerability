@@ -3,8 +3,8 @@ import random
 import pytest
 import torch
 
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.output_control.deal.control import DeAL
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.output_control.deal.control import DeAL
 from tests.utils.sweep import build_param_grid
 
 PROMPT_TEXT = "Answer concisely. If you make a recommendation, begin with the word 'Yes'."

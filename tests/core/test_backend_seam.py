@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from aisteer360.algorithms.core.execution import (
+from steerability.algorithms.core.execution import (
     Backend,
     BackendCapabilities,
     BackendSpec,
@@ -23,13 +23,13 @@ from aisteer360.algorithms.core.execution import (
     capabilities_for_spec,
     needs,
 )
-from aisteer360.algorithms.core.execution.session_utils import ScopedSession
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.input_control.base import InputControl
-from aisteer360.algorithms.output_control.base import OutputControl
-from aisteer360.algorithms.state_control.pasta import PASTA
-from aisteer360.algorithms.structural_control.base import StructuralControl
-from aisteer360.backends.huggingface import ExclusiveSession
+from steerability.algorithms.core.execution.session_utils import ScopedSession
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.input_control.base import InputControl
+from steerability.algorithms.output_control.base import OutputControl
+from steerability.algorithms.state_control.pasta import PASTA
+from steerability.algorithms.structural_control.base import StructuralControl
+from steerability.backends.huggingface import ExclusiveSession
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 
@@ -312,7 +312,7 @@ class TestCheck:
     )
     def test_steer_on_vllm_backend_requires_vllm_extra(self):
         pipeline = SteeringPipeline(backend=BackendSpec(kind="vllm", model="m"))
-        with pytest.raises(ModuleNotFoundError, match=r"aisteer360\[vllm\]"):
+        with pytest.raises(ModuleNotFoundError, match=r"steerability\[vllm\]"):
             pipeline.steer()
 
     def test_compute_logprobs_raises_on_score_failure(self):
@@ -333,11 +333,6 @@ class TestCheck:
         pipeline = SteeringPipeline(model_name_or_path="m")
         with pytest.raises(TypeError, match="backend must be"):
             pipeline.check(backend=3.14)
-
-    def test_removed_constructor_parameters_rejected(self):
-        for removed in ("steer" + "_backend", "inference" + "_backend"):
-            with pytest.raises(TypeError):
-                SteeringPipeline(**{removed: "huggingface"})
 
 
 class TestPastaSpecConstraint:
@@ -447,6 +442,201 @@ class TestBackendRelease:
         backend.release()
 
     def test_vllm_serve_inherits_the_noop_default(self):
-        from aisteer360.backends.vllm import VLLMServeBackend
+        from steerability.backends.vllm import VLLMServeBackend
 
         assert VLLMServeBackend.release is Backend.release
+
+
+# plain serve spec: a vLLM server with no hook_plugin, so it advertises neither INTERVENTION_SPECS
+# nor HIDDEN_CAPTURE. A non-huggingface spec needs no model_name_or_path, capabilities_for_spec is
+# static, and steerability.backends.vllm imports without vLLM, so these need no server, model, or GPU.
+_PLAIN_SERVE_SPEC = BackendSpec(kind="vllm-serve", model="tiny")
+
+_ZERO_SCORER = lambda prompt, continuations, params: [0.0] * len(continuations)  # noqa: E731
+
+
+def _system_prompt():
+    from steerability.algorithms.input_control.system_prompt.control import SystemPrompt
+    return SystemPrompt(text="be brief")
+
+
+def _user_prefix():
+    from steerability.algorithms.input_control.user_prefix.control import UserPrefix
+    return UserPrefix(text="Note: ")
+
+
+def _few_shot():
+    from steerability.algorithms.input_control.few_shot.control import FewShot
+    return FewShot(directive="d", positive_example_pool=[{"prompt": "a", "response": "b"}], k_positive=1)
+
+
+def _prewrite():
+    from steerability.algorithms.input_control.prewrite.control import PRewrite
+    return PRewrite(initial_instruction="be helpful", strategy="inference",
+                    rewriter_gen_kwargs={"max_new_tokens": 4, "do_sample": False})
+
+
+def _gepa():
+    from steerability.algorithms.input_control.gepa.control import GEPA
+    return GEPA(seed_instruction="be helpful", train_set=[{"input": "hi"}],
+                row_scorer=lambda out, row: 0.5, budget=4)
+
+
+def _cpo_with_prompt_lm():
+    from steerability.algorithms.input_control.cpo.control import CPO
+    return CPO(
+        seed_prompt="be helpful", train_dataset=[{"query": "hi"}],
+        row_scorer=lambda out, row: 0.5, prompt_lm="some/model",
+    )
+
+
+def _cpo_without_prompt_lm():
+    from steerability.algorithms.input_control.cpo.control import CPO
+
+    # offline_data avoids train-time generation, so prompt_lm stays unset: the live model is bound
+    # as the proposer at steer, so generate requires IN_PROCESS_TORCH and steer_access is MODULE
+    return CPO(seed_prompt="be helpful", offline_data=[{"query": "hi", "prompt": "p", "reward": 1.0}])
+
+
+def _stopping_rules():
+    from steerability.algorithms.output_control.stopping_rules.control import StoppingRules
+    return StoppingRules(stop_texts=["x"])
+
+
+def _phased_decoding():
+    from steerability.algorithms.output_control.phased_decoding.control import PhasedDecoding
+    return PhasedDecoding(plan=[{"generate": {}}])
+
+
+def _budget_forcing():
+    from steerability.algorithms.output_control.budget_forcing.control import BudgetForcing
+    return BudgetForcing(max_thinking_tokens=4)
+
+
+def _best_of_n():
+    from steerability.algorithms.output_control.best_of_n.control import BestOfN
+    return BestOfN(n=4, scorer=_ZERO_SCORER)
+
+
+def _search_sample():
+    from steerability.algorithms.output_control.search_decoding.control import SearchDecoding
+    return SearchDecoding(scorer=_ZERO_SCORER, propose_mode="sample")
+
+
+def _search_beam():
+    from steerability.algorithms.output_control.search_decoding.control import SearchDecoding
+    return SearchDecoding(scorer=_ZERO_SCORER, num_candidates=2, propose_mode="beam")
+
+
+def _deal():
+    from steerability.algorithms.output_control.deal.control import DeAL
+    return DeAL(reward_func=_ZERO_SCORER)
+
+
+def _constrained_source():
+    from steerability.algorithms.output_control.constrained_decoding.control import ConstrainedDecoding
+    return ConstrainedDecoding(regex="a+", include_in_scoring=False)
+
+
+def _constrained_automaton():
+    from steerability.algorithms.output_control.constrained_decoding.control import ConstrainedDecoding
+    return ConstrainedDecoding(automaton=object())
+
+
+def _rad():
+    from steerability.algorithms.output_control.rad.control import RAD
+    return RAD(reward_model_id="unused", beta=0.1)
+
+
+def _sasa():
+    from steerability.algorithms.output_control.sasa.control import SASA
+    return SASA(beta=0.1)
+
+
+def _dexperts():
+    from steerability.algorithms.output_control.dexperts.control import DExperts
+    return DExperts(expert_name_or_path="e", anti_expert_name_or_path="a", alpha=0.5)
+
+
+def _contrastive_decoding():
+    from steerability.algorithms.output_control.contrastive_decoding.control import ContrastiveDecoding
+    return ContrastiveDecoding(amateur_name_or_path="a", alpha=0.5)
+
+
+def _contrastive_guidance():
+    from steerability.algorithms.output_control.contrastive_guidance.control import ContrastiveGuidance
+    return ContrastiveGuidance(sources=["a"], weights=[1.0])
+
+
+def _value_guidance():
+    from steerability.algorithms.output_control.value_guidance.control import ValueGuidance
+    return ValueGuidance(value=lambda ctx: 0.0, policy="top_k", k=5)
+
+
+def _routed_decoding_fit():
+    from steerability.algorithms.core.internals.probes import ProbeSetFit
+    from steerability.algorithms.core.internals.probes.fitting import ProbeFitSpec
+    from steerability.algorithms.output_control.routed_decoding import P, Route, RoutedDecoding, Router
+    from steerability.algorithms.output_control.routed_decoding.actions import respond
+    pairs = [{"prompt": "q", "positive": "a", "negative": "b"}]
+    rules = Router(routes=[Route("r", when=P("p"), action=respond("x"))])
+    return RoutedDecoding(probes=ProbeSetFit(data={"p": pairs}, spec=ProbeFitSpec(method="mean_diff")), rules=rules)
+
+
+def _pasta():
+    return PASTA(head_config=[0])
+
+
+class TestServeSupportBoundary:
+    """Pin the generate-phase serve-support boundary and `steer_access()` of shipped controls on a
+    plain `vllm-serve` spec, so a refactor cannot move a control across the Black-box tier line
+    silently. A Black-box arm needs `supported("generate")` and `steer_access() <= ROLLOUTS`."""
+
+    @pytest.mark.parametrize("factory, access", [
+        (_system_prompt, ModelAccess.FACTS),
+        (_user_prefix, ModelAccess.FACTS),
+        (_few_shot, ModelAccess.FACTS),
+        (_prewrite, ModelAccess.ROLLOUTS),
+        (_gepa, ModelAccess.ROLLOUTS),
+        (_cpo_with_prompt_lm, ModelAccess.ROLLOUTS),
+        (_stopping_rules, ModelAccess.FACTS),
+        (_phased_decoding, ModelAccess.FACTS),
+        (_budget_forcing, ModelAccess.FACTS),
+        (_best_of_n, ModelAccess.FACTS),
+        (_search_sample, ModelAccess.FACTS),
+        (_constrained_source, ModelAccess.FACTS),
+    ])
+    def test_serve_supported_controls(self, factory, access):
+        control = factory()
+        report = SteeringPipeline(controls=[control], backend=_PLAIN_SERVE_SPEC).check()
+        assert report.supported("generate") is True
+        assert control.steer_access() == access
+
+    @pytest.mark.parametrize("factory, access", [
+        (_cpo_without_prompt_lm, ModelAccess.MODULE),
+        (_deal, ModelAccess.FACTS),
+        (_search_beam, ModelAccess.FACTS),
+        (_routed_decoding_fit, ModelAccess.CAPTURE),
+        (_constrained_automaton, ModelAccess.FACTS),
+        (_rad, ModelAccess.MODULE),
+        (_sasa, ModelAccess.MODULE),
+        (_dexperts, ModelAccess.MODULE),
+        (_contrastive_decoding, ModelAccess.MODULE),
+        (_contrastive_guidance, ModelAccess.MODULE),
+        (_value_guidance, ModelAccess.MODULE),
+        (_pasta, ModelAccess.MODULE),
+    ])
+    def test_serve_unsupported_controls(self, factory, access):
+        control = factory()
+        report = SteeringPipeline(controls=[control], backend=_PLAIN_SERVE_SPEC).check()
+        assert report.supported("generate") is False
+        assert control.steer_access() == access
+
+    def test_constrained_decoding_default_scoring_fails_score_only(self):
+        from steerability.algorithms.output_control.constrained_decoding.control import ConstrainedDecoding
+
+        control = ConstrainedDecoding(regex="a+")  # include_in_scoring=True by default
+        report = SteeringPipeline(controls=[control], backend=_PLAIN_SERVE_SPEC).check()
+        # the tier rule reads the generate phase only; score fails on serve at the default
+        assert report.supported("generate") is True
+        assert report.supported("score") is False

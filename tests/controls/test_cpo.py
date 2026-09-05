@@ -1,30 +1,24 @@
 """Tests for CPO — causal prompt optimization."""
 from __future__ import annotations
 
-import json
 import warnings
 
 import pytest
-import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.input_control.cpo import CPO, CPOArgs
-from aisteer360.algorithms.input_control.cpo.control import CPOMemory
-from aisteer360.algorithms.input_control.cpo.utils import causal_reward, refinement_meta_prompt
-from aisteer360.evaluation.metrics.base import Metric
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.input_control.cpo import CPO, CPOArgs
+from steerability.algorithms.input_control.cpo.control import CPOMemory
+from steerability.algorithms.input_control.cpo.utils import causal_reward, refinement_meta_prompt
 
 TINY_LM = "hf-internal-testing/tiny-random-LlamaForCausalLM"
 TINY_BERT = "hf-internal-testing/tiny-random-BertModel"
 
 
-class _ConstantMetric(Metric):
-    def __init__(self, value: float = 0.5, **extras):
-        super().__init__(**extras)
-        self._value = value
-
-    def compute(self, responses, prompts=None, **kwargs):
-        return {"score": self._value}
+def _constant_scorer(value: float = 0.5):
+    def score(response, row):
+        return value
+    return score
 
 
 @pytest.fixture(scope="module")
@@ -53,11 +47,11 @@ class TestCPOArgs:
         args = CPOArgs(seed_prompt="x", offline_data=offline_rows)
         assert args.seed_prompt == "x"
 
-    def test_train_dataset_requires_metric_and_lm(self):
-        with pytest.raises(ValueError, match="metric"):
+    def test_train_dataset_requires_scorer_and_lm(self):
+        with pytest.raises(ValueError, match="row_scorer"):
             CPOArgs(seed_prompt="x", train_dataset=[{"input": "a"}], prompt_lm="model")
         with pytest.raises(ValueError, match="prompt_lm"):
-            CPOArgs(seed_prompt="x", train_dataset=[{"input": "a"}], metric=_ConstantMetric())
+            CPOArgs(seed_prompt="x", train_dataset=[{"input": "a"}], row_scorer=_constant_scorer())
 
     def test_neither_offline_nor_train_raises(self):
         with pytest.raises(ValueError, match="offline_data"):
@@ -104,7 +98,7 @@ class TestCausalRewardScorer:
         assert a == b
 
     def test_use_dml_true_without_econml_raises(self, offline_rows):
-        # econml not installed in this environment; explicit use_dml=True must fail loudly.
+        # without econml, an explicit use_dml=True raises rather than silently falling back
         if causal_reward._try_import_dml() is not None:
             pytest.skip("econml installed; can't test the missing-dep error path.")
         with pytest.raises(ImportError, match="econml"):
@@ -376,7 +370,7 @@ class TestCPOBackendPosture:
         assert adapted[0][0]["role"] == "system"
 
     def test_module_configuration_verdict_on_engine(self):
-        from aisteer360.algorithms.core.execution import BackendSpec, ModelAccess
+        from steerability.algorithms.core.execution import BackendSpec, ModelAccess
 
         cpo = CPO(
             seed_prompt="be helpful",
@@ -393,7 +387,7 @@ class TestCPOBackendPosture:
         )
 
     def test_aux_prompt_lm_configuration_is_supported_on_engines(self, tiny_lm):
-        from aisteer360.algorithms.core.execution import BackendSpec, ModelAccess
+        from steerability.algorithms.core.execution import BackendSpec, ModelAccess
 
         model, _ = tiny_lm
         cpo = CPO(

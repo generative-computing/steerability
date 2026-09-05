@@ -1,4 +1,3 @@
-
 preserve_directory_names: true
 
 flatten_single_child_sections: true
@@ -24,13 +23,12 @@ nav:
     - Controls: concepts/controls.md
     - Probes: concepts/probes.md
     - Steering pipelines: concepts/steering_pipelines.md
+    - Sharing pipelines (.spipe): concepts/spipe.md
 #    - Use cases & benchmarking: concepts/benchmarks.md
   - Tutorials:
     - Tutorials: tutorials/index.md
     - Add a steering method: "tutorials/add_new_steering_method.md"
-    - Add a metric: "tutorials/add_new_metric.md"
-    - Add a use case: "tutorials/add_new_use_case.md"
-    - Add a benchmark: "tutorials/add_new_benchmark.md"
+    - Evaluate steering pipelines: "tutorials/evaluate_steering_pipelines.md"
     - Add a new input control: "tutorials/add_method_by_category/add_new_input_control.md"
     - Add a new output control: "tutorials/add_method_by_category/add_new_output_control.md"
     - Add a new state control: "tutorials/add_method_by_category/add_new_state_control.md"
@@ -43,12 +41,9 @@ nav:
         - FewShot: "examples/notebooks/algorithms/few_shot.ipynb"
         - GEPA: "examples/notebooks/algorithms/gepa.ipynb"
         - PRewrite: "examples/notebooks/algorithms/prewrite.ipynb"
-      - Structural control:
-        - MergeKit wrapper: "examples/notebooks/algorithms/mergekit.ipynb"
-        - TRL wrapper: "examples/notebooks/algorithms/trl.ipynb"
+        - SystemPrompt: "examples/notebooks/algorithms/system_prompt.ipynb"
       - State control:
         - ActAdd: "examples/notebooks/algorithms/act_add.ipynb"
-        - ActivationAdapter: "examples/notebooks/generics/activation_adapter.ipynb"
         - AngularSteering: "examples/notebooks/algorithms/angular_steering.ipynb"
         - CAA: "examples/notebooks/algorithms/caa.ipynb"
         - CAST: "examples/notebooks/algorithms/cast.ipynb"
@@ -59,21 +54,28 @@ nav:
         - BestOfN: "examples/notebooks/algorithms/best_of_n.ipynb"
         - BudgetForcing: "examples/notebooks/algorithms/budget_forcing.ipynb"
         - ContrastiveDecoding: "examples/notebooks/algorithms/contrastive_decoding.ipynb"
-        - ContrastiveGuidance: "examples/notebooks/generics/contrastive_guidance.ipynb"
         - DeAL: "examples/notebooks/algorithms/deal.ipynb"
         - DExperts: "examples/notebooks/algorithms/dexperts.ipynb"
-        - PhasedDecoding: "examples/notebooks/generics/phased_decoding.ipynb"
         - RAD: "examples/notebooks/algorithms/rad.ipynb"
         - SASA: "examples/notebooks/algorithms/sasa.ipynb"
-        - SearchDecoding: "examples/notebooks/generics/search_decoding.ipynb"
-        - StoppingRules: "examples/notebooks/generics/stopping_rules.ipynb"
-        - ValueGuidance: "examples/notebooks/generics/value_guidance.ipynb"
+      - Generics:
+        - ActivationAdapter: "examples/notebooks/algorithms/generics/activation_adapter.ipynb"
+        - ContrastiveGuidance: "examples/notebooks/algorithms/generics/contrastive_guidance.ipynb"
+        - PhasedDecoding: "examples/notebooks/algorithms/generics/phased_decoding.ipynb"
+        - SearchDecoding: "examples/notebooks/algorithms/generics/search_decoding.ipynb"
+        - StoppingRules: "examples/notebooks/algorithms/generics/stopping_rules.ipynb"
+        - ValueGuidance: "examples/notebooks/algorithms/generics/value_guidance.ipynb"
+      - Wrappers:
+        - MergeKit wrapper: "examples/notebooks/algorithms/wrappers/mergekit.ipynb"
+        - TRL wrapper: "examples/notebooks/algorithms/wrappers/trl.ipynb"
     - Recipes:
-      - Routed decoding: "examples/notebooks/recipes/routed_decoding.ipynb"
-    - Benchmarks:
-      - Commonsense MCQA: "examples/notebooks/benchmarks/commonsense_mcqa/commonsense_mcqa.ipynb"
-      - Instruction following: "examples/notebooks/benchmarks/instruction_following/instruction_following.ipynb"
-      - Composite steering for truthfulness: "examples/notebooks/benchmarks/truthful_qa_composite_steering/truthful_qa_composite_steering.ipynb"
+      - Honest-persona prompting: "examples/notebooks/recipes/honest_persona_prompting.ipynb"
+      - Routed decoding: "examples/notebooks/recipes/routed_decoding/routed_decoding.ipynb"
+      - Sharing pipelines (.spipe): "examples/notebooks/recipes/working_with_spipes.ipynb"
+    - Studies:
+      - Commonsense MCQA: "examples/notebooks/studies/commonsense_mcqa/commonsense_mcqa.ipynb"
+      - Instruction following: "examples/notebooks/studies/instruction_following/instruction_following.ipynb"
+      - Routing versus prompting: "examples/notebooks/studies/routing_vs_prompting.ipynb"
 #  - Developer notes:
 #      - Developer notes: dev_notes/index.md
 #      - "dev_notes/steering_lifecycle.md"
@@ -93,8 +95,12 @@ nav:
             - PRewrite: reference/algorithms/input_control/prewrite.md
             - CPO: reference/algorithms/input_control/cpo.md
             - GEPA: reference/algorithms/input_control/gepa.md
+            - SystemPrompt: reference/algorithms/input_control/system_prompt.md
+            - UserPrefix: reference/algorithms/input_control/user_prefix.md
         - Structural control:
             - Base classes: reference/algorithms/structural_control/base_structural_control.md
+            - LoadCheckpoint: reference/algorithms/structural_control/load_checkpoint.md
+            - LoadLoRA: reference/algorithms/structural_control/load_lora.md
             - MergeKit wrapper: reference/algorithms/structural_control/mergekit_wrapper.md
             - TRL wrapper: reference/algorithms/structural_control/trl_wrapper.md
         - State control:
@@ -125,17 +131,14 @@ nav:
             - SearchDecoding: reference/algorithms/output_control/search_decoding.md
             - StoppingRules: reference/algorithms/output_control/stopping_rules.md
             - ValueGuidance: reference/algorithms/output_control/value_guidance.md
+    - SPipe: reference/spipe.md
+    - Backends: reference/backends.md
+    - Utils: reference/utils.md
     - Evaluation:
-        - Metrics:
-          - Base classes: reference/evaluation/metrics/base_metrics.md
-          - Generic: reference/evaluation/metrics/generic.md
-          - Custom:
-            - Commonsense MCQA: reference/evaluation/metrics/custom/commonsense_mcqa_metrics.md
-            - Instruction following: reference/evaluation/metrics/custom/instruction_following_metrics.md
-            - Truthful QA: "reference/evaluation/metrics/custom/truthful_qa_metrics.md"
-        - Use cases:
-          - Base class: reference/evaluation/use_cases/base_use_case.md
-          - Commonsense MCQA: reference/evaluation/use_cases/commonsense_mcqa_use_case.md
-          - Instruction following: reference/evaluation/use_cases/instruction_following_use_case.md
-          - Truthful QA: reference/evaluation/use_cases/truthful_qa_use_case.md
-        - Benchmark: reference/evaluation/benchmark.md
+        - Provider: reference/evaluation/provider.md
+        - Batching: reference/evaluation/batching.md
+        - Solvers: reference/evaluation/solvers.md
+        - Scorers: reference/evaluation/scorers.md
+        - Suite: reference/evaluation/suite.md
+        - Runner: reference/evaluation/runner.md
+        - Plotting: reference/evaluation/plotting.md

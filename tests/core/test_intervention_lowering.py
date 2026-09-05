@@ -7,8 +7,8 @@ import torch
 pytest.importorskip("vllm_hook_plugins")
 from vllm_hook_plugins.core.canonical import canonical_bytes, request_salt, spec_hash  # noqa: E402
 
-from aisteer360.algorithms.core.execution import InterventionSpec
-from aisteer360.algorithms.core.utils.assembly import _lower_control
+from steerability.algorithms.core.execution import InterventionSpec
+from steerability.algorithms.core.utils.assembly import _lower_control
 
 _VECTOR_ID = "sha256:" + "ab" * 32
 _PROBE_ID = "sha256:" + "cd" * 32
@@ -91,7 +91,7 @@ class TestEntrySelection:
 
     @staticmethod
     def _steered_pipeline(control):
-        from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
+        from steerability.algorithms.core.steering_pipeline import SteeringPipeline
         from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
         pipeline = SteeringPipeline(
@@ -102,8 +102,8 @@ class TestEntrySelection:
 
     @staticmethod
     def _caa(**kwargs):
-        from aisteer360.algorithms.state_control.caa.control import CAA
-        from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
+        from steerability.algorithms.state_control.caa.control import CAA
+        from steerability.algorithms.state_control.common.steering_vector import SteeringVector
 
         vector = SteeringVector(
             model_type="llama", directions={1: torch.ones(1, 16)},
@@ -112,7 +112,7 @@ class TestEntrySelection:
 
     @staticmethod
     def _capabilities(**kind_overrides):
-        from aisteer360.algorithms.core.execution import BackendCapabilities, Capability, InterventionKinds
+        from steerability.algorithms.core.execution import BackendCapabilities, Capability, InterventionKinds
 
         kinds = {
             "transforms": frozenset({"additive", "projection", "rotation", "head_additive"}),
@@ -128,7 +128,7 @@ class TestEntrySelection:
         )
 
     def test_intervention_entries_built_for_exportable_control(self):
-        from aisteer360.algorithms.core.execution import InterventionEntry
+        from steerability.algorithms.core.execution import InterventionEntry
 
         pipeline = self._steered_pipeline(self._caa())
         control = pipeline.state_controls[0]
@@ -139,7 +139,7 @@ class TestEntrySelection:
         assert entry.spec.ops[0]["transform"]["kind"] == "additive"
 
     def test_stale_kind_server_yields_verdict_naming_kind(self):
-        from aisteer360.algorithms.core.execution import UnsupportedOperationError
+        from steerability.algorithms.core.execution import UnsupportedOperationError
 
         pipeline = self._steered_pipeline(self._caa())
         control = pipeline.state_controls[0]
@@ -148,9 +148,9 @@ class TestEntrySelection:
             _lower_control(control, narrowed.intervention_kinds, {}, {})
 
     def test_hook_only_control_yields_verdict(self):
-        from aisteer360.algorithms.core.execution import UnsupportedOperationError
-        from aisteer360.algorithms.state_control.act_add.control import ActAdd
-        from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
+        from steerability.algorithms.core.execution import UnsupportedOperationError
+        from steerability.algorithms.state_control.act_add.control import ActAdd
+        from steerability.algorithms.state_control.common.steering_vector import SteeringVector
 
         positional = ActAdd(
             steering_vector=SteeringVector(model_type="llama", directions={1: torch.ones(3, 16)}),
@@ -165,10 +165,10 @@ class TestEntrySelection:
 class TestVerdictStrings:
 
     def test_positional_act_add_names_the_gap(self):
-        from aisteer360.algorithms.core.execution import BackendSpec
-        from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-        from aisteer360.algorithms.state_control.act_add.control import ActAdd
-        from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
+        from steerability.algorithms.core.execution import BackendSpec
+        from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+        from steerability.algorithms.state_control.act_add.control import ActAdd
+        from steerability.algorithms.state_control.common.steering_vector import SteeringVector
 
         control = ActAdd(
             steering_vector=SteeringVector(model_type="llama", directions={1: torch.ones(3, 16)}),
@@ -185,9 +185,9 @@ class TestVerdictStrings:
         )
 
     def test_cast_is_generate_supported_on_plugin_backend(self):
-        from aisteer360.algorithms.core.execution import BackendSpec
-        from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-        from aisteer360.algorithms.state_control.cast.control import CAST
+        from steerability.algorithms.core.execution import BackendSpec
+        from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+        from steerability.algorithms.state_control.cast.control import CAST
 
         control = CAST(behavior_vector=None, behavior_data={"positives": ["a"], "negatives": ["b"]})
         pipeline = SteeringPipeline(model_name_or_path="m", controls=[control])
@@ -197,10 +197,10 @@ class TestVerdictStrings:
         assert report.supported("generate")
 
     def test_exportable_caa_is_supported_on_plugin_backend(self):
-        from aisteer360.algorithms.core.execution import BackendSpec
-        from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-        from aisteer360.algorithms.state_control.caa.control import CAA
-        from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
+        from steerability.algorithms.core.execution import BackendSpec
+        from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+        from steerability.algorithms.state_control.caa.control import CAA
+        from steerability.algorithms.state_control.common.steering_vector import SteeringVector
 
         control = CAA(
             steering_vector=SteeringVector(model_type="llama", directions={1: torch.ones(1, 16)}),
@@ -218,8 +218,8 @@ class TestVerdictStrings:
 class TestDiscoveryIntersection:
 
     def test_negotiated_kinds_narrow_static_tables(self):
-        from aisteer360.algorithms.core.execution import BackendSpec, capabilities_for_spec
-        from aisteer360.backends.vllm import capabilities as vllm_capabilities
+        from steerability.algorithms.core.execution import BackendSpec, capabilities_for_spec
+        from steerability.backends.vllm import capabilities as vllm_capabilities
 
         spec = BackendSpec(kind="vllm", model="intersect-test", options={"hook_plugin": True})
         static = capabilities_for_spec(spec)
@@ -254,8 +254,8 @@ class TestDiscoveryIntersection:
         """A discovery payload from a pre-redesign plugin (a `gates` list, no `readouts`/`rules`
         keys) negotiates empty readout and rule sets, so gated interventions get an honest
         unsupported verdict."""
-        from aisteer360.algorithms.core.execution import BackendSpec, capabilities_for_spec
-        from aisteer360.backends.vllm import capabilities as vllm_capabilities
+        from steerability.algorithms.core.execution import BackendSpec, capabilities_for_spec
+        from steerability.backends.vllm import capabilities as vllm_capabilities
 
         spec = BackendSpec(kind="vllm", model="old-plugin-test", options={"hook_plugin": True})
         payload = {

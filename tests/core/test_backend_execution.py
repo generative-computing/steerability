@@ -6,7 +6,7 @@ import dataclasses
 import pytest
 import torch
 
-from aisteer360.algorithms.core.execution import (
+from steerability.algorithms.core.execution import (
     BackendSpec,
     Capability,
     CheckpointArtifact,
@@ -15,32 +15,35 @@ from aisteer360.algorithms.core.execution import (
     LoRAArtifact,
     PartialBatchError,
     PreparedPrompt,
+    StackEntry,
     TransportError,
     derive_item_seed,
     merge_lowered_params,
     run_bounded,
     with_transport_retries,
 )
-from aisteer360.algorithms.core.execution.access import ModelAccess
-from aisteer360.algorithms.core.execution.session_utils import session_generate
-from aisteer360.algorithms.core.output import Output, infer_finish_reasons, truncate_at_stop_strings
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.input_control.base import InputControl
-from aisteer360.algorithms.input_control.gepa.control import GEPA
-from aisteer360.algorithms.input_control.prewrite.control import PRewrite
-from aisteer360.algorithms.output_control.base import DecodingDriver, stack_generate_kwargs
-from aisteer360.algorithms.output_control.best_of_n.control import BestOfN
-from aisteer360.algorithms.output_control.budget_forcing.control import BudgetForcing
-from aisteer360.algorithms.output_control.deal.control import DeAL
-from aisteer360.algorithms.output_control.phased_decoding.control import PhasedDecoding
-from aisteer360.algorithms.output_control.search_decoding.control import SearchDecoding
-from aisteer360.algorithms.output_control.stopping_rules.control import StoppingRules
-from aisteer360.algorithms.state_control.activation_adapter.control import ActivationAdapter
-from aisteer360.algorithms.state_control.base import StateControl
-from aisteer360.algorithms.state_control.common.runtime import TransformHookRuntime
-from aisteer360.algorithms.structural_control.base import StructuralControl
-from aisteer360.backends.huggingface import HFBackend
-from aisteer360.backends.vllm import extract_ref_logprobs, map_vllm_finish_reason, render_vllm_sampling_args
+from steerability.algorithms.core.execution.access import ModelAccess
+from steerability.algorithms.core.execution.session_utils import session_generate
+from steerability.algorithms.core.output import Output, infer_finish_reasons, truncate_at_stop_strings
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.input_control.base import InputControl
+from steerability.algorithms.input_control.gepa.control import GEPA
+from steerability.algorithms.input_control.prewrite.control import PRewrite
+from steerability.algorithms.output_control.base import DecodingDriver, stack_generate_kwargs
+from steerability.algorithms.output_control.best_of_n.control import BestOfN
+from steerability.algorithms.output_control.budget_forcing.control import BudgetForcing
+from steerability.algorithms.output_control.deal.control import DeAL
+from steerability.algorithms.output_control.phased_decoding.control import PhasedDecoding
+from steerability.algorithms.output_control.search_decoding.control import SearchDecoding
+from steerability.algorithms.output_control.stopping_rules.control import StoppingRules
+from steerability.algorithms.state_control.activation_adapter.control import ActivationAdapter
+from steerability.algorithms.state_control.base import StateControl
+from steerability.algorithms.state_control.caa.control import CAA
+from steerability.algorithms.state_control.common.runtime import TransformHookRuntime
+from steerability.algorithms.state_control.common.steering_vector import SteeringVector
+from steerability.algorithms.structural_control.base import StructuralControl
+from steerability.backends.huggingface import HFBackend
+from steerability.backends.vllm import extract_ref_logprobs, map_vllm_finish_reason, render_vllm_sampling_args
 from tests.utils.runtime_helpers import RecordingTransform
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
@@ -84,6 +87,22 @@ class _ForceSequence:
         return forced
 
 
+def _count_generate_calls(model, monkeypatch) -> dict:
+    """Wrap `model.generate` to count invocations (auto-restored by `monkeypatch`).
+
+    Returns a dict whose `count` key updates on each call.
+    """
+    counter = {"count": 0}
+    original = model.generate
+
+    def wrapped(*args, **kwargs):
+        counter["count"] += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(model, "generate", wrapped)
+    return counter
+
+
 class TestGenerationParamsStops:
 
     def test_from_gen_kwargs_captures_stop_fields(self):
@@ -121,6 +140,23 @@ class TestGenerationParamsStops:
         with pytest.raises(ValueError, match="temperature"):
             merge_lowered_params(GenerationParams(), {"temperature": 0.5})
 
+    def test_min_new_tokens_above_max_raises(self):
+        with pytest.raises(ValueError, match="min_new_tokens"):
+            GenerationParams(min_new_tokens=8, max_new_tokens=4)
+
+    def test_seed_scope_round_trips_and_item_not_rendered(self):
+        item = GenerationParams.from_gen_kwargs(seed=5, max_new_tokens=4)
+        assert item.seed_scope == "item"
+        assert "seed_scope" not in item.to_gen_kwargs()  # default is not rendered
+        dispatch = GenerationParams.from_gen_kwargs(seed=5, seed_scope="dispatch", max_new_tokens=4)
+        assert dispatch.seed_scope == "dispatch"
+        assert dispatch.to_gen_kwargs()["seed_scope"] == "dispatch"
+        assert GenerationParams.from_gen_kwargs(**dispatch.to_gen_kwargs()) == dispatch
+
+    def test_seed_scope_unknown_value_raises(self):
+        with pytest.raises(ValueError, match="seed_scope"):
+            GenerationParams(seed_scope="whole")
+
 
 class TestVLLMRendering:
 
@@ -153,6 +189,13 @@ class TestVLLMRendering:
 
     def test_seed_never_rendered_by_table(self):
         assert "seed" not in render_vllm_sampling_args(GenerationParams(seed=7))
+
+    def test_seed_scope_never_rendered_by_hf_or_vllm(self):
+        from steerability.backends.huggingface.session import render_hf_gen_kwargs
+
+        params = GenerationParams(seed=7, seed_scope="dispatch", max_new_tokens=4)
+        assert "seed_scope" not in render_hf_gen_kwargs(params)
+        assert "seed_scope" not in render_vllm_sampling_args(GenerationParams(seed_scope="dispatch"))
 
 
 class TestFinishReasonMapping:
@@ -289,7 +332,9 @@ class TestStopSemantics:
 class TestSessionBatchedFastPath:
 
     def test_batched_matches_direct_batched_generate(self, backend, model, tokenizer):
-        encoded = tokenizer(["the cat", "the dog ran"], return_tensors="pt", padding=True)
+        # equal-length prompts: the batch carries no padding, so the session's left-packing is a
+        # no-op and the batched pass matches a direct `model.generate` on the stacked batch
+        encoded = tokenizer(["the cat", "the dog"], return_tensors="pt", padding=True)
         items = [
             GenerationItem(prompt=PreparedPrompt.from_token_ids(
                 encoded["input_ids"][i:i + 1], encoded["attention_mask"][i:i + 1],
@@ -306,6 +351,31 @@ class TestSessionBatchedFastPath:
         for i, result in enumerate(results):
             assert torch.equal(result.output.output_ids, direct[i:i + 1, prompt_len:])
             assert torch.equal(result.output.adapted_input_ids, encoded["input_ids"][i:i + 1])
+
+    def test_ragged_batch_rows_match_single_row_generation(self, backend, tokenizer):
+        # a ragged batch left-packs before the batched `model.generate`, so every row continues
+        # from its last real token; each continuation must equal the prompt generated on its own
+        prompts = ["the cat sat on the mat", "the dog"]
+        encoded = tokenizer(prompts, return_tensors="pt", padding=True)  # right-padded
+        items = [
+            GenerationItem(prompt=PreparedPrompt.from_token_ids(
+                encoded["input_ids"][i:i + 1], encoded["attention_mask"][i:i + 1],
+            ))
+            for i in range(2)
+        ]
+        params = GenerationParams(max_new_tokens=4, greedy=True, extra={"eos_token_id": None})
+        with backend.open_session() as session:
+            batched = session.generate(items, params)
+        singles = []
+        with backend.open_session() as session:
+            for prompt in prompts:
+                single = tokenizer(prompt, return_tensors="pt")
+                item = GenerationItem(prompt=PreparedPrompt.from_token_ids(
+                    single["input_ids"], single["attention_mask"],
+                ))
+                singles.append(session.generate([item], params)[0])
+        for row in range(2):
+            assert torch.equal(batched[row].output.output_ids, singles[row].output.output_ids)
 
     def test_shared_params_seed_derives_distinct_item_seeds(self, backend, tokenizer):
         encoded = tokenizer(["the cat", "the cat"], return_tensors="pt", padding=True)
@@ -325,6 +395,109 @@ class TestSessionBatchedFastPath:
         assert torch.equal(first[1].output.output_ids, second[1].output.output_ids)
         assert not torch.equal(first[0].output.output_ids, first[1].output.output_ids)
 
+    def test_dispatch_scope_batches_seeded_items(self, backend, model, tokenizer, monkeypatch):
+        encoded = tokenizer(["the cat", "the cat"], return_tensors="pt", padding=True)
+        items = [
+            GenerationItem(prompt=PreparedPrompt.from_token_ids(
+                encoded["input_ids"][i:i + 1], encoded["attention_mask"][i:i + 1],
+            ))
+            for i in range(2)
+        ]
+        params = GenerationParams(
+            max_new_tokens=8, greedy=False, temperature=1.0, seed=42, seed_scope="dispatch",
+        )
+        calls = _count_generate_calls(model, monkeypatch)
+        with backend.open_session() as session:
+            first = session.generate(items, params)
+        assert calls["count"] == 1  # both rows decode in one batched pass
+        with backend.open_session() as session:
+            second = session.generate(items, params)
+        # the two rows sample distinct streams, and a second session reproduces the dispatch
+        assert not torch.equal(first[0].output.output_ids, first[1].output.output_ids)
+        assert torch.equal(first[0].output.output_ids, second[0].output.output_ids)
+        assert torch.equal(first[1].output.output_ids, second[1].output.output_ids)
+
+    def test_single_item_parity_across_scopes(self, backend, tokenizer):
+        item = GenerationItem(prompt=PreparedPrompt.from_text("the cat"))
+        base = dict(max_new_tokens=8, greedy=False, temperature=1.0, seed=42)
+        with backend.open_session() as session:
+            item_scope = session.generate([item], GenerationParams(**base, seed_scope="item"))
+        with backend.open_session() as session:
+            dispatch_scope = session.generate([item], GenerationParams(**base, seed_scope="dispatch"))
+        assert torch.equal(item_scope[0].output.output_ids, dispatch_scope[0].output.output_ids)
+
+    def test_explicit_item_seeds_honored_serially_under_dispatch_scope(self, backend, model, tokenizer, monkeypatch):
+        encoded = tokenizer(["the cat", "the cat"], return_tensors="pt", padding=True)
+        items = [
+            GenerationItem(
+                prompt=PreparedPrompt.from_token_ids(
+                    encoded["input_ids"][i:i + 1], encoded["attention_mask"][i:i + 1],
+                ),
+                seed=100 + i,
+            )
+            for i in range(2)
+        ]
+        params = GenerationParams(
+            max_new_tokens=8, greedy=False, temperature=1.0, seed=42, seed_scope="dispatch",
+        )
+        calls = _count_generate_calls(model, monkeypatch)
+        with backend.open_session() as session:
+            first = session.generate(items, params)
+        assert calls["count"] == 2  # explicit distinct item seeds decode serially
+        with backend.open_session() as session:
+            second = session.generate(items, params)
+        assert torch.equal(first[0].output.output_ids, second[0].output.output_ids)
+        assert torch.equal(first[1].output.output_ids, second[1].output.output_ids)
+
+    def test_mixed_item_seeds_fall_back_to_per_item_under_dispatch_scope(self, backend, tokenizer):
+        encoded = tokenizer(["the cat", "the cat"], return_tensors="pt", padding=True)
+        items = [
+            GenerationItem(
+                prompt=PreparedPrompt.from_token_ids(
+                    encoded["input_ids"][i:i + 1], encoded["attention_mask"][i:i + 1],
+                ),
+                seed=100 if i == 0 else None,
+            )
+            for i in range(2)
+        ]
+        params = GenerationParams(seed=42, seed_scope="dispatch")
+        with backend.open_session() as session:
+            seeds = session._item_seeds(items, params)
+        # the explicit seed is honored, the absent one derives per index (not the dispatch seed)
+        assert seeds[0] == 100
+        assert seeds[1] == derive_item_seed(42, "generate-0", 1)
+
+    def test_serial_fallback_logged_once_per_reason(self, backend, tokenizer, caplog):
+        encoded = tokenizer(["the cat", "the cat"], return_tensors="pt", padding=True)
+        seeded_items = [
+            GenerationItem(prompt=PreparedPrompt.from_token_ids(
+                encoded["input_ids"][i:i + 1], encoded["attention_mask"][i:i + 1],
+            ))
+            for i in range(2)
+        ]
+        seeded = GenerationParams(max_new_tokens=4, greedy=False, temperature=1.0, seed=42)
+        with caplog.at_level("INFO", logger="steerability.backends.huggingface.session"):
+            with backend.open_session() as session:
+                session.generate(seeded_items, seeded)
+            with backend.open_session() as session:
+                session.generate(seeded_items, seeded)  # second session must not log again
+        seed_records = [r for r in caplog.records if "seed_scope='dispatch'" in r.message]
+        assert len(seed_records) == 1
+
+    def test_serial_fallback_names_distinct_entries(self, backend, tokenizer, caplog):
+        items = [
+            GenerationItem(
+                prompt=PreparedPrompt.from_text("the cat"),
+                output_entries=(StackEntry(logits_processors=[_ForceSequence(2, [i + 3])]),),
+            )
+            for i in range(2)
+        ]
+        with caplog.at_level("INFO", logger="steerability.backends.huggingface.session"):
+            with backend.open_session() as session:
+                session.generate(items, GenerationParams(max_new_tokens=4, greedy=True))
+        entry_records = [r for r in caplog.records if "distinct state or output entries" in r.message]
+        assert len(entry_records) == 1
+
     def test_stop_strings_compose_and_classify(self, backend, tokenizer):
         item = GenerationItem(prompt=PreparedPrompt.from_text("the cat"))
         params = GenerationParams(
@@ -341,7 +514,7 @@ class TestSessionBatchedFastPath:
     def test_score_batched_matches_serial(self, backend, tokenizer):
         encoded = tokenizer(["the cat", "the dog ran"], return_tensors="pt", padding=True)
         ref = torch.tensor([[5, 6], [7, 3]])
-        from aisteer360.algorithms.core.execution import ScoringItem
+        from steerability.algorithms.core.execution import ScoringItem
 
         items = [
             ScoringItem(
@@ -376,6 +549,37 @@ class TestSessionBatchedFastPath:
                 )
         for one, many in zip(serial, batched):
             assert torch.equal(one.output.output_ids, many.output.output_ids)
+
+
+class TestStateControlRaggedBatch:
+    """`after_prompt` state controls steer a ragged batch exactly as they steer each row singly.
+
+    The session left-packs a ragged batch before the batched `model.generate`; `after_prompt`
+    positions key off the common prompt width, so the steered continuations must match steering
+    each prompt on its own.
+    """
+
+    def test_after_prompt_additive_ragged_batch_matches_serial(self, model, tokenizer):
+        generator = torch.Generator().manual_seed(11)
+        steering_vector = SteeringVector(
+            model_type="llama",
+            directions={layer: torch.randn(1, 16, generator=generator) for layer in range(2)},
+        )
+        control = CAA(
+            steering_vector=steering_vector, layer_id=1, multiplier=8.0, token_scope="after_prompt",
+        )
+        pipeline = _pipeline(model, tokenizer, [control])
+        prompts = ["the cat sat on the mat", "the dog"]
+        gen_kwargs = dict(max_new_tokens=4, do_sample=False, eos_token_id=None, return_output=True)
+
+        batched = pipeline.generate(text=prompts, **gen_kwargs)
+        singles = [pipeline.generate(text=prompt, **gen_kwargs) for prompt in prompts]
+        for row in range(2):
+            assert torch.equal(batched[row].output_ids, singles[row].output_ids)
+
+        # the steered continuation differs from the unsteered one, so the equality above is not vacuous
+        unsteered = _pipeline(model, tokenizer).generate(text=prompts[0], **gen_kwargs)
+        assert not torch.equal(singles[0].output_ids, unsteered.output_ids)
 
 
 class TestPadTokenDefaulting:
@@ -685,7 +889,7 @@ class TestTRLArtifactDerivation:
     def _mixin(self, **attrs):
         from peft import PeftType
 
-        from aisteer360.algorithms.structural_control.wrappers.trl.base_mixin import TRLMixin
+        from steerability.algorithms.structural_control.wrappers.trl.base_mixin import TRLMixin
 
         control = object.__new__(type("_TRLDouble", (TRLMixin,), {}))
         control.training_args = {}
@@ -777,6 +981,15 @@ class TestSerialSeedStateHooks:
         assert len(control.seen_shapes) == 1
         assert control.seen_shapes[0][0] == 2
 
+    def test_seeded_dispatch_scope_batch_keeps_batch_hooks(self, model, tokenizer):
+        control = _RowRecordingStateControl()
+        pipeline = _pipeline(model, tokenizer, controls=[control])
+        pipeline.generate(
+            text=["the cat sat on the mat", "the dog"], seed=7, seed_scope="dispatch", max_new_tokens=2,
+        )
+        assert len(control.seen_shapes) == 1
+        assert control.seen_shapes[0][0] == 2
+
     def test_seeded_batch_runs_runtime_backed_control_per_row(self, model, tokenizer):
         transform = RecordingTransform()
         control = ActivationAdapter(transform=transform, layer_ids=[1], token_scope="after_prompt")
@@ -786,7 +999,7 @@ class TestSerialSeedStateHooks:
         assert all(mask.size(0) == 1 for mask in transform.masks)
 
     def test_clone_for_call_isolates_gate_state(self, model, tokenizer):
-        from aisteer360.algorithms.state_control.common.gating import CallableReadout, Evidence, Gate, PerKeyThreshold
+        from steerability.algorithms.state_control.common.gating import CallableReadout, Evidence, Gate, PerKeyThreshold
 
         gate = Gate(
             Evidence((0,), CallableReadout(lambda pooled, layer_id: pooled.mean(dim=-1))),
@@ -804,3 +1017,39 @@ class TestSerialSeedStateHooks:
         control.steer(model, tokenizer)
         clone = control.clone_for_call()
         assert control._gate is None and clone._gate is None
+
+
+class _FakeInnerSession:
+    """Minimal inner session returning one padded `ItemResult` per submitted item."""
+
+    def __init__(self, row_ids, pad_token_id):
+        self._row_ids = row_ids
+        self.tokenizer = type("_T", (), {"pad_token_id": pad_token_id})()
+
+    def generate(self, items, params):
+        from steerability.algorithms.core.execution.payloads import ItemResult
+
+        return [
+            ItemResult(index=i, output=Output(output_ids=torch.tensor([self._row_ids], dtype=torch.long)))
+            for i, _ in enumerate(items)
+        ]
+
+
+class TestSteeredSessionTokenAccounting:
+
+    def _session(self, row_ids, pad_token_id=0):
+        from steerability.algorithms.core.execution.backend import SteeredSession
+
+        return SteeredSession(_FakeInnerSession(row_ids, pad_token_id))
+
+    def test_accumulates_non_pad_tokens_across_calls(self):
+        session = self._session([5, 6, 7, 0, 0])  # three non-pad positions
+        session.generate([object()], GenerationParams())
+        assert session.generated_tokens == 3
+        session.generate([object(), object()], GenerationParams())
+        assert session.generated_tokens == 3 + 3 + 3
+
+    def test_counts_all_positions_when_no_pad_id(self):
+        session = self._session([5, 6, 7, 8], pad_token_id=None)
+        session.generate([object()], GenerationParams())
+        assert session.generated_tokens == 4

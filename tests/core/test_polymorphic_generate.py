@@ -1,16 +1,16 @@
 """Tests for the explicit-modality dispatch of `SteeringPipeline.generate`.
 
 Covers the keyword surface (`text=`, `messages=`, `input_ids=`), the positional-text convenience,
-the error catalog (E1-E12, no shim), and the preserved return semantics.
+the error catalog (E1-E12), and the return semantics.
 """
 import warnings
 
 import pytest
 import torch
 
-from aisteer360.algorithms.core.output import Output
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.input_control.base import InputControl
+from steerability.algorithms.core.output import Output
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.input_control.base import InputControl
 from tests.utils.runtime_helpers import script_session_generate
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
@@ -220,8 +220,8 @@ class TestAttentionMaskPairing:
             )
 
 
-class TestRemovedPositionalShapes:
-    """Every positional shape other than text raises E12 at the boundary (no shim)."""
+class TestPositionalNonTextShapes:
+    """Every positional shape other than text raises E12 at the boundary."""
 
     @pytest.mark.parametrize(
         "positional",

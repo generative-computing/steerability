@@ -1,8 +1,8 @@
 """Tests for the shared condition-scoring helpers (pooling and projected-cosine score math)."""
 import torch
 
-from aisteer360.algorithms.core.internals.pooling import aggregate_condition_hidden, masked_mean
-from aisteer360.algorithms.state_control.common.gating import (
+from steerability.algorithms.core.internals.pooling import aggregate_condition_hidden, masked_mean
+from steerability.algorithms.state_control.common.gating import (
     projected_cosine_similarity,
     projected_cosine_similarity_tensor,
     rank_one_projector,
@@ -107,7 +107,7 @@ class TestAggregateConditionHidden:
 
 class TestMaskedMeanReimport:
     def test_reimport_path_resolves_and_matches(self):
-        from aisteer360.algorithms.state_control.common.estimators.mean_difference import _masked_mean
+        from steerability.algorithms.state_control.common.estimators.mean_difference import _masked_mean
         hidden = torch.randn(2, 5, 4)
         mask = torch.ones(2, 5, dtype=torch.long)
         torch.testing.assert_close(_masked_mean(hidden, mask), masked_mean(hidden, mask))

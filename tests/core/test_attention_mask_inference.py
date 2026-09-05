@@ -6,9 +6,9 @@ templates legitimately place the eos mid-prompt. All tests run CPU-only and offl
 """
 import torch
 
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.core.utils.generation import PromptWarnings, prepare_inputs
-from aisteer360.utils.tokenization import infer_attention_mask_from_ids
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.core.utils.generation import PromptWarnings, prepare_inputs
+from steerability.utils.tokenization import infer_attention_mask_from_ids
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 PAD = 2  # <pad> id in wordlevel_tokenizer

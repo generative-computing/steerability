@@ -1,8 +1,7 @@
 """Tests for the shared example renderer (`core/internals/render.py`).
 
-The parity test is the regression guard for the unified-formatting design: it
-fails if steering-vector extraction and inference ever produce different
-prompt-region token ids again. The remaining tests cover `render_for_model`'s
+The parity test fails if steering-vector extraction and inference produce different
+prompt-region token ids. The remaining tests cover `render_for_model`'s
 three modes and `render_contrastive`'s mode resolution / fallbacks.
 """
 import logging
@@ -10,9 +9,9 @@ import logging
 import pytest
 from transformers import AutoTokenizer
 
-from aisteer360.algorithms.core.internals.data import ContrastivePairs
-from aisteer360.algorithms.core.internals.render import render_contrastive
-from aisteer360.utils.rendering import encode_for_model, render_for_model
+from steerability.algorithms.core.internals.data import ContrastivePairs
+from steerability.algorithms.core.internals.render import render_contrastive
+from steerability.utils.rendering import encode_for_model, render_for_model
 from tests.utils.load_ci_models import get_models
 
 # minimal Jinja chat template used as a fallback when no CI model ships one
@@ -82,7 +81,7 @@ def raw_tokenizer():
     pytest.skip("No CI tokenizer without a chat template is available.")
 
 
-# Parity test (the regression guard)
+# Parity test
 def test_extraction_inference_prompt_parity(chat_tokenizer):
     """Extraction and inference must produce identical prompt-region token ids."""
     prompt = "What is the capital of France?"
@@ -109,9 +108,10 @@ def test_chat_modality_equals_encode_for_model(chat_tokenizer):
     prompt = "What is the capital of France?"
     messages = [{"role": "user", "content": prompt}]
 
+    # transformers v5: `apply_chat_template(tokenize=True)` returns a `BatchEncoding`
     chat_ids = chat_tokenizer.apply_chat_template(
         messages, tokenize=True, add_generation_prompt=True
-    )
+    )["input_ids"]
     efm_ids = encode_for_model(chat_tokenizer, prompt=prompt, mode="chat_prompt")["input_ids"]
     assert chat_ids == efm_ids
 

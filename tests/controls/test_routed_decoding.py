@@ -8,13 +8,13 @@ probe run. Empty probe `meta` keeps the fingerprint checks dormant except where 
 import pytest
 import torch
 
-from aisteer360.algorithms.core.internals.data import ContrastivePairs
-from aisteer360.algorithms.core.internals.fingerprint import model_fingerprint
-from aisteer360.algorithms.core.internals.probes import Probe, ProbeFitSpec, ProbeSet, ProbeSetFit
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.core.utils.auxiliary_pass import current_auxiliary_pass
-from aisteer360.algorithms.output_control.common.drivers.phased import Fixed
-from aisteer360.algorithms.output_control.routed_decoding import (
+from steerability.algorithms.core.internals.data import ContrastivePairs
+from steerability.algorithms.core.internals.fingerprint import model_fingerprint
+from steerability.algorithms.core.internals.probes import Probe, ProbeFitSpec, ProbeSet, ProbeSetFit
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.core.utils.auxiliary_pass import current_auxiliary_pass
+from steerability.algorithms.output_control.common.drivers.phased import Fixed
+from steerability.algorithms.output_control.routed_decoding import (
     P,
     Route,
     RoutedDecoding,
@@ -23,7 +23,7 @@ from aisteer360.algorithms.output_control.routed_decoding import (
     prefix,
     respond,
 )
-from aisteer360.algorithms.structural_control.base import StructuralControl
+from steerability.algorithms.structural_control.base import StructuralControl
 from tests.utils.runtime_helpers import script_session_generate
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 

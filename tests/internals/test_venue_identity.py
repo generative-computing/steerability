@@ -2,11 +2,11 @@
 import pytest
 import torch
 
-from aisteer360.algorithms.core.execution import ModelFacts
-from aisteer360.algorithms.core.internals.probes.probe import Probe
-from aisteer360.algorithms.core.internals.probes.probe_set import ProbeSet
-from aisteer360.algorithms.output_control.routed_decoding import P, Route, RoutedDecoding, Router
-from aisteer360.algorithms.output_control.routed_decoding.actions import respond
+from steerability.algorithms.core.execution import ModelFacts
+from steerability.algorithms.core.internals.probes.probe import Probe
+from steerability.algorithms.core.internals.probes.probe_set import ProbeSet
+from steerability.algorithms.output_control.routed_decoding import P, Route, RoutedDecoding, Router
+from steerability.algorithms.output_control.routed_decoding.actions import respond
 from tests.utils.tiny_models import wordlevel_tokenizer
 
 HIDDEN = 16

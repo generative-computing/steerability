@@ -1,29 +1,53 @@
+# OS / editor
 **/.DS_Store
 **/.idea
-**/.cache
+.python-version
+
+# python
 *.pyc
 **/__pycache__/
 .ipynb_checkpoints/
 **/.pytest_cache/
+.ruff_cache
+.cache
+
+# environments
 .env
-.venv
-/.venv/
+.venv/
+.venv**/
 /backend/venv
+
+# lockfiles
 *.lock
+!uv.lock
+
+# build / misc
+site
+
+# project-specific dirs
 /logs
 /notes
 /runs
 /scripts
+.claude/
+
+# model / experiment artifacts
+**/trl_models/
+**/mergekit_models/
+**/trainer_output/
+**/tmp/
+**/profiles/
+**/runs/
+/artifacts/rad/reward_model/
+
+# examples
 /examples/notebooks/wrapper_mergekit/mergekit_models/*
 examples/**/profiles/
 examples/**/profiles_*/
 /examples/notebooks/**/figures/*.png
-**/trl_models/
-**/mergekit_models/
-**/trainer_output
-**/tmp
-**/profiles/
-.claude/
+/examples/notebooks/algorithms/artifacts/
+
+#
 **/CLAUDE.md
 **/_run_notebooks.sh
 **/.nbrun/

@@ -8,11 +8,16 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from aisteer360.algorithms.core.internals.data import ContrastivePairs, LabeledExamples
-from aisteer360.algorithms.core.internals.fingerprint import model_fingerprint
-from aisteer360.algorithms.core.internals.probes.fitting import ProbeFitSpec, _fit_direction, calibrate_bias, fit_probe
-from aisteer360.algorithms.core.internals.probes.probe import Probe
-from aisteer360.algorithms.core.internals.stats import ActivationStats
+from steerability.algorithms.core.internals.data import ContrastivePairs, LabeledExamples
+from steerability.algorithms.core.internals.fingerprint import model_fingerprint
+from steerability.algorithms.core.internals.probes.fitting import (
+    ProbeFitSpec,
+    _fit_direction,
+    calibrate_bias,
+    fit_probe,
+)
+from steerability.algorithms.core.internals.probes.probe import Probe
+from steerability.algorithms.core.internals.stats import ActivationStats
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 HIDDEN = 32
@@ -228,7 +233,7 @@ class TestOrientation:
                 delta = X[y == 1].mean(dim=0) - X[y == 0].mean(dim=0)
                 self.coef_ = (-delta).unsqueeze(0).numpy()
 
-        import aisteer360.algorithms.core.internals.probes.fitting as fitting_module
+        import steerability.algorithms.core.internals.probes.fitting as fitting_module
         monkeypatch.setattr(fitting_module, "LogisticRegression", _InvertedLogReg)
 
         spec = ProbeFitSpec(method="logreg", candidate_layers=[1])
@@ -249,7 +254,7 @@ class TestOrientation:
 
 def _features_for_layer(model, tokenizer, data, spec, layer_id):
     """Pooled positive/negative features at one layer, via the fitting module's own path."""
-    from aisteer360.algorithms.core.internals.probes.fitting import _pooled_features
+    from steerability.algorithms.core.internals.probes.fitting import _pooled_features
 
     pos, neg = _pooled_features(model, tokenizer, data, spec, [layer_id])
     return pos[layer_id], neg[layer_id]
@@ -293,7 +298,7 @@ class TestPromptFormatting:
             "{% if add_generation_prompt %}[ASSISTANT] {% endif %}"
         )
 
-        import aisteer360.algorithms.core.internals.probes.fitting as fitting_module
+        import steerability.algorithms.core.internals.probes.fitting as fitting_module
         recorded: list[tuple[tuple[str, ...], bool]] = []
         original = fitting_module.tokenize_texts
 

@@ -1,6 +1,6 @@
-"""State-control multiplicity in `SteeringPipeline` (design PR 1).
+"""State-control multiplicity in `SteeringPipeline`.
 
-Covers the relaxed one-per-category rule for the state category: `merge_controls` returns an ordered
+Covers the any-number-per-category rule for the state category: `merge_controls` returns an ordered
 `state_controls` list, the session registers every entry's hooks in list order, same-module hooks
 chain (so composition is order-sensitive by design), a failed registration removes prior entries'
 hooks, `supports_batching` is the AND across all controls, and `compute_logprobs` composes edits.
@@ -10,11 +10,11 @@ Runs hub-free on a tiny randomly-initialized Llama.
 import pytest
 import torch
 
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.core.utils.assembly import collect_state_entries
-from aisteer360.algorithms.core.utils.controls import merge_controls
-from aisteer360.algorithms.input_control.base import InputControl
-from aisteer360.algorithms.state_control.base import HookControl
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.core.utils.assembly import collect_state_entries
+from steerability.algorithms.core.utils.controls import merge_controls
+from steerability.algorithms.input_control.base import InputControl
+from steerability.algorithms.state_control.base import HookControl
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 

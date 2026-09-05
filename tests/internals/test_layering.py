@@ -9,25 +9,25 @@ import subprocess
 import sys
 
 INTERNALS_MODULES = [
-    "aisteer360.algorithms.core.internals",
-    "aisteer360.algorithms.core.internals.capture",
-    "aisteer360.algorithms.core.internals.data",
-    "aisteer360.algorithms.core.internals.encoding",
-    "aisteer360.algorithms.core.internals.fingerprint",
-    "aisteer360.algorithms.core.internals.pooling",
-    "aisteer360.algorithms.core.internals.render",
-    "aisteer360.algorithms.core.internals.stats",
-    "aisteer360.algorithms.core.internals.probes",
-    "aisteer360.algorithms.core.internals.probes.probe",
-    "aisteer360.algorithms.core.internals.probes.fitting",
-    "aisteer360.algorithms.core.internals.probes.probe_set",
+    "steerability.algorithms.core.internals",
+    "steerability.algorithms.core.internals.capture",
+    "steerability.algorithms.core.internals.data",
+    "steerability.algorithms.core.internals.encoding",
+    "steerability.algorithms.core.internals.fingerprint",
+    "steerability.algorithms.core.internals.pooling",
+    "steerability.algorithms.core.internals.render",
+    "steerability.algorithms.core.internals.stats",
+    "steerability.algorithms.core.internals.probes",
+    "steerability.algorithms.core.internals.probes.probe",
+    "steerability.algorithms.core.internals.probes.fitting",
+    "steerability.algorithms.core.internals.probes.probe_set",
 ]
 
 _CATEGORY_SCAN = """
 def category_modules(modules):
     bad = []
     for name in modules:
-        if not name.startswith("aisteer360.algorithms."):
+        if not name.startswith("steerability.algorithms."):
             continue
         segments = name.split(".")
         if len(segments) > 2 and segments[2].endswith("_control"):
@@ -64,7 +64,7 @@ import sys
 
 import torch
 
-from aisteer360.algorithms.core.internals.probes import Probe
+from steerability.algorithms.core.internals.probes import Probe
 
 before = category_modules(sys.modules)
 
@@ -76,7 +76,7 @@ probe.as_gate()
 
 after = category_modules(sys.modules)
 print(json.dumps({"before": before, "loaded_state_control": any(
-    name.startswith("aisteer360.algorithms.state_control") for name in after
+    name.startswith("steerability.algorithms.state_control") for name in after
 )}))
 """
     result = json.loads(_run(code))
@@ -89,7 +89,7 @@ def test_registry_crawl_excludes_core_internals():
 import json
 from pathlib import Path
 
-import aisteer360.algorithms.core.registry as registry
+import steerability.algorithms.core.registry as registry
 
 crawled_dirs = [
     d.name for d in sorted(registry.ROOT.iterdir())
@@ -112,11 +112,11 @@ def test_orchestration_modules_do_not_import_internals():
 import json
 import sys
 
-import aisteer360.algorithms.core.steering_pipeline
-import aisteer360.algorithms.core.specs
+import steerability.algorithms.core.steering_pipeline
+import steerability.algorithms.core.specs
 
 print(json.dumps(sorted(
-    name for name in sys.modules if name.startswith("aisteer360.algorithms.core.internals")
+    name for name in sys.modules if name.startswith("steerability.algorithms.core.internals")
 )))
 """
     assert json.loads(_run(code)) == []

@@ -1,6 +1,6 @@
 # PASTA
 
-::: aisteer360.algorithms.state_control.pasta
+::: steerability.algorithms.state_control.pasta
     handler: python
     options:
         show_if_no_docstring: true

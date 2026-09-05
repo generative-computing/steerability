@@ -7,13 +7,13 @@ and dict shapes, comparator validation, conflict errors), and the precedence of 
 import pytest
 import torch
 
-from aisteer360.algorithms.core.internals.data import ContrastivePairs
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.state_control.cast.control import CAST
-from aisteer360.algorithms.state_control.common.fit_specs import ConditionSearchSpec, VectorTrainSpec
-from aisteer360.algorithms.state_control.common.selectors import ConditionPointSelector
-from aisteer360.algorithms.state_control.common.selectors.condition_point import ConditionPoint
-from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
+from steerability.algorithms.core.internals.data import ContrastivePairs
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.state_control.cast.control import CAST
+from steerability.algorithms.state_control.common.fit_specs import ConditionSearchSpec, VectorTrainSpec
+from steerability.algorithms.state_control.common.selectors import ConditionPointSelector
+from steerability.algorithms.state_control.common.selectors.condition_point import ConditionPoint
+from steerability.algorithms.state_control.common.steering_vector import SteeringVector
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 HIDDEN = 32
@@ -147,9 +147,9 @@ class TestConditionPointExpansion:
             pipe_b.generate(prompt, max_new_tokens=2, do_sample=False)
             assert search_control.latest_decision.open_per_row == reuse_control.latest_decision.open_per_row
 
-    @pytest.mark.parametrize("stale", ["score_below", "larger", "smaller"])
-    def test_non_canonical_comparator_raises(self, stale):
-        point = {"layer_ids": [1], "threshold": 0.3, "comparator": stale}
+    @pytest.mark.parametrize("comparator", ["<=", "LE", "bogus"])
+    def test_non_canonical_comparator_raises(self, comparator):
+        point = {"layer_ids": [1], "threshold": 0.3, "comparator": comparator}
         with pytest.raises(ValueError, match="'ge' or 'le'"):
             self._cast(point)
 

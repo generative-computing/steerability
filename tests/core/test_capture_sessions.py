@@ -5,14 +5,14 @@ for a remote capture-capable session."""
 import pytest
 import torch
 
-from aisteer360.algorithms.core.execution import BackendSpec
-from aisteer360.algorithms.core.internals.capture import capture_hidden
-from aisteer360.algorithms.core.internals.data import ContrastivePairs
-from aisteer360.algorithms.core.internals.probes import ProbeFitSpec, ProbeSet, fit_probe
-from aisteer360.algorithms.state_control.caa.control import CAA
-from aisteer360.algorithms.state_control.common.estimators import MeanDifferenceEstimator
-from aisteer360.algorithms.state_control.common.fit_specs import VectorTrainSpec
-from aisteer360.backends.huggingface import HFBackend
+from steerability.algorithms.core.execution import BackendSpec
+from steerability.algorithms.core.internals.capture import capture_hidden
+from steerability.algorithms.core.internals.data import ContrastivePairs
+from steerability.algorithms.core.internals.probes import ProbeFitSpec, ProbeSet, fit_probe
+from steerability.algorithms.state_control.caa.control import CAA
+from steerability.algorithms.state_control.common.estimators import MeanDifferenceEstimator
+from steerability.algorithms.state_control.common.fit_specs import VectorTrainSpec
+from steerability.backends.huggingface import HFBackend
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 PAIRS = ContrastivePairs(

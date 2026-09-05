@@ -1,6 +1,6 @@
-"""Mutation-guard tests for caller-supplied SteeringVectors (Issue 2).
+"""Mutation-guard tests for caller-supplied SteeringVectors.
 
-A precomputed vector shared across controls or across a Benchmark/ControlSpec sweep must not be
+A precomputed vector shared across controls or across a `ControlSpec` sweep must not be
 silently rescaled/re-cast by the first control that uses it. CAA, ActAdd, and CAST all clone the
 resolved vector before any in-place `.to()` / normalization.
 
@@ -8,11 +8,11 @@ Runs hub-free on a tiny randomly-initialized Llama.
 """
 import torch
 
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.state_control.act_add.control import ActAdd
-from aisteer360.algorithms.state_control.caa.control import CAA
-from aisteer360.algorithms.state_control.cast.control import CAST
-from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.state_control.act_add.control import ActAdd
+from steerability.algorithms.state_control.caa.control import CAA
+from steerability.algorithms.state_control.cast.control import CAST
+from steerability.algorithms.state_control.common.steering_vector import SteeringVector
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 HIDDEN = 32

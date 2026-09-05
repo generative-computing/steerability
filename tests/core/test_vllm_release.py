@@ -15,15 +15,15 @@ import pytest
 
 vllm = pytest.importorskip("vllm")
 
-from aisteer360.algorithms.core.execution import GenerationItem, GenerationParams, PreparedPrompt  # noqa: E402
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline  # noqa: E402
-from aisteer360.backends.vllm import VLLMBackend  # noqa: E402
+from steerability.algorithms.core.execution import GenerationItem, GenerationParams, PreparedPrompt  # noqa: E402
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline  # noqa: E402
+from steerability.backends.vllm import VLLMBackend  # noqa: E402
 
 TINY_MODEL = "JackFram/llama-68m"
 
 
 def _spec():
-    from aisteer360.algorithms.core.execution import BackendSpec
+    from steerability.algorithms.core.execution import BackendSpec
 
     return BackendSpec(
         kind="vllm",
@@ -89,7 +89,7 @@ def test_released_backend_raises():
 def test_pipeline_release_on_vllm():
     """Steer, generate, release_backends(), then generate again; reconstruct-on-next-use boots a
     fresh engine and succeeds."""
-    from aisteer360.algorithms.output_control.stopping_rules.control import StoppingRules
+    from steerability.algorithms.output_control.stopping_rules.control import StoppingRules
 
     pipeline = SteeringPipeline(
         controls=[StoppingRules(budget=6)],
@@ -116,7 +116,7 @@ def test_pipeline_release_on_vllm():
 def test_pipeline_end_to_end_with_stopping_rules():
     """Steer and generate end to end on the engine with a budget stop; the returned continuation is
     truncated to the budget."""
-    from aisteer360.algorithms.output_control.stopping_rules.control import StoppingRules
+    from steerability.algorithms.output_control.stopping_rules.control import StoppingRules
 
     pipeline = SteeringPipeline(
         controls=[StoppingRules(budget=6)],

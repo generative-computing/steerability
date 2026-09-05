@@ -1,6 +1,6 @@
 # State control
 
-::: aisteer360.algorithms.state_control.base
+::: steerability.algorithms.state_control.base
     handler: python
     options:
         show_if_no_docstring: true

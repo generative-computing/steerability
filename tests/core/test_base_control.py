@@ -1,6 +1,6 @@
 """Tests for the shared `BaseControl` constructor/lifecycle, parametrized over all four categories.
 
-Pins the consolidated construction contract: the null-argument guard and its message, args-field
+Pins the construction contract: the null-argument guard and its message, args-field
 mirroring (with reachability via `self.args`), the `@property`-name skip in every category, the
 `_configure()` hook firing on both the null and non-null paths in every category, the class-attribute
 defaults.
@@ -9,12 +9,12 @@ from dataclasses import dataclass
 
 import pytest
 
-from aisteer360.algorithms.core.base_args import BaseArgs
-from aisteer360.algorithms.core.base_control import BaseControl
-from aisteer360.algorithms.input_control.base import InputControl
-from aisteer360.algorithms.output_control.base import OutputControl
-from aisteer360.algorithms.state_control.base import StateControl
-from aisteer360.algorithms.structural_control.base import StructuralControl
+from steerability.algorithms.core.base_args import BaseArgs
+from steerability.algorithms.core.base_control import BaseControl
+from steerability.algorithms.input_control.base import InputControl
+from steerability.algorithms.output_control.base import OutputControl
+from steerability.algorithms.state_control.base import StateControl
+from steerability.algorithms.structural_control.base import StructuralControl
 
 
 @dataclass

@@ -1,6 +1,6 @@
 # BestOfN
 
-::: aisteer360.algorithms.output_control.best_of_n
+::: steerability.algorithms.output_control.best_of_n
     handler: python
     options:
         show_if_no_docstring: true

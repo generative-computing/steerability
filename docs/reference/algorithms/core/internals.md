@@ -1,6 +1,6 @@
 # Internals
 
-::: aisteer360.algorithms.core.internals
+::: steerability.algorithms.core.internals
     handler: python
     options:
         show_if_no_docstring: true

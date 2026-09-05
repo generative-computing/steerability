@@ -3,18 +3,18 @@ model gating below `MODULE`."""
 import pytest
 import torch
 
-from aisteer360.algorithms.core.execution import BackendSpec, ModelAccess, UnsupportedOperationError
-from aisteer360.algorithms.core.execution.session_utils import ScopedSession
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.input_control.base import InputControl
-from aisteer360.algorithms.state_control.common.sources import (
+from steerability.algorithms.core.execution import BackendSpec, ModelAccess, UnsupportedOperationError
+from steerability.algorithms.core.execution.session_utils import ScopedSession
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.input_control.base import InputControl
+from steerability.algorithms.state_control.common.sources import (
     ContrastiveFit,
     LayerFilteredFit,
     SinglePairFit,
     _Precomputed,
 )
-from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
-from aisteer360.backends.huggingface import HFBackend
+from steerability.algorithms.state_control.common.steering_vector import SteeringVector
+from steerability.backends.huggingface import HFBackend
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 PAIRS = {"prompts": ["q"], "positives": ["a"], "negatives": ["b"]}
@@ -35,7 +35,7 @@ class TestLadder:
 class TestDeclarations:
 
     def test_cpo_access_follows_prompt_lm(self):
-        from aisteer360.algorithms.input_control.cpo.control import CPO
+        from steerability.algorithms.input_control.cpo.control import CPO
 
         bound = CPO(seed_prompt="s", offline_data=[{"query": "q", "prompt": "p", "score": 1.0}])
         assert bound.steer_access() is ModelAccess.MODULE
@@ -66,12 +66,12 @@ class TestDeclarations:
         assert wrapped.artifact_class == "direction"
 
     def test_routed_decoding_access_follows_probe_form(self):
-        from aisteer360.algorithms.core.internals.probes import ProbeSetFit
-        from aisteer360.algorithms.core.internals.probes.fitting import ProbeFitSpec
-        from aisteer360.algorithms.core.internals.probes.probe import Probe
-        from aisteer360.algorithms.core.internals.probes.probe_set import ProbeSet
-        from aisteer360.algorithms.output_control.routed_decoding import P, Route, RoutedDecoding, Router
-        from aisteer360.algorithms.output_control.routed_decoding.actions import respond
+        from steerability.algorithms.core.internals.probes import ProbeSetFit
+        from steerability.algorithms.core.internals.probes.fitting import ProbeFitSpec
+        from steerability.algorithms.core.internals.probes.probe import Probe
+        from steerability.algorithms.core.internals.probes.probe_set import ProbeSet
+        from steerability.algorithms.output_control.routed_decoding import P, Route, RoutedDecoding, Router
+        from steerability.algorithms.output_control.routed_decoding.actions import respond
 
         rules = Router(routes=[Route("r", when=P("p"), action=respond("x"))])
         fit = RoutedDecoding(
@@ -92,10 +92,10 @@ class TestDeclarations:
         assert fitted.steer_fits() == ()
 
     def test_module_declarations_for_retaining_controls(self):
-        from aisteer360.algorithms.output_control.rad.control import RAD
-        from aisteer360.algorithms.output_control.sasa.control import SASA
-        from aisteer360.algorithms.output_control.value_guidance.control import ValueGuidance
-        from aisteer360.algorithms.state_control.pasta.control import PASTA
+        from steerability.algorithms.output_control.rad.control import RAD
+        from steerability.algorithms.output_control.sasa.control import SASA
+        from steerability.algorithms.output_control.value_guidance.control import ValueGuidance
+        from steerability.algorithms.state_control.pasta.control import PASTA
 
         assert SASA(beta=0.1).steer_access() is ModelAccess.MODULE
         assert RAD(beta=0.1, reward_model_id="unused").steer_access() is ModelAccess.MODULE

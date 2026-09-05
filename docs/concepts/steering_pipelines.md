@@ -7,15 +7,15 @@
 </p>
 
 Steering pipelines allow for the composition of multiple controls (across the [four control types](controls.md)) into a
-single steering operation on a model. This allows for individual controls to be easily *mixed* to form novel steering
+single steering operation on a model. This allows individual controls to be mixed to form new steering
 interventions.
 
 Steering pipelines are created using the `SteeringPipeline` class. The most common pattern is to specify a Hugging Face
 model name via `model_name_or_path` along with instantiated controls, e.g.,
-[`few_shot`](../examples/notebooks/algorithms/few_shot.ipynb) and [`dpo`](../examples/notebooks/algorithms/trl.ipynb), as follows:
+[`few_shot`](../examples/notebooks/algorithms/few_shot.ipynb) and [`dpo`](../examples/notebooks/algorithms/wrappers/trl.ipynb), as follows:
 
 ```python
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
 
 pipeline = SteeringPipeline(
     model_name_or_path="meta-llama/Llama-2-7b-hf",
@@ -26,79 +26,78 @@ The above chains the two controls into a single operation on the model.
 
 !!! note
     Some structural controls (e.g., model merging methods) produce a model as output rather than modifying/tuning an
-    existing model. In these cases, the steering pipeline is initialized without the `model_name_or_path` argument;
-    the structural control supplies the model during the steer step.
+    existing model. In these cases, the steering pipeline is initialized without the `model_name_or_path` argument,
+    and the structural control supplies the model during the steer step.
 
-!!! note
-    A pipeline may contain **any number of controls in every category**, each applied in list order. When multiple
-    state controls are supplied, list order is the single, well-defined composition surface: list order = `steer()`
-    order = hook registration order = execution order for hooks on the same module. PyTorch forward hooks chain (a
-    later hook receives the previous hook's returned output; pre-hooks chain likewise on inputs), so a combination like
-    "control A then control B at layer 12" is well-defined, and non-commuting pairs (e.g. ablation ∘ addition vs.
-    addition ∘ ablation) are order-sensitive by design. An `ActivationAdapter` is the natural single-behavior atom
-    here, i.e., steering with N behaviors is N adapters in the `controls` list.
+## Composing controls
 
-!!! note "Input controls: two-phase chaining"
-    Multiple input controls chain in list order across two phases. On chat input, every control's `adapt_messages`
-    runs in list order over the message batch (each non-None return feeds the next control); the result is templated
-    and tokenized once, then every control whose `adapt_messages` returned None runs its token-level `adapt` in list
-    order over the token stream. On text/tensor input there is no message phase; every control's `adapt` runs in list
-    order. Each control is applied exactly once per generation: at message level if its `adapt_messages` returned a
-    non-None result for that call, else at token level. List order is authoritative within each phase, but the message
-    phase structurally precedes the token phase: with `[TokenOnlyControl, MessageLevelControl]` on chat input, the
-    message-level control's effect lands first even though it is listed second (tokens do not exist before
-    templating). Recommended ordering: place semantic rewriters (`PRewrite`, `CPO`, `GEPA`) before surface formatting
-    (`FewShot`), since a rewriter trained on bare instructions degrades on exemplar-prepended input.
+A pipeline may contain any number of controls in every category. The categories are applied in a fixed order
+(structural, then input, then state, then output) such that later categories always see the final model. Within a
+category, controls are applied in the order they appear in the `controls` list. What it means for two controls to
+compose depends on what the category edits.
 
-!!! note "Structural controls: model threading"
-    Multiple structural controls thread the model through `steer()` in list order: each control receives the previous
-    control's returned model (and the possibly mutated tokenizer). Nothing implicit happens between stages, i.e., no
-    adapter merging and no embedding-resize reconciliation; stage compatibility (a PEFT-wrapped model into a second
-    trainer, resized embeddings, and the like) is the user's responsibility. Note that the TRL wrapper controls load
-    their own base model when `base_model_name_or_path` is set in their args, silently discarding the threaded
-    upstream model, so downstream structural controls should leave `base_model_name_or_path` unset to receive the
-    threaded model.
+Input controls chain on the prompt. On chat input, every control first has the opportunity to edit the messages
+through `adapt_messages`. The result is then rendered through the chat template and tokenized once, and every control
+that did not edit the messages applies its token-level `adapt` to the token stream. On text or tensor input there is no
+message phase and only `adapt` runs. Each control is applied exactly once per generation. Since the message phase
+precedes the token phase, a message-level control takes effect before a token-level control even when it is listed
+after it. We recommend placing semantic rewriters (`PRewrite`, `CPO`, `GEPA`) before surface formatting (`FewShot`),
+since a rewriter trained on bare instructions degrades on exemplar-prepended input.
 
-!!! note "Output controls: step-level controls compose, the decode loop does not"
-    Output controls participate through two mechanisms. Most are step-level controls supplying logits processors and/or
-    stopping criteria, which the pipeline gathers in `controls`-list order, then appends any per-call
-    `logits_processor` / `stopping_criteria` supplied in `generate()`, into one authoritative stack of each kind. The
-    decode loop itself is exclusive. It is owned by at most one `DecodingDriver`, and supplying two enabled drivers
-    raises at construction (two decoding procedures cannot both control generation). With no driver present, the loop
-    defaults to the model's own `generate`, so a pipeline with no output controls decodes exactly as the base model
-    does. Because the loop is a single owner while step-level controls compose, a step-level control (e.g. `RAD`)
-    applies inside every rollout a driver issues (e.g. `DeAL`'s lookahead), a composition rather than a conflict.
-    Step-level controls' logits processors also apply during `compute_logprobs`, so scoring reflects the steered
-    next-token distribution; a control sets `include_in_scoring=False` to opt out (e.g. when the per-position cost is
-    prohibitive).
+Structural controls thread the model. Each control's `steer()` receives the model (and tokenizer) returned by the
+previous control, and nothing implicit happens between stages, i.e., no adapter merging and no embedding-resize
+reconciliation. Compatibility between stages, e.g., passing a PEFT-wrapped model into a second trainer, is the user's
+responsibility. Note that the TRL wrapper controls load their own base model when `base_model_name_or_path` is set in
+their args, which discards the threaded model. Downstream structural controls should therefore leave
+`base_model_name_or_path` unset.
+
+State controls register their hooks in list order. PyTorch forward hooks chain, i.e., a later hook receives the output
+of the previous hook, which makes a combination such as "control A then control B at layer 12" well-defined. It also
+means that pairs of edits that do not commute (e.g., ablation followed by addition versus addition followed by ablation)
+are order-sensitive. An `ActivationAdapter` steers a single behavior, and steering with several behaviors is several
+adapters in the `controls` list.
+
+Output controls compose at the step level but not at the loop level. Most output controls supply logits processors
+and/or stopping criteria. The pipeline gathers these in list order, appends any `logits_processor` or
+`stopping_criteria` passed to `generate()`, and applies the combined result in every forward pass. The decode loop
+itself is owned by at most one `DecodingDriver`, and supplying two enabled drivers raises an error at construction
+since two decoding procedures cannot both control generation. With no driver present, the loop defaults to the model's
+own `generate`, and a pipeline with no output controls decodes exactly as the base model does. Because step-level
+controls compose while the loop has a single owner, a step-level control such as `RAD` also applies inside every rollout
+that a driver such as `DeAL` issues. Step-level logits processors also apply during `compute_logprobs`, which means that
+scoring reflects the steered next-token distribution. A control can set `include_in_scoring=False` to opt out of
+scoring, e.g., when the per-position cost is prohibitive.
 
 ## Steering the pipeline
 
 Before a steering pipeline can be used for inference, all of the controls in the pipeline must be prepared and applied
-to the model (e.g, training logic in a `DPO` control, or subspace learning in the `SASA` control). This step is referred
-to as the *steer* step and is executed via:
+to the model (e.g., training logic in a `DPO` control, or subspace learning in the `SASA` control). This step is referred
+to as the steer step and is executed via:
 
 ```python
 pipeline.steer()
 ```
 
-Calling the `steer()` method on a pipeline instance invokes the steering logic for every control in the pipeline. Methods are
-steered independently; the effect of composing steered/trained controls is one of the main functionalities provided by the
-toolkit. Note that the `steer()` step can be resource-heavy, e.g., especially if any of the controls in the pipeline require any training.
-Steering must be called before using the pipeline for inference; a repeated `steer()` call is a no-op.
+Calling the `steer()` method on a pipeline instance invokes the steering logic for every control in the pipeline.
+Methods are steered independently. The effect of composing steered/trained controls is one of the main
+functionalities provided by the toolkit. Note that the `steer()` step can be resource-heavy, especially if any
+control in the pipeline requires training. Steering must be called before using the pipeline for inference, and a
+repeated `steer()` call is a no-op.
 
 
 ## Execution backends
 
-Pipelines execute on a configurable backend. By default, the pipeline loads and runs the model *in process* (via
-Hugging Face `transformers`); passing `backend=` selects the offline vLLM engine (`kind="vllm"`) or a
-running vLLM server (`kind="vllm-serve"`). Support is binary per control configuration and backend:
-`pipeline.check()` returns a report with one verdict per unsupported (control, phase) pair, naming the gap and the
-fix, and `steer()` runs the same check and raises before any work happens. The per-control support boundary is
-recorded on each control's `Backends` line in [steering controls](controls.md).
+Pipelines execute on a configurable backend. By default, the pipeline loads and runs the model in process (via
+Hugging Face `transformers`). Passing `backend=` selects the offline vLLM engine (`kind="vllm"`) or a
+running vLLM server (`kind="vllm-serve"`).
+
+Not every control configuration can run on every backend. For instance, a state control whose edit has no serialized
+form cannot be hosted by an engine. Each control's `Backends` line in [steering controls](controls.md) records where it
+is supported. Before any model or engine work, `pipeline.check()` reports every unsupported (control, phase) pair
+together with the gap and the fix, and `steer()` runs the same check and raises an error on failures.
 
 ```python
-from aisteer360.algorithms.core.execution import BackendSpec
+from steerability.algorithms.core.execution import BackendSpec
 
 pipeline = SteeringPipeline(
     controls=[caa],
@@ -108,73 +107,75 @@ pipeline = SteeringPipeline(
         options={"hook_plugin": True},
     ),
 )
-report = pipeline.check()  # optional standalone check; steer() runs it and raises on failures
+report = pipeline.check()  # optional standalone check (steer() runs it and raises an error on failures)
 report.plan               # where each control's steer step and each fit will run
 ```
 
-The above fits `caa` through the engine's capture surface and generates through the vLLM-Hook plugin.
+The above fits `caa` through the engine's hidden-state capture and generates through the vLLM-Hook plugin.
 
-### Scoring rule
+### Scoring
 
-Intervention controls score in-process only, since remote prompt-logprob scoring anchors token scopes at the
-request's prompt end (the end of the prompt-plus-reference concatenation), which would silently unanchor
-prompt-relative interventions. An enabled output control with `include_in_scoring=True` likewise makes the pipeline
-score-unsupported off-torch, and encoder-decoder scoring is in-process-only.
+Scoring through `compute_logprobs` with intervention controls runs in process only. Remote prompt-logprob scoring
+anchors token scopes at the end of the prompt-plus-reference concatenation rather than at the end of the prompt, which
+would misplace prompt-relative interventions. Likewise, an enabled output control with `include_in_scoring=True` makes
+the score phase unsupported on backends without in-process torch, and encoder-decoder scoring is in-process only.
 
-### The model-access ladder
+### Model access during steering
 
-Each control declares its steer step's model access via `steer_access()`, on the cumulative `ModelAccess` ladder.
-The pipeline satisfies every declaration deterministically; `check()` returns the resulting steer plan alongside
-the generate and score verdicts.
-
-| Rung | Grants | HF venue | vLLM offline (plugin) | vLLM serve |
-| --- | --- | --- | --- | --- |
-| `facts` | `session.layout` and a tokenizer | live model | engine session | engine session |
-| `rollouts` | facts plus generation and scoring through the session | live model | engine session | engine session |
-| `capture` | rollouts plus hidden-state capture through the session | live model | engine session (staged when capture is absent or `fit="in_process"`) | staged model |
-| `module` | the model as a live `torch.nn.Module` | live model | staged model | staged model |
-
-On engine backends the staged in-process model is loaded, used, and freed before the engine boots; exported
-artifacts are the handoff, so the pipeline's in-process weights and its engine-served weights never coexist.
-`fit="in_process"` forces every fit onto the stage for engine-independent numerics; a calibrated artifact fitted in
-process while its read venue is an engine warns that its thresholds may shift across execution boundaries.
+Each control declares what its steer step needs from the model through `steer_access()`. The levels are cumulative:
+`facts` (the model layout and a tokenizer), `rollouts` (generation and scoring), `capture` (hidden-state capture), and
+`module` (the model as a loaded `torch.nn.Module`). On the in-process backend, every level is served by the loaded
+model. On an engine backend, the lower levels are served through the engine session where the engine supports them,
+and the remaining steps (every `module` step, and hidden-state capture when the engine cannot return it) run on a
+temporary in-process copy that is loaded, used, and freed before the engine boots. The exported
+artifacts are then handed to the engine, and the in-process weights and the engine-served weights never coexist.
+Setting `fit="in_process"` forces every fit onto the temporary copy for engine-independent numerics, and a calibrated
+artifact fitted in process while its reads happen on an engine warns that its thresholds may shift. The `plan` returned
+by `check()` states where each step will run.
 
 ### Lifecycle
 
 Backends are constructed lazily per pipeline and cached by spec. `SteeringPipeline.release_backends()`, or using the
-pipeline as a context manager, releases and evicts every backend the pipeline constructed, shutting engine-owning
-backends down deterministically rather than waiting for garbage collection. A released pipeline stays usable. The
-next operation reconstructs backends against the same specs, so a re-booted engine serves subsequent generations.
-`Benchmark` releases each configuration's backends automatically after its trials. The offline engine's release is
-process-global with respect to vLLM distributed state, so it assumes no other live vLLM engine in the process.
+pipeline as a context manager, releases every backend the pipeline constructed and shuts engine-owning backends down
+deterministically rather than waiting for garbage collection. A released pipeline stays usable, since the next
+operation reconstructs the backends against the same specs. The `SteeringEval` runner releases each configuration's
+backends automatically after its trials. Because the offline engine's release is process-global with respect to vLLM
+distributed state, it assumes no other running vLLM engine in the process.
 
 ```python
 with SteeringPipeline(controls=[caa], backend="vllm") as pipeline:
-    pipeline.steer()  # fits stage or ride the engine session per the steer plan
+    pipeline.steer()  # fits run on the temporary copy or through the engine session, per the steer plan
     response = pipeline.generate(text="...", max_new_tokens=64)
 # the engine is shut down on exit
 ```
 
-### Benchmarking
+### Evaluation
 
-`Benchmark` forwards its `backend` and `fit` arguments to the pipelines it builds and pre-flights support over every
-sweep point (via `SteeringPipeline.check()`) before any model or engine work, so the per-control support recorded on
-each control's `Backends` line in [steering controls](controls.md) governs benchmarking too. A sweep point that is
-unsupported on the configured backend either fails the whole run (`on_unsupported="raise"`, the default) or is
-skipped with a warning (`on_unsupported="skip"`).
+The `SteeringEval` runner forwards its `backend` and `fit` arguments to the pipelines it builds and checks support over
+every sweep point (via `SteeringPipeline.check()`) before any model or engine work. A sweep point that is unsupported
+on the configured backend either fails the whole run (`on_unsupported="raise"`, the default) or is skipped with a
+warning (`on_unsupported="skip"`).
 
 ### Running a server
 
-The offline vLLM engine (`BackendSpec(kind="vllm")`) boots vLLM inside the current process, so it needs no server and
-is the automatic path for single-process runs. The serve backend targets a vLLM server you launch yourself, which is
-the answer for a remote GPU box, one server shared across processes or benchmark runs, a client with no local vLLM
-install, or process isolation from the steering client.
+The offline vLLM engine (`BackendSpec(kind="vllm")`) boots vLLM inside the current process and needs no server, which
+makes it the natural path for single-process runs. The serve backend targets a vLLM server you launch yourself, which
+suits a remote GPU box, one server shared across processes or evaluation runs, a client with no local vLLM install, or
+process isolation from the steering client.
 
-Start a server with `vllm serve <model> --port 8000` (any extra engine flags as usual), then target it with a spec
-carrying `base_url`:
+vLLM reads some settings from environment variables only. The offline backend therefore applies a scoped boot
+environment around engine construction and restores it afterwards. A launched server needs the same environment, which
+`serve_environment()` returns for a `vllm serve` process. Note that the boot environment defaults the FlashInfer sampler
+off (see [installation](../home/installation.md)). Start a server with
+
+```bash
+VLLM_HOOK_WORKER=unified VLLM_USE_FLASHINFER_SAMPLER=0 vllm serve <model> --port 8000 --enforce-eager
+```
+
+(with any extra engine flags), then target it with a spec that sets `base_url`:
 
 ```python
-from aisteer360.algorithms.core.execution import BackendSpec
+from steerability.algorithms.core.execution import BackendSpec
 
 spec = BackendSpec(
     kind="vllm-serve",
@@ -183,10 +184,11 @@ spec = BackendSpec(
 )
 ```
 
-When serving activation interventions through the vLLM-Hook plugin, the serving environment carries the plugin, the
-server starts with `VLLM_HOOK_WORKER=unified` and eager execution, the spec adds `hook_plugin: True`, and
-`artifact_dir` names the server's registry directory (its `VLLM_HOOK_REGISTRY_DIR`) on a filesystem shared with the
-server; without `artifact_dir` the client PUTs artifacts over the server's artifact route instead.
+Serving activation interventions through the vLLM-Hook plugin additionally requires the plugin in the serving
+environment, `VLLM_HOOK_WORKER=unified` and eager execution on the server, and `hook_plugin: True` on the spec.
+Artifacts reach the server either through `artifact_dir`, the server's registry directory (its
+`VLLM_HOOK_REGISTRY_DIR`) on a filesystem shared with the client, or, without `artifact_dir`, over the server's artifact
+route.
 
 
 ## Running inference on the pipeline
@@ -194,11 +196,12 @@ server; without `artifact_dir` the client PUTs artifacts over the server's artif
 Once the pipeline has been steered, inference can be run using the `generate()` method. The prompt source is declared
 by keyword, with exactly one source per call: `text=` for a `str` or `list[str]`, `messages=` for one conversation
 (a sequence of chat-message mappings) or a batch of conversations, and `input_ids=` for a pre-tokenized 1-D/2-D
-integer tensor (`attention_mask` is valid only alongside `input_ids=`, and is derived automatically for `text=` and
-`messages=`). A positional `str`/`list[str]` is also accepted as a convenience for text prompts. Unlike bare
-`model.generate`, the returned token ids exclude the prompt by default; pass `return_full_sequence=True` for
-prompt-plus-continuation output. The `text=` and
-`messages=` paths tokenize for you, so passing chat directly is the most direct route:
+integer tensor. `attention_mask` is valid only alongside `input_ids=`, and is derived automatically for `text=` and
+`messages=`. A positional `str`/`list[str]` is also accepted as a convenience for text prompts.
+
+Unlike bare `model.generate`, the returned token ids exclude the prompt by default. Pass `return_full_sequence=True`
+for prompt-plus-continuation output. The `text=` and `messages=` paths tokenize for you, allowing chat to be passed
+directly:
 
 ```python
 output = pipeline.generate(
@@ -207,8 +210,11 @@ output = pipeline.generate(
 )
 ```
 
+On the Hugging Face backend, batched prompts are left-packed internally for correct causal generation. Callers do
+not need to set the tokenizer's `padding_side`.
+
 For reasoning models that toggle thinking through a chat-template keyword, we pass `chat_template_kwargs` alongside
-`messages=`. This mapping is forwarded to `apply_chat_template` and is not interpreted by the toolkit, so the keys
+`messages=`. Since this mapping is forwarded to `apply_chat_template` and is not interpreted by the toolkit, the keys
 are whatever the model family expects (for example `enable_thinking`). It is valid only with `messages=`, and pairing
 it with `text=` or `input_ids=` raises a `TypeError`.
 
@@ -252,6 +258,6 @@ steered_output_ids = pipeline.generate(
 On the default in-process backend, steering pipelines accept any of the generation parameters available in
 [Hugging Face's `GenerationConfig` class](https://huggingface.co/docs/transformers/en/main_classes/text_generation),
 including the generation strategies for [custom decoding](https://huggingface.co/docs/transformers/en/generation_strategies).
-Generation parameters are normalized across backends: the sampling-facing subset (e.g., `max_new_tokens`,
+Generation parameters are normalized across backends. The sampling-facing subset (e.g., `max_new_tokens`,
 `temperature`, `top_p`, `stop_strings`) is portable, while parameters outside it pass through to `model.generate` in
-process and raise on the vLLM backends.
+process and raise an error on the vLLM backends.

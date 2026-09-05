@@ -8,12 +8,12 @@ import warnings
 import pytest
 import torch
 
-from aisteer360.algorithms.core.internals.pooling import aggregate_condition_hidden
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.state_control.cast.args import CASTArgs
-from aisteer360.algorithms.state_control.cast.control import CAST
-from aisteer360.algorithms.state_control.common.fit_specs import ConditionSearchSpec, VectorTrainSpec
-from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
+from steerability.algorithms.core.internals.pooling import aggregate_condition_hidden
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.state_control.cast.args import CASTArgs
+from steerability.algorithms.state_control.cast.control import CAST
+from steerability.algorithms.state_control.common.fit_specs import ConditionSearchSpec, VectorTrainSpec
+from steerability.algorithms.state_control.common.steering_vector import SteeringVector
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 HIDDEN = 32
@@ -192,7 +192,7 @@ class TestPerRowGating:
         assert steered_rows == [row for row, is_open in enumerate(decision.open_per_row) if is_open]
 
     def test_row_zero_closed_row_one_open(self):
-        # regression guard: scoring only row 0 (the old behavior) would gate the whole batch on row 0
+        # each row is gated on its own score, never on row 0's
         input_ids = torch.tensor([[3, 4, 5, 6], [11, 12, 13, 14]])
         probe = _build_cast(condition_threshold=-1.0, comparator="ge")
         lo, hi = self._separating_threshold(probe, input_ids)
@@ -235,7 +235,7 @@ class TestConditionMaskThreading:
         return control
 
     def _built_prompt_mask(self, control, ids, attention_mask, monkeypatch):
-        import aisteer360.algorithms.state_control.common.runtime as runtime_module
+        import steerability.algorithms.state_control.common.runtime as runtime_module
 
         captured = {}
         original = runtime_module.build_hooks
@@ -284,17 +284,17 @@ class TestConditionMaskThreading:
 
 
 class TestComparatorVocabulary:
-    """Comparators are `ge`/`le`; the retired aliases and names are rejected."""
+    """Comparators are `ge`/`le`; any other value is rejected."""
 
-    @pytest.mark.parametrize("stale", ["larger", "smaller", "score_above", "score_below", "bogus"])
-    def test_castargs_rejects_non_canonical_comparators(self, stale):
+    @pytest.mark.parametrize("comparator", [">=", "GE", "gt", "bogus"])
+    def test_castargs_rejects_non_canonical_comparators(self, comparator):
         with pytest.raises(ValueError, match="'ge' or 'le'"):
             CASTArgs(
                 behavior_vector=_steering_vector(1, [0]),
                 condition_vector=_steering_vector(2, [1]),
                 condition_layer_ids=[1],
                 condition_vector_threshold=0.1,
-                condition_comparator_threshold_is=stale,
+                condition_comparator_threshold_is=comparator,
                 search=ConditionSearchSpec(auto_find=False),
             )
 
@@ -331,7 +331,7 @@ class TestConditionalBehaviorTransform:
         return _unit_vector(self.DIRECTION_SEED + layer_id)
 
     def _build_ablation_cast(self, condition_threshold, comparator="ge"):
-        from aisteer360.algorithms.state_control.common.transforms import ProjectionTransform
+        from steerability.algorithms.state_control.common.transforms import ProjectionTransform
 
         directions = {l: self._direction(l).unsqueeze(0) for l in (0, 1)}
         condition_vec = _steering_vector(seed=200, layers=[1])
@@ -377,7 +377,7 @@ class TestConditionalBehaviorTransform:
 
     def test_unconditional_ablation_applies_to_all_rows(self):
         # no condition -> gate always open -> ablation applied everywhere it is masked
-        from aisteer360.algorithms.state_control.common.transforms import ProjectionTransform
+        from steerability.algorithms.state_control.common.transforms import ProjectionTransform
 
         directions = {l: self._direction(l).unsqueeze(0) for l in (0, 1)}
         control = CAST(

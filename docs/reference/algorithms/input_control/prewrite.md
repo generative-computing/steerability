@@ -1,6 +1,6 @@
 # PRewrite
 
-::: aisteer360.algorithms.input_control.prewrite
+::: steerability.algorithms.input_control.prewrite
     handler: python
     options:
         show_if_no_docstring: true

@@ -1,6 +1,6 @@
 # Structural control
 
-::: aisteer360.algorithms.structural_control.base
+::: steerability.algorithms.structural_control.base
     handler: python
     options:
         show_if_no_docstring: true

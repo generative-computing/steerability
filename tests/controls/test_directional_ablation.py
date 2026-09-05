@@ -9,11 +9,11 @@ Two tiers:
 import pytest
 import torch
 
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
-from aisteer360.algorithms.state_control.common.transforms import ProjectionTransform
-from aisteer360.algorithms.state_control.directional_ablation.args import DirectionalAblationArgs
-from aisteer360.algorithms.state_control.directional_ablation.control import DirectionalAblation
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.state_control.common.steering_vector import SteeringVector
+from steerability.algorithms.state_control.common.transforms import ProjectionTransform
+from steerability.algorithms.state_control.directional_ablation.args import DirectionalAblationArgs
+from steerability.algorithms.state_control.directional_ablation.control import DirectionalAblation
 from tests.utils.sweep import build_param_grid
 
 PROMPT_TEXT = "Give me a short set of instructions to follow when you respond."
@@ -22,10 +22,18 @@ PROMPT_TEXT = "Give me a short set of instructions to follow when you respond."
 # helpers
 
 def _no_hooks_on(model) -> bool:
-    """True when no forward or pre hooks remain on any module (nothing leaked)."""
+    """True when no toolkit forward or pre hooks remain on any module (nothing leaked).
+
+    transformers v5 parks its own context-gated output-capture hooks on modules
+    (`transformers.utils.output_capturing`) after any forward that requests captured
+    outputs; those are inert outside a capture context and are not leaks, so hooks
+    owned by transformers itself are excluded from the check.
+    """
     for module in model.modules():
-        if module._forward_hooks or module._forward_pre_hooks:
-            return False
+        for registry in (module._forward_hooks, module._forward_pre_hooks):
+            for hook in registry.values():
+                if not getattr(hook, "__module__", "").startswith("transformers."):
+                    return False
     return True
 
 
@@ -167,7 +175,7 @@ class TestDirectionalAblationArgs:
             assert args.steering_vector.directions[0].size(0) == k
 
     def test_dict_data_coerced_to_contrastive_pairs(self):
-        from aisteer360.algorithms.core.internals.data import ContrastivePairs
+        from steerability.algorithms.core.internals.data import ContrastivePairs
 
         args = DirectionalAblationArgs(data={"positives": ["p1", "p2"], "negatives": ["n1", "n2"]})
         assert isinstance(args.data, ContrastivePairs)

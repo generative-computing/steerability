@@ -1,6 +1,6 @@
 # Common library
 
-::: aisteer360.algorithms.output_control.common
+::: steerability.algorithms.output_control.common
     handler: python
     options:
         show_if_no_docstring: true

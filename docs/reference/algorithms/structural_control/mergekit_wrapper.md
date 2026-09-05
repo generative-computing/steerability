@@ -1,6 +1,6 @@
 # MergeKit
 
-::: aisteer360.algorithms.structural_control.wrappers.mergekit
+::: steerability.algorithms.structural_control.wrappers.mergekit
     handler: python
     options:
         show_if_no_docstring: true

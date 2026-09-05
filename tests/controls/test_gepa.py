@@ -8,12 +8,12 @@ import pytest
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from aisteer360.algorithms.input_control.common.pareto import ParetoFrontier
-from aisteer360.algorithms.input_control.gepa import GEPA, GEPAArgs
-from aisteer360.algorithms.input_control.gepa.utils import pareto_sampling
-from aisteer360.algorithms.input_control.gepa.utils.pool import CandidatePool
-from aisteer360.algorithms.input_control.gepa.utils.reflective_dataset import build_records
-from aisteer360.algorithms.input_control.gepa.utils.reflective_meta_prompt import render_records
+from steerability.algorithms.input_control.common.pareto import ParetoFrontier
+from steerability.algorithms.input_control.gepa import GEPA, GEPAArgs
+from steerability.algorithms.input_control.gepa.utils import pareto_sampling
+from steerability.algorithms.input_control.gepa.utils.pool import CandidatePool
+from steerability.algorithms.input_control.gepa.utils.reflective_dataset import build_records
+from steerability.algorithms.input_control.gepa.utils.reflective_meta_prompt import render_records
 
 TINY_LM = "hf-internal-testing/tiny-random-LlamaForCausalLM"
 
@@ -229,7 +229,7 @@ class TestGEPASteer:
             seen_contexts.append((context or {}).get("records", ""))
             return ["be concise"]
 
-        from aisteer360.algorithms.input_control.common.proposers.llm_meta_prompt import LLMMetaPromptProposer
+        from steerability.algorithms.input_control.common.proposers.llm_meta_prompt import LLMMetaPromptProposer
         monkeypatch.setattr(LLMMetaPromptProposer, "propose", capturing_propose)
 
         # gold target lives in a distinctive sentinel field; format_query returns only the input.
@@ -275,7 +275,7 @@ class TestGEPASteer:
         def fake_propose(self, seed, n=1, context=None):
             return ["x" * 200]
 
-        from aisteer360.algorithms.input_control.common.proposers.llm_meta_prompt import LLMMetaPromptProposer
+        from steerability.algorithms.input_control.common.proposers.llm_meta_prompt import LLMMetaPromptProposer
         monkeypatch.setattr(LLMMetaPromptProposer, "propose", fake_propose)
 
         def scored_run(self, task_lm, instruction, batch, *, with_feedback):
@@ -315,7 +315,7 @@ class TestGEPASteer:
 
 class TestGEPAMetaPrompt:
     def test_default_contains_domain_fact_directive_and_fenced_instruction(self):
-        from aisteer360.algorithms.input_control.gepa.utils import reflective_meta_prompt
+        from steerability.algorithms.input_control.gepa.utils import reflective_meta_prompt
         text = reflective_meta_prompt.GEPA_DEFAULT
         assert "niche and domain specific factual information" in text
         assert "within ``` blocks" in text
@@ -337,7 +337,7 @@ class TestGEPAImprovementAcceptance:
         def fake_propose(self, seed, n=1, context=None):
             return [target_instruction]
 
-        from aisteer360.algorithms.input_control.common.proposers.llm_meta_prompt import LLMMetaPromptProposer
+        from steerability.algorithms.input_control.common.proposers.llm_meta_prompt import LLMMetaPromptProposer
         monkeypatch.setattr(LLMMetaPromptProposer, "propose", fake_propose)
 
         gepa = GEPA(

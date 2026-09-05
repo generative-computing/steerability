@@ -9,13 +9,13 @@ import warnings
 import pytest
 import torch
 
-from aisteer360.algorithms.core.internals.capture import layerwise_tokenwise_hidden
-from aisteer360.algorithms.core.internals.data import ContrastivePairs
-from aisteer360.algorithms.core.internals.fingerprint import model_fingerprint
-from aisteer360.algorithms.core.internals.probes.fitting import ProbeFitSpec
-from aisteer360.algorithms.core.internals.probes.probe import Probe
-from aisteer360.algorithms.core.internals.probes.probe_set import ProbeReadings, ProbeSet, ProbeSetFit
-from aisteer360.algorithms.core.internals.stats import StatsSpec
+from steerability.algorithms.core.internals.capture import layerwise_tokenwise_hidden
+from steerability.algorithms.core.internals.data import ContrastivePairs
+from steerability.algorithms.core.internals.fingerprint import model_fingerprint
+from steerability.algorithms.core.internals.probes.fitting import ProbeFitSpec
+from steerability.algorithms.core.internals.probes.probe import Probe
+from steerability.algorithms.core.internals.probes.probe_set import ProbeReadings, ProbeSet, ProbeSetFit
+from steerability.algorithms.core.internals.stats import StatsSpec
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 HIDDEN = 32
@@ -189,9 +189,9 @@ class TestCoexistence:
     `"all"`-scoped behavior transforms apply to it."""
 
     def test_read_skips_condition_scoring_and_applies_behavior(self, model):
-        from aisteer360.algorithms.state_control.common.gating import CallableReadout, Evidence, Gate
-        from aisteer360.algorithms.state_control.common.runtime import TransformHookRuntime
-        from aisteer360.algorithms.state_control.common.token_scope import compute_prompt_lens
+        from steerability.algorithms.state_control.common.gating import CallableReadout, Evidence, Gate
+        from steerability.algorithms.state_control.common.runtime import TransformHookRuntime
+        from steerability.algorithms.state_control.common.token_scope import compute_prompt_lens
         from tests.utils.runtime_helpers import NeverCompleteRule, RecordingTransform
 
         ids = torch.tensor([[3, 4, 5, 6]])
@@ -233,8 +233,8 @@ class TestCoexistence:
         assert not torch.allclose(steered, baseline)  # scores measure the stream as deployed
 
     def test_read_leaves_live_cast_counters_and_gates_untouched(self, model, tokenizer, monkeypatch):
-        from aisteer360.algorithms.state_control.cast.control import CAST
-        from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
+        from steerability.algorithms.state_control.cast.control import CAST
+        from steerability.algorithms.state_control.common.steering_vector import SteeringVector
 
         def steering_vector(seed, layers):
             return SteeringVector(
@@ -325,5 +325,20 @@ class TestProbeSetFit:
         probes = ProbeSet.fit(
             model, tokenizer, data=DATA, spec=ProbeFitSpec(method="mean_diff", candidate_layers=[1])
         )
+        readout = probes.read(model, torch.tensor([[3, 4, 5]]))
+        assert set(readout.decisions) == {"topic"}
+
+    def test_fit_and_read_on_composite_wrapper(self, tokenizer):
+        """ProbeSet.fit and read succeed on a composite multimodal wrapper (nested decoder root)."""
+        from steerability.algorithms.core.internals.model_layout import resolve_model_layout
+        from tests.utils.tiny_models import tiny_gemma3_conditional
+
+        model = tiny_gemma3_conditional(num_layers=LAYERS, hidden=HIDDEN, heads=4)
+        probes = ProbeSet.fit(
+            model, tokenizer, data=DATA, spec=ProbeFitSpec(method="mean_diff", candidate_layers=[1])
+        )
+        assert resolve_model_layout(model).layer_names == [
+            f"model.language_model.layers.{i}" for i in range(LAYERS)
+        ]
         readout = probes.read(model, torch.tensor([[3, 4, 5]]))
         assert set(readout.decisions) == {"topic"}

@@ -10,9 +10,9 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from aisteer360.algorithms.core.internals.pooling import aggregate_condition_hidden, masked_mean
-from aisteer360.algorithms.core.internals.probes.probe import Probe
-from aisteer360.algorithms.state_control.common.gating import (
+from steerability.algorithms.core.internals.pooling import aggregate_condition_hidden, masked_mean
+from steerability.algorithms.core.internals.probes.probe import Probe
+from steerability.algorithms.state_control.common.gating import (
     AffineReadout,
     CallableReadout,
     CosineReadout,
@@ -168,7 +168,7 @@ class TestReadouts:
         assert readout.export((1,)) is None
 
     def test_junk_artifact_raises(self):
-        from aisteer360.algorithms.state_control.common.sources import ContrastiveFit
+        from steerability.algorithms.state_control.common.sources import ContrastiveFit
 
         with pytest.raises(TypeError, match="concrete SteeringVector or Mapping"):
             CosineReadout(ContrastiveFit(data={"positives": ["a"], "negatives": ["b"]}))

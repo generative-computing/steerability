@@ -1,6 +1,6 @@
 # Probes
 
-::: aisteer360.algorithms.core.internals.probes
+::: steerability.algorithms.core.internals.probes
     handler: python
     options:
         show_if_no_docstring: true

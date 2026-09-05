@@ -4,10 +4,10 @@ import warnings
 import pytest
 import torch
 
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.input_control.common.formatters.few_shot_block import FewShotBlockFormatter
-from aisteer360.algorithms.input_control.common.memory.text import TextMemory
-from aisteer360.algorithms.input_control.few_shot.control import FewShot
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.input_control.common.formatters.few_shot_block import FewShotBlockFormatter
+from steerability.algorithms.input_control.common.memory.text import TextMemory
+from steerability.algorithms.input_control.few_shot.control import FewShot
 from tests.utils.sweep import build_param_grid
 
 PROMPT_TEXT = (
@@ -248,7 +248,7 @@ def test_adapt_messages_returns_none_when_nothing_configured(model_and_tokenizer
 
 def test_selector_accepts_instance(model_and_tokenizer, device: torch.device):
     """`selector=` should accept a BaseSelector instance directly (not just a string name)."""
-    from aisteer360.algorithms.input_control.common.selectors.random import RandomSelector
+    from steerability.algorithms.input_control.common.selectors.random import RandomSelector
 
     base_model, tokenizer = model_and_tokenizer
     model = base_model.to(device)

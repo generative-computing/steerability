@@ -6,7 +6,7 @@ runtime hook to drop the `cache_position` kwarg, forcing the pass-counting fallb
 """
 import torch
 
-from aisteer360.algorithms.state_control.common.transforms.base import BaseTransform
+from steerability.algorithms.state_control.common.transforms.base import BaseTransform
 
 
 class RecordingTransform(BaseTransform):
@@ -85,7 +85,7 @@ class RuntimeCapture:
 
 def capture_built_runtimes(monkeypatch) -> RuntimeCapture:
     """Patch the runtime module so every runtime built by `build_hooks` is recorded."""
-    import aisteer360.algorithms.state_control.common.runtime as runtime_module
+    import steerability.algorithms.state_control.common.runtime as runtime_module
 
     capture = RuntimeCapture()
     original = runtime_module.TransformHookRuntime
@@ -111,8 +111,8 @@ class ScriptedSession:
         self.tokenizer = tokenizer
 
     def generate(self, items, params):
-        from aisteer360.algorithms.core.execution.payloads import ItemResult
-        from aisteer360.algorithms.core.output import Output
+        from steerability.algorithms.core.execution.payloads import ItemResult
+        from steerability.algorithms.core.output import Output
 
         results = []
         gen_kwargs = params.to_gen_kwargs()
@@ -139,7 +139,7 @@ def script_session_generate(monkeypatch, fake_generate):
     Drivers roll out through the pipeline's `SteeredSession`; scripting a rollout therefore
     scripts the session's `generate`.
     """
-    from aisteer360.backends.huggingface import ExclusiveSession
+    from steerability.backends.huggingface import ExclusiveSession
 
     def generate(self, items, params):
         return ScriptedSession(fake_generate, tokenizer=self.tokenizer).generate(items, params)

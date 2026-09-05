@@ -1,6 +1,6 @@
 # ContrastiveGuidance
 
-::: aisteer360.algorithms.output_control.contrastive_guidance
+::: steerability.algorithms.output_control.contrastive_guidance
     handler: python
     options:
         show_if_no_docstring: true

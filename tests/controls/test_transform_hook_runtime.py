@@ -1,4 +1,4 @@
-"""Unit tests for the shared `TransformHookRuntime` (design PR 2a).
+"""Unit tests for the shared `TransformHookRuntime`.
 
 Exercises the runtime directly with hand-registered hooks on a tiny Llama: `cache_position`-derived
 position offsets and their pass-counting fallback, pass-opener KV-offset semantics across
@@ -14,14 +14,14 @@ import warnings
 import pytest
 import torch
 
-from aisteer360.algorithms.core.utils.auxiliary_pass import auxiliary_pass
-from aisteer360.algorithms.state_control.common.gating import CallableReadout, Evidence, Gate, PerKeyThreshold
-from aisteer360.algorithms.state_control.common.runtime import TransformHookRuntime
-from aisteer360.algorithms.state_control.common.token_scope import compute_prompt_lens
+from steerability.algorithms.core.utils.auxiliary_pass import auxiliary_pass
+from steerability.algorithms.state_control.common.gating import CallableReadout, Evidence, Gate, PerKeyThreshold
+from steerability.algorithms.state_control.common.runtime import TransformHookRuntime
+from steerability.algorithms.state_control.common.token_scope import compute_prompt_lens
 from tests.utils.runtime_helpers import NeverCompleteRule
 from tests.utils.runtime_helpers import RecordingTransform as _RecordingTransform
 from tests.utils.runtime_helpers import strip_clock
-from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
+from tests.utils.tiny_models import tiny_llama
 
 HIDDEN = 32
 HEADS = 4
@@ -82,7 +82,7 @@ class TestPassOpenerOffset:
     @pytest.mark.parametrize("strip", [False, True], ids=["clock", "fallback"])
     @pytest.mark.parametrize("prompt_len", [1, 4])
     def test_prompt_len_one_still_steers_decode(self, prompt_len, strip):
-        """A length-1 prompt must not confuse prefill with decode (the anti-drift guard)."""
+        """A length-1 prompt must not confuse prefill with decode."""
         model = tiny_llama(num_layers=LAYERS, hidden=HIDDEN, heads=HEADS)
         runtime = TransformHookRuntime(hook_point="layer_output")
         transform = _RecordingTransform()

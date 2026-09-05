@@ -1,6 +1,6 @@
 # RAD
 
-::: aisteer360.algorithms.output_control.rad
+::: steerability.algorithms.output_control.rad
     handler: python
     options:
         show_if_no_docstring: true

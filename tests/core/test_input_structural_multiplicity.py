@@ -4,8 +4,7 @@ Covers the relaxed one-per-category rule for the input and structural categories
 chain in list order across two phases (message-level fold on chat input, then token-level chain),
 structural controls thread the model through `steer()` in list order, the post-steer tokenizer
 fallback scans `out_path` backwards, the adapt-messages bypass warning names each bypassed control,
-`steer()` warns on overlapping `RUNTIME_KWARGS_SCHEMA` names, and `Benchmark` rejects duplicate
-resolved spec names.
+and `steer()` warns on overlapping `RUNTIME_KWARGS_SCHEMA` names.
 
 Runs hub-free on a tiny randomly-initialized Llama with a WordLevel tokenizer.
 """
@@ -17,22 +16,11 @@ import pytest
 import torch
 import torch.nn as nn
 
-from aisteer360.algorithms.core.specs import ControlSpec
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.input_control.base import InputControl
-from aisteer360.algorithms.state_control.base import StateControl
-from aisteer360.algorithms.structural_control.base import StructuralControl
-from aisteer360.evaluation.benchmark import Benchmark
-from tests.conftest import MockAccuracyMetric, MockUseCase
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.input_control.base import InputControl
+from steerability.algorithms.state_control.base import StateControl
+from steerability.algorithms.structural_control.base import StructuralControl
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
-
-
-def _mock_use_case() -> MockUseCase:
-    """A minimal real use case (the benchmark constructor rejects non-`UseCase` objects)."""
-    return MockUseCase(
-        evaluation_data=[{"id": "q1", "question": "Q?", "answer": "A", "choices": ["A", "B"]}],
-        evaluation_metrics=[MockAccuracyMetric()],
-    )
 
 # renders message contents joined by spaces so WordLevel vocab words map to stable ids
 CHAT_TEMPLATE = "{% for message in messages %}{{ message['content'] }} {% endfor %}"
@@ -251,7 +239,7 @@ class TestOutPathBackwardsScan:
         third = _OutPathStructuralControl(out_path=None)
         pipeline = SteeringPipeline(controls=[first, second, third])
 
-        with caplog.at_level(logging.INFO, logger="aisteer360.algorithms.core.steering_pipeline"):
+        with caplog.at_level(logging.INFO, logger="steerability.algorithms.core.steering_pipeline"):
             resolved = pipeline._structural_out_path()
 
         assert str(resolved) == "path/two"
@@ -359,51 +347,3 @@ class TestRuntimeKwargsOverlapWarning:
             pipeline.steer()
 
         assert not [w for w in recorded if "runtime_kwargs" in str(w.message)]
-
-
-# Benchmark spec-name collisions
-class TestBenchmarkSpecNameCollision:
-    def test_duplicate_resolved_names_raise(self):
-        specs = [
-            ControlSpec(control_cls=_AppendTokenControl, params={"marker_id": THE}),
-            ControlSpec(control_cls=_AppendTokenControl, params={"marker_id": CAT}),
-        ]
-        benchmark = Benchmark(
-            use_case=_mock_use_case(),
-            base_model_name_or_path="unused",
-            steering_pipelines={"sweep": specs},
-        )
-        with pytest.raises(ValueError, match="distinct `name="):
-            benchmark.run()
-
-    def test_distinct_names_run(self, monkeypatch):
-        specs = [
-            ControlSpec(control_cls=_AppendTokenControl, params={"marker_id": THE}, name="first"),
-            ControlSpec(control_cls=_AppendTokenControl, params={"marker_id": CAT}, name="second"),
-        ]
-        benchmark = Benchmark(
-            use_case=_mock_use_case(),
-            base_model_name_or_path="unused",
-            steering_pipelines={"sweep": specs},
-        )
-
-        captured = []
-
-        def fake_run_pipeline(self, controls, *, specs=None, params=None, existing_runs=None, record=None):
-            captured.append((list(controls), dict(params or {})))
-            run = {"trial_id": 0, "generations": [], "evaluations": {}, "params": params or {},
-                   "config_id": "stub", "seed": None, "provenance": {}}
-            if record is not None:
-                record(run)
-            return [run]
-
-        monkeypatch.setattr(Benchmark, "_run_pipeline", fake_run_pipeline)
-        profiles = benchmark.run()
-
-        assert len(captured) == 1
-        controls, params = captured[0]
-        assert set(params.keys()) == {"first", "second"}
-        assert params["first"] == {"marker_id": THE}
-        assert params["second"] == {"marker_id": CAT}
-        assert [type(control) for control in controls] == [_AppendTokenControl, _AppendTokenControl]
-        assert len(profiles["sweep"]) == 1

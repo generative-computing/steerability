@@ -9,10 +9,10 @@ single steered pass.
 import torch
 from transformers import LogitsProcessorList, StoppingCriteriaList
 
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.output_control.base import DecodingDriver, session_generate
-from aisteer360.algorithms.state_control.caa.control import CAA
-from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.output_control.base import DecodingDriver, session_generate
+from steerability.algorithms.state_control.caa.control import CAA
+from steerability.algorithms.state_control.common.steering_vector import SteeringVector
 from tests.utils.runtime_helpers import RecordingTransform
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
@@ -121,9 +121,9 @@ class TestWireAnchorRewrite:
         import pytest
 
         pytest.importorskip("vllm_hook_plugins")
-        from aisteer360.algorithms.state_control.common.lowering import lower_interventions
-        from aisteer360.algorithms.state_control.common.specs import Intervention, TokenScope
-        from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform
+        from steerability.algorithms.state_control.common.lowering import lower_interventions
+        from steerability.algorithms.state_control.common.specs import Intervention, TokenScope
+        from steerability.algorithms.state_control.common.transforms import AdditiveTransform
 
         intervention = Intervention(
             layers=(1,),
@@ -133,7 +133,7 @@ class TestWireAnchorRewrite:
         return lower_interventions([intervention], num_layers=LAYERS)
 
     def test_after_prompt_rewrites_to_absolute_anchor(self):
-        from aisteer360.algorithms.core.execution.payloads import remap_prompt_relative_scopes
+        from steerability.algorithms.core.execution.payloads import remap_prompt_relative_scopes
 
         spec = self._lowered_spec({"kind": "after_prompt"})
         rewritten = remap_prompt_relative_scopes(spec, anchor=7)
@@ -147,7 +147,7 @@ class TestWireAnchorRewrite:
     def test_last_k_has_no_absolute_rollout_form(self):
         import pytest
 
-        from aisteer360.algorithms.core.execution.payloads import remap_prompt_relative_scopes
+        from steerability.algorithms.core.execution.payloads import remap_prompt_relative_scopes
 
         spec = self._lowered_spec({"kind": "last_k", "last_k": 3})
         # in-process last_k is relative to each forwarded pass, which no fixed position
@@ -156,15 +156,15 @@ class TestWireAnchorRewrite:
             remap_prompt_relative_scopes(spec, anchor=7)
 
     def test_absolute_scopes_pass_through_unchanged(self):
-        from aisteer360.algorithms.core.execution.payloads import remap_prompt_relative_scopes
+        from steerability.algorithms.core.execution.payloads import remap_prompt_relative_scopes
 
         spec = self._lowered_spec({"kind": "all"})
         assert remap_prompt_relative_scopes(spec, anchor=7) is spec
 
     def test_steered_session_injects_rewritten_entries_per_item(self):
-        from aisteer360.algorithms.core.execution import InterventionEntry
-        from aisteer360.algorithms.core.execution.backend import SteeredSession
-        from aisteer360.algorithms.core.execution.payloads import (
+        from steerability.algorithms.core.execution import InterventionEntry
+        from steerability.algorithms.core.execution.backend import SteeredSession
+        from steerability.algorithms.core.execution.payloads import (
             GenerationItem,
             PreparedPrompt,
             remap_prompt_relative_scopes,

@@ -5,9 +5,9 @@ import sys
 
 import pytest
 
-from aisteer360.utils import verbosity
+from steerability.utils import verbosity
 
-PACKAGE_LOGGER = "aisteer360"
+PACKAGE_LOGGER = "steerability"
 
 
 @pytest.fixture(autouse=True)
@@ -34,8 +34,8 @@ class TestImportSideEffects:
             "root = logging.getLogger()\n"
             "root_handlers_before = list(root.handlers)\n"
             "root_level_before = root.level\n"
-            "import aisteer360\n"
-            "pkg = logging.getLogger('aisteer360')\n"
+            "import steerability\n"
+            "pkg = logging.getLogger('steerability')\n"
             "non_null = [h for h in pkg.handlers if not isinstance(h, logging.NullHandler)]\n"
             "assert pkg.handlers, 'expected a NullHandler on the package logger'\n"
             "assert not non_null, f'unexpected non-null handlers: {non_null}'\n"
@@ -56,7 +56,7 @@ class TestSetVerbosity:
         verbosity.set_verbosity("debug")
         assert verbosity.get_verbosity() == logging.DEBUG
 
-        module_logger = logging.getLogger("aisteer360.some.module")
+        module_logger = logging.getLogger("steerability.some.module")
         with caplog.at_level(logging.DEBUG, logger=PACKAGE_LOGGER):
             module_logger.debug("hello from a toolkit module")
         assert any("hello from a toolkit module" in record.message for record in caplog.records)
@@ -89,7 +89,7 @@ class TestEnvDefault:
         logger = logging.getLogger(PACKAGE_LOGGER)
         logger.setLevel(logging.NOTSET)
         verbosity._env_default_applied = False
-        monkeypatch.setenv("AISTEER_VERBOSITY", "info")
+        monkeypatch.setenv("STEERABILITY_VERBOSITY", "info")
 
         level = verbosity.get_verbosity()
 
@@ -100,7 +100,7 @@ class TestEnvDefault:
         logger = logging.getLogger(PACKAGE_LOGGER)
         logger.setLevel(logging.NOTSET)
         verbosity._env_default_applied = False
-        monkeypatch.delenv("AISTEER_VERBOSITY", raising=False)
+        monkeypatch.delenv("STEERABILITY_VERBOSITY", raising=False)
 
         verbosity.get_verbosity()
 
@@ -110,7 +110,7 @@ class TestEnvDefault:
         logger = logging.getLogger(PACKAGE_LOGGER)
         logger.setLevel(logging.NOTSET)
         verbosity._env_default_applied = False
-        monkeypatch.setenv("AISTEER_VERBOSITY", "nonsense")
+        monkeypatch.setenv("STEERABILITY_VERBOSITY", "nonsense")
 
         verbosity.get_verbosity()
 

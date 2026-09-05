@@ -1,6 +1,6 @@
 # GEPA
 
-::: aisteer360.algorithms.input_control.gepa
+::: steerability.algorithms.input_control.gepa
     handler: python
     options:
         show_if_no_docstring: true

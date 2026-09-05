@@ -6,9 +6,9 @@ Hub-free: auxiliary expert / anti-expert models are second `tiny_llama` instance
 import pytest
 import torch
 
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.output_control.common.processors.contrastive_mixture import ContrastiveMixtureProcessor
-from aisteer360.algorithms.output_control.dexperts.control import DExperts
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.output_control.common.processors.contrastive_mixture import ContrastiveMixtureProcessor
+from steerability.algorithms.output_control.dexperts.control import DExperts
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 VOCAB = 100
@@ -42,7 +42,7 @@ class TestDExpertsConfig:
             DExperts(anti_expert_name_or_path="y")
 
     def test_is_step_level_control_not_driver(self):
-        from aisteer360.algorithms.output_control.base import DecodingDriver, OutputControl
+        from steerability.algorithms.output_control.base import DecodingDriver, OutputControl
         dex = DExperts(expert_name_or_path="x", anti_expert_name_or_path="y", alpha=0.5)
         assert isinstance(dex, OutputControl)
         assert not isinstance(dex, DecodingDriver)
@@ -94,7 +94,7 @@ class TestDExpertsMath:
 class TestVocabGuardrail:
     def test_vocab_mismatch_raises(self, tmp_path):
         # aux model with a different vocab than the base model -> clear error, no silent mapping
-        from aisteer360.algorithms.output_control.common.logit_sources import AuxModelSource
+        from steerability.algorithms.output_control.common.logit_sources import AuxModelSource
 
         path = tmp_path / "mismatched"
         tiny_llama(num_layers=2, hidden=16, heads=2, vocab=64).save_pretrained(str(path))

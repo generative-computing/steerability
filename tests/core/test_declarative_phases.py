@@ -9,10 +9,10 @@ steer-time lowering failure naming the intervention and reason.
 import pytest
 import torch
 
-from aisteer360.algorithms.core.execution import BackendSpec, Capability, ModelAccess, ModelFacts
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.state_control.caa.control import CAA
-from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
+from steerability.algorithms.core.execution import BackendSpec, Capability, ModelAccess, ModelFacts
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.state_control.caa.control import CAA
+from steerability.algorithms.state_control.common.steering_vector import SteeringVector
 
 HIDDEN = 16
 LAYERS = 4
@@ -75,7 +75,7 @@ class TestPhaseVerdicts:
         assert "prompt" in failures[0].message
 
     def test_generate_offers_spec_alternative_only_with_a_wire_form(self):
-        from aisteer360.algorithms.state_control.act_add.control import ActAdd
+        from steerability.algorithms.state_control.act_add.control import ActAdd
 
         exportable = CAA(steering_vector=_vector(), layer_id=1)
         positional = ActAdd(steering_vector=_vector(k=3), layer_id=1)
@@ -112,7 +112,7 @@ class TestEagerLoweringFailure:
     def test_lowering_failure_names_the_intervention_and_reason(self):
         """A configuration whose inexpressibility is artifact-dependent passes check() and
         fails at the eager steer-time lowering with the intervention named."""
-        from aisteer360.algorithms.core.execution import UnsupportedOperationError
+        from steerability.algorithms.core.execution import UnsupportedOperationError
 
         class _UncoveredSource:
             """Resolves a vector with no direction for the behavior layer."""
@@ -126,9 +126,9 @@ class TestEagerLoweringFailure:
                     directions={0: torch.randn(1, HIDDEN, generator=generator)},
                 )
 
-        from aisteer360.algorithms.state_control.base import InterventionControl
-        from aisteer360.algorithms.state_control.common.specs import Intervention, TokenScope
-        from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform
+        from steerability.algorithms.state_control.base import InterventionControl
+        from steerability.algorithms.state_control.common.specs import Intervention, TokenScope
+        from steerability.algorithms.state_control.common.transforms import AdditiveTransform
         from tests.utils.tiny_models import wordlevel_tokenizer
 
         class _DeclaredBroadcast(InterventionControl):

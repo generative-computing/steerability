@@ -2,7 +2,7 @@
 import pytest
 import torch
 
-from aisteer360.algorithms.output_control.routed_decoding.routing import P, Predicate, Route, Router
+from steerability.algorithms.output_control.routed_decoding.routing import P, Predicate, Route, Router
 
 
 def _bools(*values) -> torch.Tensor:

@@ -1,6 +1,6 @@
 # SASA
 
-::: aisteer360.algorithms.output_control.sasa
+::: steerability.algorithms.output_control.sasa
     handler: python
     options:
         show_if_no_docstring: true

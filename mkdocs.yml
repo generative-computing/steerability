@@ -1,7 +1,7 @@
-site_name: AISteer360
-site_url: https://ibm.github.io/AISteer360/
-repo_name: IBM/AISteer360
-repo_url: https://github.com/IBM/AISteer360
+site_name: Steerability
+site_url: https://ibm.github.io/steerability/
+repo_name: IBM/steerability
+repo_url: https://github.com/IBM/steerability
 
 theme:
   name: material
@@ -55,7 +55,7 @@ extra:
   announcement:
     type: info          # info | warning | success | danger
     text: |
-      **Aug 2025:** Initial release of **AI Steerability 360**!
+      **Aug 2025:** Initial release of **Steerability**!
 
 markdown_extensions:
   - pymdownx.tabbed:
@@ -84,6 +84,9 @@ extra_javascript:
   - javascripts/mathjax.js
   - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
 
+hooks:
+  - docs/_hooks/bibtex_warnings.py
+
 plugins:
   - awesome-nav:
       filename: .nav.yml
@@ -94,7 +97,7 @@ plugins:
             extensions:
             - griffe_inherited_docstrings
             preload_modules:
-              - aisteer360
+              - steerability
   - mkdocs-jupyter
   - search
   - include-markdown

@@ -5,7 +5,7 @@
 Structural control methods modify the model's weights or underlying architecture, creating a new model. This tutorial
 implements a `NoiseInjection` method that perturbs a model's weights by (scaled) Gaussian noise.
 
-The registry follows the standard pattern as:
+The registry file follows the standard pattern:
 
 ```python
 from .control import NoiseInjection
@@ -22,14 +22,14 @@ STEERING_METHOD = {
 
 Next, the args dataclass contains three parameters: `noise_scale` controlling the standard deviation of Gaussian noise
 to inject, `target_modules` specifying which layer patterns to modify (or None for all linear layers), and `seed`
-ensuring reproducible noise generation. The default for `target_modules` is `None` (all linear layers); note that (as
+ensuring reproducible noise generation. The default for `target_modules` is `None` (all linear layers). Note that (as
 indicated in
 [the general instructions for the arguments dataclass](../add_new_steering_method.md#2-arguments-dataclass-argspy)) a
 mutable default, such as a non-empty list of patterns, would need `default_factory` instead of `default`.
 
 ```python
 from dataclasses import dataclass, field
-from aisteer360.algorithms.core.base_args import BaseArgs
+from steerability.algorithms.core.base_args import BaseArgs
 
 
 @dataclass
@@ -68,8 +68,8 @@ scaled Gaussian noise to their parameters in place.
 import torch
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
-from aisteer360.algorithms.structural_control.base import StructuralControl
-from aisteer360.algorithms.structural_control.noise_injection.args import NoiseInjectionArgs
+from steerability.algorithms.structural_control.base import StructuralControl
+from steerability.algorithms.structural_control.noise_injection.args import NoiseInjectionArgs
 
 
 class NoiseInjection(StructuralControl):
@@ -92,8 +92,8 @@ class NoiseInjection(StructuralControl):
                 if not isinstance(module, torch.nn.Linear):
                     continue
 
-                # if no specific targets, inject into all Linear layers; otherwise, check if module name contains any
-                # target pattern
+                # inject into all linear layers when no targets are specified, otherwise check if the module name
+                # contains any target pattern
                 if self.target_modules is not None:
                     if not any(target in name for target in self.target_modules):
                         continue
@@ -111,8 +111,8 @@ class NoiseInjection(StructuralControl):
 The control can then be called via:
 
 ```python
-from aisteer360.algorithms.structural_control.noise_injection.control import NoiseInjection
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.structural_control.noise_injection.control import NoiseInjection
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
 
 MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
 

@@ -1,6 +1,6 @@
 # ITI
 
-::: aisteer360.algorithms.state_control.iti
+::: steerability.algorithms.state_control.iti
     handler: python
     options:
         show_if_no_docstring: true

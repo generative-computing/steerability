@@ -18,11 +18,11 @@ import weakref
 import pytest
 import torch
 
-from aisteer360.algorithms.structural_control.wrappers.trl.apotrainer import APO
-from aisteer360.algorithms.structural_control.wrappers.trl.dpotrainer import DPO
-from aisteer360.algorithms.structural_control.wrappers.trl.grpotrainer import GRPO
-from aisteer360.algorithms.structural_control.wrappers.trl.ppotrainer import PPO
-from aisteer360.algorithms.structural_control.wrappers.trl.sfttrainer import SFT
+from steerability.algorithms.structural_control.wrappers.trl.apotrainer import APO
+from steerability.algorithms.structural_control.wrappers.trl.dpotrainer import DPO
+from steerability.algorithms.structural_control.wrappers.trl.grpotrainer import GRPO
+from steerability.algorithms.structural_control.wrappers.trl.ppotrainer import PPO
+from steerability.algorithms.structural_control.wrappers.trl.sfttrainer import SFT
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 # CPU-only, no mixed precision, and no best-model reload (which requires a save strategy); keeps the

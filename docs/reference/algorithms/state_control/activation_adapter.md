@@ -1,6 +1,6 @@
 # ActivationAdapter
 
-::: aisteer360.algorithms.state_control.activation_adapter
+::: steerability.algorithms.state_control.activation_adapter
     handler: python
     options:
         show_if_no_docstring: true

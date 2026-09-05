@@ -16,13 +16,13 @@ Three tiers:
 import pytest
 import torch
 
-from aisteer360.algorithms.core.execution import ModelFacts
-from aisteer360.algorithms.core.internals.capture import capture_hidden
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.state_control.act_add.control import ActAdd
-from aisteer360.algorithms.state_control.common.estimators import SinglePairEstimator
-from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
-from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform
+from steerability.algorithms.core.execution import ModelFacts
+from steerability.algorithms.core.internals.capture import capture_hidden
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.state_control.act_add.control import ActAdd
+from steerability.algorithms.state_control.common.estimators import SinglePairEstimator
+from steerability.algorithms.state_control.common.steering_vector import SteeringVector
+from steerability.algorithms.state_control.common.transforms import AdditiveTransform
 from tests.utils.sweep import build_param_grid
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
@@ -256,8 +256,8 @@ class TestModeValidation:
             AdditiveTransform({1: torch.ones(3, HIDDEN)})
 
     def test_multi_row_source_without_positional_flag_raises_at_bind(self, layout_session):
-        from aisteer360.algorithms.state_control.common.sources import _Precomputed
-        from aisteer360.algorithms.state_control.common.specs import Intervention
+        from steerability.algorithms.state_control.common.sources import _Precomputed
+        from steerability.algorithms.state_control.common.specs import Intervention
 
         transform = AdditiveTransform(_Precomputed(_vector(k=3, layers=[1])))
         intervention = Intervention(layers=(1,), transform=transform)

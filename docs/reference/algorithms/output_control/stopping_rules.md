@@ -1,6 +1,6 @@
 # StoppingRules
 
-::: aisteer360.algorithms.output_control.stopping_rules
+::: steerability.algorithms.output_control.stopping_rules
     handler: python
     options:
         show_if_no_docstring: true

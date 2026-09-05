@@ -1,6 +1,6 @@
 # TRL
 
-::: aisteer360.algorithms.structural_control.wrappers.trl
+::: steerability.algorithms.structural_control.wrappers.trl
     handler: python
     options:
         show_if_no_docstring: true
