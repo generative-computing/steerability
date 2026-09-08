@@ -762,4 +762,4 @@ Rules that hold regardless of task:
   `add_method_by_category/`) and evaluating steering pipelines.
 - `examples/notebooks/`: runnable references for every method, the generic controls, and use-case studies.
 - `tests/index.md`: test-suite layout and the pattern for adding control tests.
-- Hosted documentation: <https://ibm.github.io/steerability/>.
+- Hosted documentation: <https://generative-computing.github.io/steerability/>.
