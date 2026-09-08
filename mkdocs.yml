@@ -1,7 +1,7 @@
 site_name: Steerability
-site_url: https://ibm.github.io/steerability/
-repo_name: IBM/steerability
-repo_url: https://github.com/IBM/steerability
+site_url: https://generative-computing.github.io/steerability/
+repo_name: generative-computing/steerability
+repo_url: https://github.com/generative-computing/steerability
 
 theme:
   name: material

@@ -54,4 +54,4 @@ addressing the current fragmentation in the field where steering algorithms are 
 within isolated, task-specific environments.[@liang2024controllable]
 
 We encourage the community to use Steerability in their steering workflows. We will continue to develop in the open, and
-encourage users to suggest any additional features or report any issues on our [GitHub page](https://github.com/IBM/steerability).
+encourage users to suggest any additional features or report any issues on our [GitHub page](https://github.com/generative-computing/steerability).
