@@ -1,5 +1,7 @@
-<img src="https://github.com/generative-computing/steerability/raw/main/docs/assets/logo_slim_darkmode.png#gh-dark-mode-only" width="300">
-<img src="https://github.com/generative-computing/steerability/raw/main/docs/assets/logo_slim_lightmode.png#gh-light-mode-only" width="300">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/generative-computing/steerability/raw/main/docs/assets/logo_slim_darkmode.png">
+  <img src="https://github.com/generative-computing/steerability/raw/main/docs/assets/logo_slim_lightmode.png" alt="Steerability" width="300">
+</picture>
 
 [//]: # (to add: arxiv; pypi; ci)
 [![Docs](https://img.shields.io/badge/docs-live-brightgreen)](https://generative-computing.github.io/steerability/)
