@@ -391,7 +391,12 @@ class SteeringPipelineModelAPI(ModelAPI):
 
         temperature = config.temperature
         if temperature is None:
-            if config.top_p is not None or config.top_k is not None or config.seed is not None:
+            if (
+                config.top_p is not None
+                or config.top_k is not None
+                or config.seed is not None
+                or self._base_seed is not None
+            ):
                 logger.debug(
                     "temperature is unset, so the backend's default sampling posture applies; "
                     "top_p/top_k/seed are not attached. Set temperature explicitly for a known posture."
