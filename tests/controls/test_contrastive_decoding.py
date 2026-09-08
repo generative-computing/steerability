@@ -5,9 +5,9 @@ Hub-free: the amateur model is a second `tiny_llama` instance saved to tmp_path 
 import pytest
 import torch
 
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.output_control.common.processors.contrastive_mixture import ContrastiveMixtureProcessor
-from aisteer360.algorithms.output_control.contrastive_decoding.control import ContrastiveDecoding
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.output_control.common.processors.contrastive_mixture import ContrastiveMixtureProcessor
+from steerability.algorithms.output_control.contrastive_decoding.control import ContrastiveDecoding
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 VOCAB = 100
@@ -42,7 +42,7 @@ class TestConfig:
             ContrastiveDecoding(amateur_name_or_path="x", alpha=-0.1)
 
     def test_is_step_level_control_not_driver(self):
-        from aisteer360.algorithms.output_control.base import DecodingDriver, OutputControl
+        from steerability.algorithms.output_control.base import DecodingDriver, OutputControl
         cd = ContrastiveDecoding(amateur_name_or_path="x")
         assert isinstance(cd, OutputControl)
         assert not isinstance(cd, DecodingDriver)

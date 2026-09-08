@@ -1,6 +1,6 @@
 # Common library
 
-::: aisteer360.algorithms.state_control.common
+::: steerability.algorithms.state_control.common
     handler: python
     options:
         show_if_no_docstring: true

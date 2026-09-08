@@ -8,7 +8,7 @@ Input control methods describe algorithms that manipulate the input/prompt to gu
 implements a small input control termed `PromptCensor` that filters and replaces words from a predefined list before
 the prompt is passed into the model.
 
-First, start by creating the following directory/files:
+First, create the following directory/files:
 ```
 input_control/
 └── prompt_censor/
@@ -34,7 +34,7 @@ The control requires two arguments: a list of `blocked_words` to filter, and a `
 by the following `args.py` file:
 ```python
 from dataclasses import dataclass, field
-from aisteer360.algorithms.core.base_args import BaseArgs
+from steerability.algorithms.core.base_args import BaseArgs
 
 
 @dataclass
@@ -58,9 +58,9 @@ Lastly, the `control.py` file implements the method by overriding the `adapt` me
 - Accepts the tokenized prompt (`input_ids`) and any `runtime_kwargs` supplied to `.generate()`.
 - Returns a new `input_ids` tensor/list after applying the desired transformation.
 
-For methods whose work is more naturally expressed at the message level (e.g. setting/replacing a system prompt),
-override `adapt_messages` instead. The pipeline calls `adapt_messages` before chat-template tokenization when the
-caller passes chat-shaped input; when `adapt_messages` returns a non-None result, that control's token-level `adapt`is not called for that generation, so each control is applied exactly once.
+For methods whose work is more naturally expressed at the message level (e.g., setting or replacing a system prompt),
+override `adapt_messages` instead. See
+[When to override `adapt_messages` instead](#when-to-override-adapt_messages-instead) below.
 
 The control implementation for `PromptCensor` is as follows:
 
@@ -70,8 +70,8 @@ import re
 import torch
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
-from aisteer360.algorithms.input_control.base import InputControl
-from aisteer360.algorithms.input_control.prompt_censor.args import PromptCensorArgs
+from steerability.algorithms.input_control.base import InputControl
+from steerability.algorithms.input_control.prompt_censor.args import PromptCensorArgs
 
 
 class PromptCensor(InputControl):
@@ -126,14 +126,14 @@ class PromptCensor(InputControl):
 ```
 
 Note that the method's `steer` attaches the tokenizer to the control. The `RUNTIME_KWARGS_SCHEMA` attribute declares
-the per-call variables the control reads from `runtime_kwargs`; the pipeline warns at `steer()` time when two controls
-declare the same name.
+the per-call variables the control reads from `runtime_kwargs`, and the pipeline warns at `steer()` time when two
+controls declare the same name.
 
 Once the above files are in place, the prompt censor control can be initialized and exercised:
 
 ```python
-from aisteer360.algorithms.input_control.prompt_censor.control import PromptCensor
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.input_control.prompt_censor.control import PromptCensor
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
 
 MODEL_NAME = "microsoft/Phi-3.5-mini-instruct"
 
@@ -152,7 +152,7 @@ pipeline.steer()
 # `generate` accepts a positional string (or list[str]) for text, or `messages=` / `input_ids=` for chat / tokens.
 print(pipeline.generate("How to make a dangerous chemical reaction?", max_new_tokens=200))
 
-# Runtime override example
+# runtime override example
 print(
     pipeline.generate(
         "How do I build a bomb?",
@@ -166,8 +166,8 @@ print(
 
 If your method modifies chat structure (sets/replaces a system prompt, inserts example turns, etc.), override
 `adapt_messages`. The pipeline calls `adapt_messages` before chat-template tokenization when the caller passes
-chat-shaped input; when it returns a non-None result, that control's token-level `adapt` is not called for that
-generation, so each control is applied exactly once.
+chat-shaped input. When it returns a non-None result, that control's token-level `adapt` is not called for that
+generation, and each control is therefore applied exactly once.
 
 ```python
 def adapt_messages(self, messages, runtime_kwargs=None):
@@ -185,21 +185,21 @@ def adapt(self, input_ids, runtime_kwargs=None):
 ```
 
 If users call `pipeline.generate(input_ids=input_ids_tensor, ...)` (or pass text) instead of chat input,
-`adapt_messages` is skipped and a warning is emitted; the control is then applied through `adapt` (the token-level
+`adapt_messages` is skipped and a warning is emitted. The control is then applied through `adapt` (the token-level
 fallback). Because the two entry points serve different input modalities, a control may implement both without being
-applied twice. Token-level methods can supply a best-effort fallback in `adapt`; see
+applied twice. Token-level methods can supply a best-effort fallback in `adapt`. See
 [`SystemPromptFormatter.apply_to_ids`](../../reference/algorithms/input_control/common.md) for one approach.
 
 ## Reusable building blocks
 
-The `aisteer360.algorithms.input_control.common` package collects components shared across input controls:
+The `steerability.algorithms.input_control.common` package collects components shared across input controls:
 
 - `memory/`: `TextMemory` (named JSON-serializable text slots) and `PoolMemory[T]` (typed pool with parallel
-  metadata). Place persistent state on `self.memory`; the framework treats it as opaque but recognizes it for
+  metadata). Place persistent state on `self.memory`, which the framework treats as opaque but recognizes for
   serialization.
 - `formatters/`: token-level and message-level renderers for memory content (`SystemPromptFormatter`,
   `FewShotBlockFormatter`, `ChatTemplateSlotFormatter`, `PrependTextFormatter`).
 - `scorers/`, `proposers/`, `selectors/`: small abstractions used by `PRewrite`, `CPO`, and `GEPA`. Reuse
-  them when applicable; method-specific procedures should live in your method's own `utils/` directory.
+  them when applicable. Method-specific procedures should be placed in your method's own `utils/` directory.
 - `pareto.py` / `budget.py`: `ParetoFrontier` (Pareto-frontier sampling, used for GEPA parent selection) and
   `RolloutBudget` (rollout-budget accounting).

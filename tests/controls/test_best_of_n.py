@@ -5,10 +5,10 @@ Hub-free, using the tiny-model fixtures and the lazy-init `_pipeline` pattern.
 import pytest
 import torch
 
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.output_control.base import OutputControl
-from aisteer360.algorithms.output_control.best_of_n.control import BestOfN
-from aisteer360.algorithms.output_control.common.scorers.majority_vote import MajorityVoteScorer
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.output_control.base import OutputControl
+from steerability.algorithms.output_control.best_of_n.control import BestOfN
+from steerability.algorithms.output_control.common.scorers.majority_vote import MajorityVoteScorer
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 VOCAB = 100
@@ -33,7 +33,7 @@ class TestBestOfNConfig:
         assert bon.propose_mode == "sample"
 
     def test_is_decoding_driver(self):
-        from aisteer360.algorithms.output_control.base import DecodingDriver
+        from steerability.algorithms.output_control.base import DecodingDriver
         assert isinstance(BestOfN(n=2, scorer=lambda p, c, params: [0.0] * len(c)), DecodingDriver)
 
     def test_rejects_bad_args(self):

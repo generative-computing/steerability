@@ -6,7 +6,7 @@ import pytest
 import torch
 from transformers import LlamaForCausalLM
 
-from aisteer360.algorithms.core.internals.fingerprint import is_absent_chat_template_fingerprint, model_fingerprint
+from steerability.algorithms.core.internals.fingerprint import is_absent_chat_template_fingerprint, model_fingerprint
 from tests.utils.tiny_models import tiny_llama
 
 
@@ -32,7 +32,7 @@ class TestDeterminism:
         in_process = model_fingerprint(LlamaForCausalLM.from_pretrained(saved_model_dir))
         code = (
             "from transformers import LlamaForCausalLM\n"
-            "from aisteer360.algorithms.core.internals.fingerprint import model_fingerprint\n"
+            "from steerability.algorithms.core.internals.fingerprint import model_fingerprint\n"
             f"model = LlamaForCausalLM.from_pretrained({str(saved_model_dir)!r})\n"
             "print(model_fingerprint(model))\n"
         )

@@ -1,15 +1,12 @@
 """Tests for the `Output` generation record and per-row finish-reason inference.
 
 Covers `infer_finish_reasons` per-row semantics (including the pad-equals-eos configuration), the
-slimmed three-field dataclass (removed fields raise under `slots`), `decode` round-tripping, and the
-module home (importable from `core` and `core.output`; `core.types` is gone).
+`Output` dataclass fields, `decode` round-tripping, and the module home (importable from `core`
+and `core.output`).
 """
-import importlib
-
-import pytest
 import torch
 
-from aisteer360.algorithms.core.output import Output, infer_finish_reasons
+from steerability.algorithms.core.output import Output, infer_finish_reasons
 from tests.utils.tiny_models import wordlevel_tokenizer
 
 
@@ -78,16 +75,8 @@ class TestInferFinishReasons:
         assert reasons == ["eos"]
 
 
-class TestSlimmedClass:
-    """The three-field dataclass rejects removed fields (slots) and decodes."""
-
-    def test_metadata_field_removed(self):
-        with pytest.raises(TypeError):
-            Output(output_ids=torch.tensor([[1, 2]]), metadata={})
-
-    def test_runtime_kwargs_field_removed(self):
-        with pytest.raises(TypeError):
-            Output(output_ids=torch.tensor([[1, 2]]), runtime_kwargs={})
+class TestOutputFields:
+    """The dataclass carries its declared fields and decodes."""
 
     def test_fields_present(self):
         out = Output(
@@ -97,8 +86,6 @@ class TestSlimmedClass:
         )
         assert out.finish_reason == "length"
         assert out.adapted_input_ids is not None
-        assert not hasattr(out, "metadata")
-        assert not hasattr(out, "runtime_kwargs")
 
     def test_decode_round_trips(self):
         tokenizer = wordlevel_tokenizer()
@@ -109,13 +96,9 @@ class TestSlimmedClass:
 
 
 class TestModuleHome:
-    """`Output` lives at `core.output`, re-exported from `core`; `core.types` is deleted."""
+    """`Output` lives at `core.output` and is re-exported from `core`."""
 
     def test_importable_from_core(self):
-        from aisteer360.algorithms.core import Output as CoreOutput
+        from steerability.algorithms.core import Output as CoreOutput
 
         assert CoreOutput is Output
-
-    def test_types_module_gone(self):
-        with pytest.raises(ModuleNotFoundError):
-            importlib.import_module("aisteer360.algorithms.core.types")

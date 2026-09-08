@@ -1,12 +1,11 @@
 """Cross-control behavioral test for `token_scope="after_prompt"` position tracking.
 
-This is the anti-drift guard for Issue 3 (KV-cache position heuristic). The four scoped
-controls (CAA, ITI, AngularSteering, DirectionalAblation) share one position-tracking
-implementation (`TransformHookRuntime`); this parametrized test pins the semantics for all of
-them, and any new runtime client can be added to the parameter list.
+The four scoped controls (CAA, ITI, AngularSteering, DirectionalAblation) share one
+position-tracking implementation (`TransformHookRuntime`); this parametrized test pins the
+semantics for all of them, and any new runtime client can be added to the parameter list.
 
-The bug it guards against: inferring the prefill/decode phase by comparing `seq_len` to the
-prompt length silently disables steering for length-1 prompts (prefill and decode become
+The failure mode it guards against: inferring the prefill/decode phase by comparing `seq_len`
+to the prompt length silently disables steering for length-1 prompts (prefill and decode become
 indistinguishable). With explicit first-call tracking, steering must fire on every generated
 position regardless of prompt length.
 
@@ -15,12 +14,12 @@ Runs hub-free on a tiny randomly-initialized Llama.
 import pytest
 import torch
 
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.state_control.angular_steering.control import AngularSteering
-from aisteer360.algorithms.state_control.caa.control import CAA
-from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
-from aisteer360.algorithms.state_control.directional_ablation.control import DirectionalAblation
-from aisteer360.algorithms.state_control.iti.control import ITI
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.state_control.angular_steering.control import AngularSteering
+from steerability.algorithms.state_control.caa.control import CAA
+from steerability.algorithms.state_control.common.steering_vector import SteeringVector
+from steerability.algorithms.state_control.directional_ablation.control import DirectionalAblation
+from steerability.algorithms.state_control.iti.control import ITI
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 HIDDEN = 32

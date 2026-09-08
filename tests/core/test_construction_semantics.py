@@ -9,7 +9,7 @@ import weakref
 import pytest
 import torch
 
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 TINY_MODEL = "hf-internal-testing/tiny-random-LlamaForCausalLM"

@@ -1,30 +1,31 @@
 [project]
-name            = "aisteer360"
-version         = "0.4.0"
-description     = "AI Steerability 360 Toolkit"
+name            = "steerability"
+version         = "0.5.0"
+description     = "Steerability Toolkit"
 readme          = "README.md"
 license         = { text = "Apache-2.0" }
+requires-python = ">=3.12"
 authors         = [{ name = "IBM Research" }]
 maintainers     = [
     { name = "Erik Miehling", email = "erik.miehling@ibm.com" },
+    { name = "Inge Vejsbjerg", email = "INGEVEJS@ie.ibm.com" },
     { name = "Praveen Venkateswaran", email = "praveen.venkateswaran@ibm.com" },
-    { name = "Inge Vejsbjerg", email = "INGEVEJS@ie.ibm.com" }
 ]
 keywords = [
     "language models",
     "steerability",
+    "composite steering",
     "prompt engineering",
     "activation steering",
     "parameter-efficient fine-tuning",
     "decoding-time alignment"
 ]
 
-requires-python = ">=3.11.0"
-
 classifiers = [
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Software Development",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "License :: OSI Approved :: Apache Software License",
@@ -35,48 +36,66 @@ classifiers = [
 
 # core
 dependencies = [
-    "absl-py>=2.2.2,<3.0.0",
-    "accelerate>=1.3.0,<2.0.0",
-    "datasets>=3.5.0,<4.0.0",
-    "einops>=0.7.0,<1.0.0",
-    "immutabledict>=4.2.1,<5.0.0",
-    "langdetect==1.0.9",
-    "nltk>=3.9.1,<4.0.0",
-    "numpy>=1.16.0",
+    "accelerate>=1.4.0,<2.0.0",
+    "datasets>=4.7.0,<6.0.0",
+    "numpy>=1.17.0",
     "pandas>=2.2.3,<3.0.0",
-    "peft>=0.15.2,<0.16.0",
-    "python-dotenv>=1.0.1,<2.0.0",
+    "peft>=0.20.0,<0.21.0",
     "scikit-learn>=1.6.1,<2.0.0",
     "torch>=2.5.1,<3.0.0",
-    "transformers>=4.52.0,<5.0.0",
-    "tqdm>=4.66.5,<5.0.0",
-    "trl>=0.19.0,<0.28.0",
-]
-
-# optional groups
-[project.optional-dependencies]
-merging = [
-    "mergekit>=0.1.4,<0.2.0",
-]
-cpo = [
-    "econml>=0.16.0,<0.17.0",
-]
-plots = [
-    "matplotlib>=3.8.0,<4.0.0",
-    "seaborn>=0.13.2,<0.14.0",
-]
-guided = [
+    "transformers>=5.0.0,<6.0.0",
+    "trl>=1.0.0,<2.0.0",
     "xgrammar>=0.1.19",
 ]
+
+# optional extras: vllm, eval, merging
+[project.optional-dependencies]
 vllm = [
-    "vllm>=0.8.5,<1.0.0",
-    "vllm-hook-plugins @ git+https://github.com/IBM/vLLM-Hook.git@steerability-challenge#subdirectory=vllm_hook_plugins",
+    "vllm>=0.26.0,<1.0.0",
+    # keeps the resolved vLLM inside trl's supported range
+    "trl[vllm]",
+    # "vllm-hook-plugins @ git+https://github.com/IBM/vLLM-Hook.git@steerability-challenge#subdirectory=vllm_hook_plugins",
+    "vllm-hook-plugins @ git+https://github.com/emiehling/vLLM-Hook.git@steerability-interface#subdirectory=vllm_hook_plugins",
 ]
+eval = [
+    "inspect-ai>=0.3.262,<0.4.0",
+    "inspect-evals>=0.18.0,<1.0.0",
+    "matplotlib>=3.8.0,<4.0.0",
+    "seaborn>=0.13.0,<0.14.0",
+    "tqdm>=4.66.5,<5.0.0",
+]
+# pinned main commit: 0.1.4 on PyPI never calls `model_rebuild()` on its torch-typed
+# pydantic models and fails at merge time
+merging = [
+    "mergekit @ git+https://github.com/arcee-ai/mergekit.git@a6e402884ba9bc30da7f23e8304a35f19485de95",
+]
+# every extra that coexists in one environment on every platform
 all = [
-    "aisteer360[merging,cpo,plots]",
+    "steerability[eval]",
+]
+
+# contributor tooling; `uv sync` installs `dev` by default
+[dependency-groups]
+dev = [
+    "pytest>=8.3.2,<9.0.0",
+    "pre-commit>=4.3.0",
+    # the plugin core (pure Python, no vLLM), for the spec-lowering tests on CPU
+    # "vllm-hook-plugins @ git+https://github.com/IBM/vLLM-Hook.git@steerability-challenge#subdirectory=vllm_hook_plugins",
+    "vllm-hook-plugins @ git+https://github.com/emiehling/vLLM-Hook.git@steerability-interface#subdirectory=vllm_hook_plugins",
+    { include-group = "notebooks" },
+]
+notebooks = [
+    "notebook>=7.4.5",
+    "ipywidgets>=8.1.0,<9.0.0",
+    "textstat>=0.7.0",
+    "nltk>=3.9.1,<4.0.0",
+    # IFEval checker used by the instruction_following study; the contents of the
+    # `inspect-evals[ifeval]` extra, which cannot be named directly since it resolves
+    # inspect-evals down to 0.3.x. Not published on PyPI, hence the git URL.
+    "instruction_following_eval @ git+https://github.com/josejg/instruction_following_eval@0c495b2f95155e8b10acb919ae283bfb4d5be6e2",
+    "langdetect>=1.0.9",
 ]
 docs = [
-    "aisteer360[all]",
     "mkdocs-material",
     "mkdocs-jupyter",
     "mkdocs-click",
@@ -89,18 +108,19 @@ docs = [
     "mkdocs-bibtex",
 ]
 
-dev = [
-    "aisteer360[all]",
-    "vllm-hook-plugins @ git+https://github.com/IBM/vLLM-Hook.git@steerability-challenge#subdirectory=vllm_hook_plugins",
-    "notebook>=7.4.5",
-    "pytest>=8.3.2,<9.0.0",
-    "pre-commit>=4.3.0",
+# tools
+[tool.uv]
+# mergekit pins pydantic~=2.10, which cannot import under the pydantic>=2.13 that inspect-ai
+# requires; its safetensors pin (~=0.5) conflicts with vllm's (>=0.6.2)
+conflicts = [
+    [{ extra = "merging" }, { extra = "eval" }],
+    [{ extra = "merging" }, { extra = "all" }],
+    [{ extra = "merging" }, { extra = "vllm" }],
 ]
 
-# tools
 [tool.uv.build-backend]
 module-root = ""
-module-name = "aisteer360"
+module-name = "steerability"
 
 [tool.isort]
 profile = "black"

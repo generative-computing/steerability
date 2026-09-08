@@ -1,4 +1,4 @@
-"""Tests for the GRPO TRL wrapper and the PRewrite metric-reward adapter.
+"""Tests for the GRPO TRL wrapper and the PRewrite scorer-reward adapter.
 
 The args-validation and reward-adapter tests are model-free and always run. The end-to-end training
 smoke test is gated behind `RUN_GRPO_SMOKE=1` (it loads a tiny model and runs one GRPO step).
@@ -9,8 +9,8 @@ import os
 
 import pytest
 
-from aisteer360.algorithms.input_control.prewrite.utils.reward import _completion_text, make_metric_reward_func
-from aisteer360.algorithms.structural_control.wrappers.trl.grpotrainer import GRPO, GRPOArgs
+from steerability.algorithms.input_control.prewrite.utils.reward import _completion_text, make_scorer_reward_func
+from steerability.algorithms.structural_control.wrappers.trl.grpotrainer import GRPO, GRPOArgs
 
 
 def _reward_stub(prompts, completions, **kwargs):
@@ -83,16 +83,16 @@ class _StubScorer:
         return self._fn(prompts)
 
 
-class TestMakeMetricRewardFunc:
+class TestMakeScorerRewardFunc:
     def test_aligns_scores_to_string_completions(self):
         scorer = _StubScorer(lambda ps: [float(len(p)) for p in ps])
-        reward_func = make_metric_reward_func(scorer)
+        reward_func = make_scorer_reward_func(scorer)
         rewards = reward_func(prompts=["seed", "seed"], completions=["aa", "bbb"])
         assert rewards == [2.0, 3.0]
 
     def test_handles_conversational_completions(self):
         scorer = _StubScorer(lambda ps: [float(len(p)) for p in ps])
-        reward_func = make_metric_reward_func(scorer)
+        reward_func = make_scorer_reward_func(scorer)
         completions = [
             [{"role": "assistant", "content": "aa"}],
             [{"role": "assistant", "content": "bbbb"}],
@@ -102,7 +102,7 @@ class TestMakeMetricRewardFunc:
 
     def test_deduplicates_identical_rewrites(self):
         scorer = _StubScorer(lambda ps: [float(len(p)) for p in ps])
-        reward_func = make_metric_reward_func(scorer)
+        reward_func = make_scorer_reward_func(scorer)
         rewards = reward_func(prompts=["s"] * 3, completions=["x", "x", "yy"])
         # one float per completion, but the scorer is only asked about the unique rewrites
         assert rewards == [1.0, 1.0, 2.0]
@@ -110,21 +110,21 @@ class TestMakeMetricRewardFunc:
 
     def test_parse_fn_applied_before_scoring(self):
         scorer = _StubScorer(lambda ps: [float(len(p)) for p in ps])
-        reward_func = make_metric_reward_func(scorer, parse_fn=lambda _t: ["PARSED"])
+        reward_func = make_scorer_reward_func(scorer, parse_fn=lambda _t: ["PARSED"])
         rewards = reward_func(prompts=["s"], completions=["some long wrapped prose"])
         assert rewards == [float(len("PARSED"))]
         assert scorer.calls == [["PARSED"]]
 
     def test_parse_fn_empty_falls_back_to_raw(self):
         scorer = _StubScorer(lambda ps: [float(len(p)) for p in ps])
-        reward_func = make_metric_reward_func(scorer, parse_fn=lambda _t: [])
+        reward_func = make_scorer_reward_func(scorer, parse_fn=lambda _t: [])
         rewards = reward_func(prompts=["s"], completions=["  raw  "])
         assert rewards == [float(len("raw"))]
         assert scorer.calls == [["raw"]]
 
     def test_empty_completions(self):
         scorer = _StubScorer(lambda ps: [float(len(p)) for p in ps])
-        reward_func = make_metric_reward_func(scorer)
+        reward_func = make_scorer_reward_func(scorer)
         assert reward_func(prompts=[], completions=[]) == []
         assert scorer.calls == []
 
@@ -155,7 +155,6 @@ class TestGRPOWrapperSmoke:
             num_generations=2,
             per_device_train_batch_size=2,
             max_completion_length=4,
-            max_prompt_length=32,
             beta=0.0,
             training_args={"max_steps": 1, "logging_steps": 1},
         )

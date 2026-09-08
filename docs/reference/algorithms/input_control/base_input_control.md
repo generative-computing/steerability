@@ -1,6 +1,6 @@
 # Input control
 
-::: aisteer360.algorithms.input_control.base
+::: steerability.algorithms.input_control.base
     handler: python
     options:
         show_if_no_docstring: true

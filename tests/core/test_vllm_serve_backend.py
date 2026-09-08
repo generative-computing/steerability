@@ -6,7 +6,7 @@ import pytest
 import torch
 from transformers import LlamaConfig, T5Config
 
-from aisteer360.algorithms.core.execution import (
+from steerability.algorithms.core.execution import (
     BackendSpec,
     GenerationItem,
     GenerationParams,
@@ -19,7 +19,7 @@ from aisteer360.algorithms.core.execution import (
     TransportError,
     UnsupportedOperationError,
 )
-from aisteer360.backends.vllm import VLLMServeBackend
+from steerability.backends.vllm import VLLMServeBackend
 from tests.utils.tiny_models import wordlevel_tokenizer
 
 
@@ -80,14 +80,14 @@ def fake_server(monkeypatch):
 
     monkeypatch.setattr(VLLMServeBackend, "_request_json", fake_request)
     monkeypatch.setattr(
-        "aisteer360.backends.vllm.backend._client_tokenizer",
+        "steerability.backends.vllm.backend._client_tokenizer",
         lambda source, trust_remote_code=False: wordlevel_tokenizer(),
     )
     monkeypatch.setattr(
-        "aisteer360.backends.vllm.backend._config_layout",
+        "steerability.backends.vllm.backend._config_layout",
         lambda source, trust_remote_code=False: None,
     )
-    monkeypatch.setattr("aisteer360.backends.vllm.capabilities._DISCOVERY_CACHE", {})
+    monkeypatch.setattr("steerability.backends.vllm.capabilities._DISCOVERY_CACHE", {})
     return server
 
 
@@ -138,7 +138,7 @@ class TestServeFingerprintVerification:
     @pytest.fixture()
     def templated_client(self, monkeypatch):
         monkeypatch.setattr(
-            "aisteer360.backends.vllm.backend._client_tokenizer",
+            "steerability.backends.vllm.backend._client_tokenizer",
             lambda source, trust_remote_code=False: self._templated_tokenizer(),
         )
 
@@ -151,7 +151,7 @@ class TestServeFingerprintVerification:
         payload = _discovery_payload()
         payload["model"]["chat_template_fingerprint"] = chat_template_fingerprint(None)
         fake_server.discovery = payload
-        with caplog.at_level(logging.WARNING, logger="aisteer360.backends.vllm"):
+        with caplog.at_level(logging.WARNING, logger="steerability.backends.vllm"):
             VLLMServeBackend(_serve_spec(hook_plugin=True, artifact_dir=str(tmp_path)))
         assert not any("differs from the served" in record.getMessage() for record in caplog.records)
 
@@ -164,7 +164,7 @@ class TestServeFingerprintVerification:
         payload = _discovery_payload()
         payload["model"]["chat_template_fingerprint"] = chat_template_fingerprint("{{ other }}")
         fake_server.discovery = payload
-        with caplog.at_level(logging.WARNING, logger="aisteer360.backends.vllm"):
+        with caplog.at_level(logging.WARNING, logger="steerability.backends.vllm"):
             VLLMServeBackend(_serve_spec(hook_plugin=True, artifact_dir=str(tmp_path)))
         assert any("differs from the served" in record.getMessage() for record in caplog.records)
 
@@ -400,7 +400,7 @@ def _discovery_payload(**engine_overrides):
 
 
 def _mini_spec(scope=None, kind="additive"):
-    from aisteer360.algorithms.state_control.common.lowering import artifact_id_for
+    from steerability.algorithms.state_control.common.lowering import artifact_id_for
 
     params = {"strength": 1.0} if kind in ("additive", "head_additive") else {}
     artifact_id, prepared = artifact_id_for({"vector": torch.ones(4)})
@@ -524,7 +524,7 @@ class TestServeSpecLowering:
 class TestSpecRejectionMapping:
 
     def test_kind_and_constraint_codes_are_support_facts(self):
-        from aisteer360.backends.vllm import raise_for_spec_rejection
+        from steerability.backends.vllm import raise_for_spec_rejection
 
         with pytest.raises(UnsupportedOperationError, match="E_UNKNOWN_KIND"):
             raise_for_spec_rejection(
@@ -536,7 +536,7 @@ class TestSpecRejectionMapping:
             )
 
     def test_malformed_spec_codes_raise_value_error(self):
-        from aisteer360.backends.vllm import raise_for_spec_rejection
+        from steerability.backends.vllm import raise_for_spec_rejection
 
         with pytest.raises(ValueError, match="E_BAD_PARAM at ops\\[0\\]\\.transform\\.strength"):
             raise_for_spec_rejection(
@@ -544,7 +544,7 @@ class TestSpecRejectionMapping:
             )
 
     def test_plain_message_does_not_raise(self):
-        from aisteer360.backends.vllm import raise_for_spec_rejection
+        from steerability.backends.vllm import raise_for_spec_rejection
 
         raise_for_spec_rejection("HTTP 400: model not found")
 
@@ -552,7 +552,7 @@ class TestSpecRejectionMapping:
 class TestMergeInterventionSpecs:
 
     def test_ops_concatenate_and_artifacts_union(self):
-        from aisteer360.backends.vllm import merge_intervention_specs
+        from steerability.backends.vllm import merge_intervention_specs
 
         first = _mini_spec()
         second = _mini_spec(scope={"kind": "after_prompt"})
@@ -564,7 +564,7 @@ class TestMergeInterventionSpecs:
 class TestServeConstraintLowering:
 
     def test_constraint_entry_renders_guided_field(self, fake_server):
-        from aisteer360.algorithms.core.execution import ConstraintEntry, ConstraintSource
+        from steerability.algorithms.core.execution import ConstraintEntry, ConstraintSource
 
         backend = VLLMServeBackend(_serve_spec())
         item = GenerationItem(
@@ -579,7 +579,7 @@ class TestServeConstraintLowering:
         assert body["guided_json"] == {"type": "object"}
 
     def test_choice_constraint_renders_guided_choice(self, fake_server):
-        from aisteer360.algorithms.core.execution import ConstraintEntry, ConstraintSource
+        from steerability.algorithms.core.execution import ConstraintEntry, ConstraintSource
 
         backend = VLLMServeBackend(_serve_spec())
         item = GenerationItem(
@@ -594,7 +594,7 @@ class TestServeConstraintLowering:
         assert body["guided_choice"] == ["cat", "dog"]
 
     def test_scoring_with_constraint_entry_refused(self, fake_server):
-        from aisteer360.algorithms.core.execution import ConstraintEntry, ConstraintSource
+        from steerability.algorithms.core.execution import ConstraintEntry, ConstraintSource
 
         backend = VLLMServeBackend(_serve_spec())
         item = ScoringItem(
@@ -609,7 +609,7 @@ class TestServeConstraintLowering:
                 session.score([item], GenerationParams())
 
     def test_two_constraints_per_item_refused(self, fake_server):
-        from aisteer360.algorithms.core.execution import ConstraintEntry, ConstraintSource
+        from steerability.algorithms.core.execution import ConstraintEntry, ConstraintSource
 
         backend = VLLMServeBackend(_serve_spec())
         item = GenerationItem(
@@ -624,8 +624,8 @@ class TestServeConstraintLowering:
                 session.generate([item], GenerationParams())
 
     def test_pipeline_lowers_declarative_constraint_to_serve(self, fake_server):
-        from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-        from aisteer360.algorithms.output_control.constrained_decoding import ConstrainedDecoding
+        from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+        from steerability.algorithms.output_control.constrained_decoding import ConstrainedDecoding
         from tests.utils.tiny_models import tiny_llama
 
         control = ConstrainedDecoding(regex="cat|dog", include_in_scoring=False)
@@ -686,7 +686,7 @@ class TestSharedFsVisibility:
             payload["artifact_registry_root"] = registry_root
         fake_server.discovery = payload
         monkeypatch.setattr(
-            "aisteer360.backends.vllm.backend._ArtifactUploader.upload_payloads",
+            "steerability.backends.vllm.backend._ArtifactUploader.upload_payloads",
             lambda self, payloads: None,
         )
         spec = _serve_spec(hook_plugin=True, artifact_dir=str(tmp_path))
@@ -711,3 +711,30 @@ class TestSharedFsVisibility:
 
         monkeypatch.setattr(VLLMServeBackend, "_head_ok", _fail)
         backend.stage_artifacts({"sha256:" + "ab" * 32: {}})
+
+
+class TestConfigLayout:
+    """`_config_layout` reads the text sub-config of a composite checkpoint from disk."""
+
+    def test_gemma3_config_dir_reports_text_facts(self, tmp_path):
+        from transformers import Gemma3Config, Gemma3TextConfig, SiglipVisionConfig
+
+        from steerability.backends.vllm.backend import _config_layout
+
+        text = Gemma3TextConfig(
+            hidden_size=32, intermediate_size=64, num_hidden_layers=4,
+            num_attention_heads=4, num_key_value_heads=4, head_dim=8, vocab_size=100,
+        )
+        vision = SiglipVisionConfig(
+            hidden_size=16, intermediate_size=32, num_hidden_layers=1, num_attention_heads=2,
+            image_size=16, patch_size=8,
+        )
+        Gemma3Config(text_config=text, vision_config=vision, mm_tokens_per_image=4).save_pretrained(tmp_path)
+
+        facts = _config_layout(str(tmp_path))
+        assert facts is not None
+        assert facts.num_layers == 4
+        assert facts.hidden_size == 32
+        assert facts.num_attention_heads == 4
+        assert facts.head_dim == 8
+        assert facts.model_type == "gemma3"

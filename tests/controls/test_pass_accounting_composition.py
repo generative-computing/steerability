@@ -13,18 +13,18 @@ import warnings
 import pytest
 import torch
 
-from aisteer360.algorithms.core.execution.access import ModelAccess
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.output_control.base import OutputControl
-from aisteer360.algorithms.output_control.common.candidate_forward import CandidateForward
-from aisteer360.algorithms.output_control.common.logit_sources import PromptVariantSource
-from aisteer360.algorithms.output_control.contrastive_guidance.control import ContrastiveGuidance
-from aisteer360.algorithms.output_control.phased_decoding.control import PhasedDecoding
-from aisteer360.algorithms.output_control.search_decoding.control import SearchDecoding
-from aisteer360.algorithms.state_control.base import StateControl
-from aisteer360.algorithms.state_control.common.gating import CallableReadout, Evidence, Gate
-from aisteer360.algorithms.state_control.common.runtime import TransformHookRuntime
-from aisteer360.algorithms.state_control.common.token_scope import compute_prompt_lens
+from steerability.algorithms.core.execution.access import ModelAccess
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.output_control.base import OutputControl
+from steerability.algorithms.output_control.common.candidate_forward import CandidateForward
+from steerability.algorithms.output_control.common.logit_sources import PromptVariantSource
+from steerability.algorithms.output_control.contrastive_guidance.control import ContrastiveGuidance
+from steerability.algorithms.output_control.phased_decoding.control import PhasedDecoding
+from steerability.algorithms.output_control.search_decoding.control import SearchDecoding
+from steerability.algorithms.state_control.base import StateControl
+from steerability.algorithms.state_control.common.gating import CallableReadout, Evidence, Gate
+from steerability.algorithms.state_control.common.runtime import TransformHookRuntime
+from steerability.algorithms.state_control.common.token_scope import compute_prompt_lens
 from tests.utils.runtime_helpers import NeverCompleteRule, RecordingTransform
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 

@@ -11,7 +11,7 @@ import weakref
 import pytest
 import torch
 
-from aisteer360.algorithms.core.execution import (
+from steerability.algorithms.core.execution import (
     BackendSpec,
     Capability,
     CaptureResult,
@@ -21,10 +21,10 @@ from aisteer360.algorithms.core.execution import (
     PreparedPrompt,
     Requirements,
 )
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.input_control.base import InputControl
-from aisteer360.algorithms.output_control.base import OutputControl
-from aisteer360.algorithms.structural_control.base import StructuralControl
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.input_control.base import InputControl
+from steerability.algorithms.output_control.base import OutputControl
+from steerability.algorithms.structural_control.base import StructuralControl
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 HIDDEN = 16
@@ -108,7 +108,7 @@ class FakeEngineBackend:
 
     @classmethod
     def capabilities_for_spec(cls, spec):
-        from aisteer360.backends.vllm import VLLMBackend, VLLMServeBackend
+        from steerability.backends.vllm import VLLMBackend, VLLMServeBackend
 
         backend_cls = VLLMServeBackend if spec.kind == "vllm-serve" else VLLMBackend
         return backend_cls.capabilities_for_spec(spec)
@@ -133,8 +133,8 @@ class FakeEngineBackend:
 
 @pytest.fixture
 def fake_engine(monkeypatch):
-    import aisteer360.algorithms.core.execution.backend as backend_module
-    import aisteer360.algorithms.core.steering_pipeline as pipeline_module
+    import steerability.algorithms.core.execution.backend as backend_module
+    import steerability.algorithms.core.steering_pipeline as pipeline_module
 
     original = backend_module.resolve_backend_class
 
@@ -359,7 +359,7 @@ class TestTRLStagedSteerSmoke:
     ):
         from datasets import Dataset
 
-        from aisteer360.algorithms.structural_control.wrappers.trl.sfttrainer import SFT
+        from steerability.algorithms.structural_control.wrappers.trl.sfttrainer import SFT
 
         tokenizer = wordlevel_tokenizer()
         encoded = tokenizer(["the cat sat on the mat", "the dog ran fast"])

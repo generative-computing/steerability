@@ -1,6 +1,6 @@
 # DExperts
 
-::: aisteer360.algorithms.output_control.dexperts
+::: steerability.algorithms.output_control.dexperts
     handler: python
     options:
         show_if_no_docstring: true

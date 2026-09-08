@@ -7,8 +7,8 @@ import json
 import pytest
 import torch
 
-from aisteer360.algorithms.core.internals.pooling import aggregate_condition_hidden
-from aisteer360.algorithms.core.internals.probes.probe import Probe
+from steerability.algorithms.core.internals.pooling import aggregate_condition_hidden
+from steerability.algorithms.core.internals.probes.probe import Probe
 
 HIDDEN = 8
 

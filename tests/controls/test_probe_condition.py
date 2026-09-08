@@ -7,12 +7,12 @@ adapter decisions can be compared row-for-row against direct reads.
 import pytest
 import torch
 
-from aisteer360.algorithms.core.internals.fingerprint import model_fingerprint
-from aisteer360.algorithms.core.internals.probes.probe import Probe
-from aisteer360.algorithms.core.internals.probes.probe_set import ProbeSet
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.state_control.activation_adapter.control import ActivationAdapter
-from aisteer360.algorithms.state_control.common.gating import (
+from steerability.algorithms.core.internals.fingerprint import model_fingerprint
+from steerability.algorithms.core.internals.probes.probe import Probe
+from steerability.algorithms.core.internals.probes.probe_set import ProbeSet
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.state_control.activation_adapter.control import ActivationAdapter
+from steerability.algorithms.state_control.common.gating import (
     AffineReadout,
     CallableReadout,
     Evidence,

@@ -25,11 +25,11 @@ from unittest.mock import MagicMock
 import pytest
 import torch
 
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.core.utils.assembly import _warn_on_provenance_mismatch
-from aisteer360.algorithms.input_control.base import InputControl
-from aisteer360.algorithms.output_control.base import OutputControl
-from aisteer360.algorithms.structural_control.base import StructuralControl
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.core.utils.assembly import _warn_on_provenance_mismatch
+from steerability.algorithms.input_control.base import InputControl
+from steerability.algorithms.output_control.base import OutputControl
+from steerability.algorithms.structural_control.base import StructuralControl
 from tests.conftest import (
     MockInputControl,
     MockOutputControl,
@@ -58,10 +58,10 @@ def _patch_hf_loaders(monkeypatch):
     tokenizer_loader.from_pretrained.return_value = tokenizer
 
     monkeypatch.setattr(
-        "aisteer360.algorithms.core.steering_pipeline.AutoModelForCausalLM", model_loader
+        "steerability.algorithms.core.steering_pipeline.AutoModelForCausalLM", model_loader
     )
     monkeypatch.setattr(
-        "aisteer360.algorithms.core.steering_pipeline.AutoTokenizer", tokenizer_loader
+        "steerability.algorithms.core.steering_pipeline.AutoTokenizer", tokenizer_loader
     )
     return model_loader, tokenizer_loader, model, tokenizer
 
@@ -604,7 +604,7 @@ class TestDuplicateBosGuard:
         pipeline, tokenizer = self._steered_pipeline()
         bos = tokenizer.bos_token_id
         ids = torch.tensor([[bos, bos, 3, 4]])
-        with caplog.at_level(logging.WARNING, logger="aisteer360.utils.tokenization"):
+        with caplog.at_level(logging.WARNING, logger="steerability.utils.tokenization"):
             pipeline.generate(input_ids=ids, max_new_tokens=1)
             pipeline.generate(input_ids=ids, max_new_tokens=1)
         dup_warnings = [r for r in caplog.records if "Duplicate BOS" in r.getMessage()]
@@ -614,7 +614,7 @@ class TestDuplicateBosGuard:
         pipeline, tokenizer = self._steered_pipeline()
         bos = tokenizer.bos_token_id
         ids = torch.tensor([[bos, 3, 4]])
-        with caplog.at_level(logging.WARNING, logger="aisteer360.utils.tokenization"):
+        with caplog.at_level(logging.WARNING, logger="steerability.utils.tokenization"):
             pipeline.generate(input_ids=ids, max_new_tokens=1)
         assert not [r for r in caplog.records if "Duplicate BOS" in r.getMessage()]
 
@@ -626,7 +626,7 @@ class TestDuplicateBosGuard:
         pad = tokenizer.pad_token_id
         ids = torch.tensor([[pad, pad, bos, bos, 3]])
         attention_mask = torch.tensor([[0, 0, 1, 1, 1]])
-        with caplog.at_level(logging.WARNING, logger="aisteer360.utils.tokenization"):
+        with caplog.at_level(logging.WARNING, logger="steerability.utils.tokenization"):
             pipeline.generate(input_ids=ids, attention_mask=attention_mask, max_new_tokens=1)
         assert [r for r in caplog.records if "Duplicate BOS" in r.getMessage()]
 
@@ -635,9 +635,9 @@ class TestSameModelForwardsMetadata:
     """`same_model_forwards` is declarative component metadata on the declaring classes."""
 
     def test_declared_flags(self):
-        from aisteer360.algorithms.output_control.common.logit_sources import PromptVariantSource
-        from aisteer360.algorithms.output_control.common.values.subspace_margin import SubspaceMarginValue
-        from aisteer360.algorithms.output_control.sasa.control import SASA
+        from steerability.algorithms.output_control.common.logit_sources import PromptVariantSource
+        from steerability.algorithms.output_control.common.values.subspace_margin import SubspaceMarginValue
+        from steerability.algorithms.output_control.sasa.control import SASA
 
         assert SASA.same_model_forwards is True
         assert SubspaceMarginValue.same_model_forwards is True
@@ -645,7 +645,7 @@ class TestSameModelForwardsMetadata:
         assert OutputControl.same_model_forwards is False
 
     def test_prompt_variant_source_construction_emits_no_warning(self):
-        from aisteer360.algorithms.output_control.common.logit_sources import PromptVariantSource
+        from steerability.algorithms.output_control.common.logit_sources import PromptVariantSource
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")

@@ -2,43 +2,41 @@
 condition carrier).
 
 Covers behavioral parity with CAA and DirectionalAblation (bound + source-carrying transforms),
-the slimmed validation surface (placement / gating / scope / follower rules + legacy-kwarg guard),
+the validation surface (placement / gating / scope / follower rules + artifact-kwarg guard),
 transform binding and coverage, factory mode over `ctx.resolve`, the packaged `CosineReadout`,
 gating, native batch support, registry discovery, a `ControlSpec` sweep with shared-source
 memoization, and pipeline integration under state-control multiplicity.
 
 Runs hub-free on a tiny randomly-initialized Llama.
 """
-import warnings
-
 import pytest
 import torch
 
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.core.utils.assembly import collect_state_entries
-from aisteer360.algorithms.state_control.activation_adapter import (
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.core.utils.assembly import collect_state_entries
+from steerability.algorithms.state_control.activation_adapter import (
     ActivationAdapter,
     ActivationAdapterArgs,
     TransformContext,
 )
-from aisteer360.algorithms.state_control.activation_adapter.control import ActivationAdapter as _AA
-from aisteer360.algorithms.state_control.caa.control import CAA
-from aisteer360.algorithms.state_control.common.gating import (
+from steerability.algorithms.state_control.activation_adapter.control import ActivationAdapter as _AA
+from steerability.algorithms.state_control.caa.control import CAA
+from steerability.algorithms.state_control.common.gating import (
     CallableReadout,
     CosineReadout,
     Evidence,
     Gate,
     PerKeyThreshold,
 )
-from aisteer360.algorithms.state_control.common.sources import ArtifactSource, ContrastiveFit
-from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
-from aisteer360.algorithms.state_control.common.transforms import (
+from steerability.algorithms.state_control.common.sources import ContrastiveFit
+from steerability.algorithms.state_control.common.steering_vector import SteeringVector
+from steerability.algorithms.state_control.common.transforms import (
     AdditiveTransform,
     NormPreservingTransform,
     ProjectionTransform,
 )
-from aisteer360.algorithms.state_control.common.transforms.base import BaseTransform
-from aisteer360.algorithms.state_control.directional_ablation.control import DirectionalAblation
+from steerability.algorithms.state_control.common.transforms.base import BaseTransform
+from steerability.algorithms.state_control.directional_ablation.control import DirectionalAblation
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 HIDDEN = 32
@@ -164,7 +162,7 @@ class TestParity:
         assert torch.allclose(bound.directions[1].float(), sv.directions[1].float())
 
 
-# validation surface (placement / gating / scope / follower + legacy guard)
+# validation surface (placement / gating / scope / follower + artifact-kwarg guard)
 class TestValidationSurface:
     def test_transform_required(self):
         with pytest.raises(ValueError, match="transform is required"):
@@ -183,7 +181,7 @@ class TestValidationSurface:
         ("strength", 2.0),
         ("normalize_vector", True),
     ])
-    def test_legacy_kwarg_guard_kwargs_form(self, name, value):
+    def test_artifact_kwarg_guard_kwargs_form(self, name, value):
         if value == "SV":
             value = _sv()
         t = AdditiveTransform(_sv())
@@ -191,7 +189,7 @@ class TestValidationSurface:
             ActivationAdapterArgs.validate(transform=t, layer_ids=1, **{name: value})
         assert name in str(ei.value)
 
-    def test_legacy_kwarg_guard_dict_form(self):
+    def test_artifact_kwarg_guard_dict_form(self):
         t = AdditiveTransform(_sv())
         with pytest.raises(TypeError, match="does not accept") as ei:
             ActivationAdapterArgs.validate({"transform": t, "layer_ids": 1, "strength": 2.0})
@@ -199,20 +197,13 @@ class TestValidationSurface:
         assert "AdditiveTransform" in str(ei.value)  # replacement hint for 'strength'
 
     def test_both_placements(self):
-        from aisteer360.algorithms.state_control.common.selectors import FixedLayerSelector
+        from steerability.algorithms.state_control.common.selectors import FixedLayerSelector
         with pytest.raises(ValueError, match="exactly one of layer_ids or layer_selector"):
             ActivationAdapterArgs(transform=AdditiveTransform(_sv()), layer_ids=1, layer_selector=FixedLayerSelector(1))
 
     def test_neither_placement(self):
         with pytest.raises(ValueError, match="exactly one of layer_ids or layer_selector"):
             ActivationAdapterArgs(transform=AdditiveTransform(_sv()))
-
-    def test_condition_ports_removed(self):
-        with pytest.raises(TypeError, match="condition_layer_ids"):
-            ActivationAdapterArgs(
-                transform=AdditiveTransform(_sv()), layer_ids=1,
-                condition_layer_ids=[0], score_fn=lambda h, l, **_: 0.0,
-            )
 
     def test_gate_wrong_type(self):
         with pytest.raises(TypeError, match="gate must be a Gate"):
@@ -223,7 +214,7 @@ class TestValidationSurface:
         ActivationAdapterArgs(transform=AdditiveTransform(_sv()), layer_ids=1, gate=gate, gate_driven_externally=True)
 
     def test_follower_flag_with_gate_source_raises(self):
-        from aisteer360.algorithms.state_control.common.sources import ConditionPointSearch
+        from steerability.algorithms.state_control.common.sources import ConditionPointSearch
 
         with pytest.raises(ValueError, match="pass the driver's Gate"):
             ActivationAdapterArgs(
@@ -271,7 +262,7 @@ class TestValidationSurface:
             adapter.steer(model, wordlevel_tokenizer())
 
     def test_condition_selector_rejected_for_placement(self):
-        from aisteer360.algorithms.state_control.common.selectors import ConditionPointSelector
+        from steerability.algorithms.state_control.common.selectors import ConditionPointSelector
         with pytest.raises(ValueError, match="ConditionPointSelector returns"):
             ActivationAdapter(transform=AdditiveTransform(_sv()), layer_selector=ConditionPointSelector())
 
@@ -304,7 +295,6 @@ class TestTransformBinding:
         assert ctx.hidden_size == HIDDEN
         assert ctx.num_heads == HEADS
         assert ctx.head_dim == HIDDEN // HEADS
-        assert not hasattr(ctx, "steering_vector")  # no legacy field
         assert isinstance(adapter._transform, NormPreservingTransform)
         assert source.fits == 1
 
@@ -473,15 +463,15 @@ def test_consecutive_generations_across_batch_sizes():
 
 # CosineReadout
 class TestCosineReadout:
-    def test_matches_legacy_lambda(self):
-        """The readout reproduces the notebook's hand-rolled cosine on identical pooled tensors."""
+    def test_matches_reference_cosine(self):
+        """The readout equals the cosine between the last-token hidden state and the layer direction."""
         import torch.nn.functional as F
 
         sv = _sv(41)
         hidden = torch.randn(2, 5, HIDDEN)
         pooled = hidden[:, -1, :]  # "last" pooling over an unpadded batch
 
-        def legacy_rows(hidden, layer_id):
+        def reference_rows(hidden, layer_id):
             direction = sv.directions[layer_id].to(hidden.dtype).to(hidden.device)
             direction = direction.squeeze(0) if direction.ndim == 2 else direction
             last_token = hidden[:, -1, :]
@@ -491,7 +481,7 @@ class TestCosineReadout:
         for lid in range(LAYERS):
             rows = readout(pooled, lid)  # per-row [B]
             assert rows.shape == (2,)
-            assert torch.allclose(rows, legacy_rows(hidden, lid), atol=1e-6)
+            assert torch.allclose(rows, reference_rows(hidden, lid), atol=1e-6)
 
     def test_absent_layer_returns_zero(self):
         readout = CosineReadout(SteeringVector(model_type="x", directions={0: torch.randn(1, HIDDEN)}))
@@ -572,7 +562,7 @@ class TestSupportsBatching:
 # registry discovery
 class TestRegistry:
     def test_activation_adapter_registered(self):
-        from aisteer360.algorithms.core.registry import REGISTRY
+        from steerability.algorithms.core.registry import REGISTRY
         assert "activation_adapter" in REGISTRY.get("state_control", {})
         method = REGISTRY["state_control"]["activation_adapter"]
         assert method.control_cls is _AA
@@ -581,7 +571,7 @@ class TestRegistry:
 # ControlSpec sweep + shared-source memoization
 class TestControlSpecSweep:
     def test_grid_over_strength_and_layer(self):
-        from aisteer360.algorithms.core.specs import ControlSpec
+        from steerability.algorithms.core.specs import ControlSpec
 
         sv = _sv(17)
         spec = ControlSpec(
@@ -605,7 +595,7 @@ class TestControlSpecSweep:
 
     def test_shared_source_fits_once_per_model(self):
         """One ContrastiveFit across two adapter configs fits once per model; templates clean."""
-        from aisteer360.algorithms.state_control.common.estimators.base import BaseEstimator
+        from steerability.algorithms.state_control.common.estimators.base import BaseEstimator
 
         class _CountingEstimator(BaseEstimator):
             def __init__(self):

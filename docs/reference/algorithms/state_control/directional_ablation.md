@@ -1,6 +1,6 @@
 # Directional Ablation
 
-::: aisteer360.algorithms.state_control.directional_ablation
+::: steerability.algorithms.state_control.directional_ablation
     handler: python
     options:
         show_if_no_docstring: true

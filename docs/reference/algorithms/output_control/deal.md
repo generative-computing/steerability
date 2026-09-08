@@ -1,6 +1,6 @@
 # DeAL
 
-::: aisteer360.algorithms.output_control.deal
+::: steerability.algorithms.output_control.deal
     handler: python
     options:
         show_if_no_docstring: true

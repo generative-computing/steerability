@@ -8,17 +8,17 @@ import pytest
 import torch
 from transformers import LlamaConfig, LlamaForSequenceClassification
 
-from aisteer360.algorithms.core.internals.probes.probe import Probe
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.output_control.common.values.base import StepContext
-from aisteer360.algorithms.output_control.common.values.subspace_margin import (
+from steerability.algorithms.core.internals.probes.probe import Probe
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.output_control.common.values.base import StepContext
+from steerability.algorithms.output_control.common.values.subspace_margin import (
     SubspaceMarginValue,
     load_single_file_probe,
 )
-from aisteer360.algorithms.output_control.deal.control import DeAL
-from aisteer360.algorithms.output_control.phased_decoding.control import PhasedDecoding
-from aisteer360.algorithms.output_control.rad.control import RAD
-from aisteer360.algorithms.output_control.sasa.control import SASA
+from steerability.algorithms.output_control.deal.control import DeAL
+from steerability.algorithms.output_control.phased_decoding.control import PhasedDecoding
+from steerability.algorithms.output_control.rad.control import RAD
+from steerability.algorithms.output_control.sasa.control import SASA
 from tests.utils.runtime_helpers import script_session_generate
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
@@ -206,7 +206,7 @@ class TestDeALPort:
         tokenizer = wordlevel_tokenizer()
 
         # a step-level control forcing token 7, composed alongside the DeAL driver
-        from aisteer360.algorithms.output_control.base import OutputControl
+        from steerability.algorithms.output_control.base import OutputControl
 
         class _ForceToken(OutputControl):
             Args = None

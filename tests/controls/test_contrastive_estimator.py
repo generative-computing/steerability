@@ -8,14 +8,14 @@ import pytest
 import torch
 from sklearn.decomposition import PCA
 
-from aisteer360.algorithms.core.internals.data import ContrastivePairs
-from aisteer360.algorithms.state_control.common.estimators.contrastive_direction import (
+from steerability.algorithms.core.internals.data import ContrastivePairs
+from steerability.algorithms.state_control.common.estimators.contrastive_direction import (
     ContrastiveDirectionEstimator,
     _orient_direction,
     _prepare_pca_samples,
 )
-from aisteer360.algorithms.state_control.common.estimators.mean_difference import MeanDifferenceEstimator
-from aisteer360.algorithms.state_control.common.fit_specs import VectorTrainSpec
+from steerability.algorithms.state_control.common.estimators.mean_difference import MeanDifferenceEstimator
+from steerability.algorithms.state_control.common.fit_specs import VectorTrainSpec
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 
@@ -49,22 +49,6 @@ class TestPairwisePreservesContrast:
         assert abs(_cos(direction, e0)) > 0.9
         assert abs(_cos(direction, e1)) < 0.3
         assert abs(direction[0]) > abs(direction[1])
-
-    def test_old_raw_difference_construction_would_fail(self):
-        # fitting PCA to raw per-pair differences lets global centering discard the shared axis-0
-        # contrast, leaving the varying axis-1
-        torch.manual_seed(0)
-        N, H = 8, 2
-        e1 = torch.tensor([0.0, 1.0])
-        deltas = torch.stack([torch.tensor([10.0, s]) for s in torch.linspace(-1.0, 1.0, N)])
-        Hn = torch.randn(N, H)
-        Hp = Hn + deltas
-
-        pca = PCA(n_components=1)
-        pca.fit((Hp - Hn).numpy())
-        old_direction = torch.from_numpy(pca.components_[0]).float()
-
-        assert abs(_cos(old_direction, e1)) > 0.9
 
 
 class TestOrientation:

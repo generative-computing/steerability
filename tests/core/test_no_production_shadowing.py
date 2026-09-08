@@ -16,11 +16,15 @@ import sys
 from pathlib import Path
 
 PRODUCTION_CLASSES = {
-    "BaseArgs", "BaseControl", "Metric", "UseCase",
+    "BaseArgs", "BaseControl",
     "InputControl", "StructuralControl", "StateControl", "OutputControl",
     "DecodingDriver",
     "InterventionControl", "HookControl", "SteeredSession",
-    "SteeringPipeline", "Benchmark", "ControlSpec", "Output",
+    "SteeringPipeline", "ControlSpec", "Output",
+    "SampleScorer", "SampleSequenceScorer", "TaskEvaluationScorer",
+    "ConfigPoint", "PipelineFactory",
+    "ProviderOptions", "SteeringPipelineModelAPI", "LockLeaderCollator", "BatchRequest",
+    "InspectSuite", "SteeringEval",
     "Backend", "BackendSpec", "BackendCapabilities", "Capability",
     "InterventionKinds", "ProcessorKinds", "CaptureKinds",
     "Requirements", "SpecConstraint", "SupportReport", "SupportFailure",
@@ -43,6 +47,8 @@ PRODUCTION_FUNCTIONS = {
     "infer_attention_mask_from_ids", "to_left_pad", "warn_if_duplicate_bos",
     "derive_item_seed", "run_bounded", "with_transport_retries",
     "render_vllm_sampling_args", "truncate_at_stop_strings", "merge_lowered_params",
+    "runtime_kwargs_schema", "expand_configurations", "preflight",
+    "as_inspect_model", "sample_scorer_from_inspect", "runtime_kwargs_solver",
 }
 
 

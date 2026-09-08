@@ -6,23 +6,23 @@ import torch
 pytest.importorskip("vllm_hook_plugins")
 from vllm_hook_plugins.core.schema import parse_intervention_spec  # noqa: E402
 
-from aisteer360.algorithms.core.execution import Capability, ModelFacts
-from aisteer360.algorithms.core.internals.probes import Probe
-from aisteer360.algorithms.state_control.act_add.control import ActAdd
-from aisteer360.algorithms.state_control.activation_adapter.control import ActivationAdapter
-from aisteer360.algorithms.state_control.angular_steering.control import AngularSteering
-from aisteer360.algorithms.state_control.caa.control import CAA
-from aisteer360.algorithms.state_control.common.gating import CallableReadout, Evidence, Gate, PerKeyThreshold
-from aisteer360.algorithms.state_control.common.lowering import artifact_id_for
-from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
-from aisteer360.algorithms.state_control.common.transforms import (
+from steerability.algorithms.core.execution import Capability, ModelFacts
+from steerability.algorithms.core.internals.probes import Probe
+from steerability.algorithms.state_control.act_add.control import ActAdd
+from steerability.algorithms.state_control.activation_adapter.control import ActivationAdapter
+from steerability.algorithms.state_control.angular_steering.control import AngularSteering
+from steerability.algorithms.state_control.caa.control import CAA
+from steerability.algorithms.state_control.common.gating import CallableReadout, Evidence, Gate, PerKeyThreshold
+from steerability.algorithms.state_control.common.lowering import artifact_id_for
+from steerability.algorithms.state_control.common.steering_vector import SteeringVector
+from steerability.algorithms.state_control.common.transforms import (
     AdditiveTransform,
     AlignmentAdaptiveTransform,
     NormPreservingTransform,
     RotationTransform,
 )
-from aisteer360.algorithms.state_control.directional_ablation.control import DirectionalAblation
-from aisteer360.algorithms.state_control.iti.control import ITI
+from steerability.algorithms.state_control.directional_ablation.control import DirectionalAblation
+from steerability.algorithms.state_control.iti.control import ITI
 
 LAYERS = 6
 HIDDEN = 16
@@ -246,7 +246,7 @@ class TestAdapterExports:
         assert control.export_intervention_spec() is None
 
     def test_gate_source_declares_kinds_before_binding(self):
-        from aisteer360.algorithms.state_control.common.sources import ConditionPointSearch
+        from steerability.algorithms.state_control.common.sources import ConditionPointSearch
 
         source = ConditionPointSearch(
             condition_vector=SteeringVector(model_type="llama", directions={1: torch.ones(1, HIDDEN)}),
@@ -266,8 +266,8 @@ class TestAdapterExports:
 class TestExportMechanics:
 
     def test_modifier_order_is_innermost_first(self):
-        from aisteer360.algorithms.state_control.common.lowering import lower_interventions
-        from aisteer360.algorithms.state_control.common.specs import Intervention, TokenScope
+        from steerability.algorithms.state_control.common.lowering import lower_interventions
+        from steerability.algorithms.state_control.common.specs import Intervention, TokenScope
 
         vector = _vector(k=2)
         transform = NormPreservingTransform(

@@ -18,15 +18,15 @@ vllm = pytest.importorskip("vllm")
 import torch  # noqa: E402
 from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: E402
 
-from aisteer360.algorithms.core.execution import (  # noqa: E402
+from steerability.algorithms.core.execution import (  # noqa: E402
     BackendSpec,
     GenerationItem,
     GenerationParams,
     PreparedPrompt,
 )
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline  # noqa: E402
-from aisteer360.backends.vllm import VLLMBackend  # noqa: E402
-from aisteer360.utils.tokenization import ensure_pad_token  # noqa: E402
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline  # noqa: E402
+from steerability.backends.vllm import VLLMBackend  # noqa: E402
+from steerability.utils.tokenization import ensure_pad_token  # noqa: E402
 
 TINY_MODEL = "JackFram/llama-68m"
 
@@ -82,7 +82,7 @@ def _hf_reference(control_factory, prompt: str, max_new_tokens: int = 8):
 
 
 def _steered_vector(model_ref: str, hidden: int, layers, k: int = 1, seed: int = 5):
-    from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
+    from steerability.algorithms.state_control.common.steering_vector import SteeringVector
 
     generator = torch.Generator().manual_seed(seed)
     return SteeringVector(
@@ -115,13 +115,13 @@ class TestSpecParityOnEngine:
         self._parity(
             plugin_backend,
             lambda: __import__(
-                "aisteer360.algorithms.state_control.caa.control", fromlist=["CAA"]
+                "steerability.algorithms.state_control.caa.control", fromlist=["CAA"]
             ).CAA(steering_vector=_steered_vector(TINY_MODEL, hidden, [1]), layer_id=1, multiplier=6.0),
         )
 
     def test_directional_ablation_parity(self, plugin_backend):
         hidden = plugin_backend._layout.hidden_size
-        from aisteer360.algorithms.state_control.directional_ablation.control import DirectionalAblation
+        from steerability.algorithms.state_control.directional_ablation.control import DirectionalAblation
         self._parity(
             plugin_backend,
             lambda: DirectionalAblation(
@@ -131,7 +131,7 @@ class TestSpecParityOnEngine:
 
     def test_angular_steering_parity(self, plugin_backend):
         hidden = plugin_backend._layout.hidden_size
-        from aisteer360.algorithms.state_control.angular_steering.control import AngularSteering
+        from steerability.algorithms.state_control.angular_steering.control import AngularSteering
         self._parity(
             plugin_backend,
             lambda: AngularSteering(
@@ -143,10 +143,10 @@ class TestSpecParityOnEngine:
     def test_steered_after_baseline_shared_prefix(self, plugin_backend):
         """The salting rule's regression alarm: a steered request after a baseline request over
         the same prompt must not reuse KV computed without the intervention."""
-        from aisteer360.algorithms.core.execution import InterventionEntry
-        from aisteer360.algorithms.state_control.common.lowering import lower_interventions
-        from aisteer360.algorithms.state_control.common.specs import Intervention, TokenScope
-        from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform
+        from steerability.algorithms.core.execution import InterventionEntry
+        from steerability.algorithms.state_control.common.lowering import lower_interventions
+        from steerability.algorithms.state_control.common.specs import Intervention, TokenScope
+        from steerability.algorithms.state_control.common.transforms import AdditiveTransform
 
         hidden = plugin_backend._layout.hidden_size
         vector = _steered_vector(TINY_MODEL, hidden, [1])
@@ -174,7 +174,7 @@ class TestSpecParityOnEngine:
         """The vLLM engine backend refuses `compute_logprobs` for a scoped intervention, since its
         prompt-logprob scoring would anchor token scopes at the request's prompt end rather than the
         control's scope; the huggingface arm scores normally."""
-        from aisteer360.algorithms.state_control.caa.control import CAA
+        from steerability.algorithms.state_control.caa.control import CAA
 
         hidden = plugin_backend._layout.hidden_size
         factory = lambda: CAA(
@@ -198,7 +198,7 @@ class TestSpecParityOnEngine:
         engine_pipeline._backends[plugin_backend.spec] = plugin_backend
         engine_pipeline.steer()
         # the backend refuses rather than return silently mis-anchored scores
-        from aisteer360.algorithms.core.execution.contracts import UnsupportedPipelineError
+        from steerability.algorithms.core.execution.contracts import UnsupportedPipelineError
 
         with pytest.raises(UnsupportedPipelineError, match="unsupported at score on backend kind 'vllm'"):
             engine_pipeline.compute_logprobs(prompt_ids, ref_output_ids=ref_ids)
@@ -207,7 +207,7 @@ class TestSpecParityOnEngine:
     def test_chunked_prefill_last_k_exactness(self, plugin_backend):
         """`last_k` selects absolute positions, so a long prompt under chunked prefill steers
         exactly the last k prompt rows plus decode rows (§3.4)."""
-        from aisteer360.algorithms.state_control.caa.control import CAA
+        from steerability.algorithms.state_control.caa.control import CAA
 
         hidden = plugin_backend._layout.hidden_size
         long_prompt = " ".join(["review"] * 96)
@@ -238,8 +238,8 @@ class TestCaptureOnEngine:
     @pytest.mark.parametrize("location", ["layer_output", "layer_input"])
     @pytest.mark.parametrize("mode", ["all_tokens", "last_token"])
     def test_capture_parity_with_in_process_funnel(self, plugin_backend, mode, location):
-        from aisteer360.algorithms.core.execution import BackendSpec
-        from aisteer360.backends.huggingface import HFBackend
+        from steerability.algorithms.core.execution import BackendSpec
+        from steerability.backends.huggingface import HFBackend
 
         tokenizer = _tokenizer()
         model = AutoModelForCausalLM.from_pretrained(TINY_MODEL)
@@ -266,9 +266,9 @@ class TestCaptureOnEngine:
             )
 
     def test_vector_fitted_on_engine_steers_in_process(self, plugin_backend):
-        from aisteer360.algorithms.core.internals.data import ContrastivePairs
-        from aisteer360.algorithms.state_control.common.estimators import MeanDifferenceEstimator
-        from aisteer360.algorithms.state_control.common.fit_specs import VectorTrainSpec
+        from steerability.algorithms.core.internals.data import ContrastivePairs
+        from steerability.algorithms.state_control.common.estimators import MeanDifferenceEstimator
+        from steerability.algorithms.state_control.common.fit_specs import VectorTrainSpec
 
         pairs = ContrastivePairs(
             positives=["the committee approved it", "they agreed at once"],
@@ -292,9 +292,9 @@ class TestCaptureOnEngine:
     def test_conditional_gate_open_vs_closed_matches_in_process(self, plugin_backend):
         """A probe-gated adapter fires on the gate-open prompt and stays inert on the
         gate-closed prompt, matching in-process decisions."""
-        from aisteer360.algorithms.core.internals.probes import Probe
-        from aisteer360.algorithms.state_control.activation_adapter.control import ActivationAdapter
-        from aisteer360.algorithms.state_control.common.transforms import AdditiveTransform
+        from steerability.algorithms.core.internals.probes import Probe
+        from steerability.algorithms.state_control.activation_adapter.control import ActivationAdapter
+        from steerability.algorithms.state_control.common.transforms import AdditiveTransform
 
         layout = plugin_backend._layout
         hidden = layout.hidden_size
@@ -310,7 +310,7 @@ class TestCaptureOnEngine:
         enc_closed = tokenizer(closed_prompt, return_tensors="pt")
 
         # a probe whose weights separate the two prompts at layer 1's input
-        from aisteer360.algorithms.core.internals.capture import layerwise_tokenwise_hidden
+        from steerability.algorithms.core.internals.capture import layerwise_tokenwise_hidden
         hs_open = layerwise_tokenwise_hidden(model, dict(enc_open), location="layer_input")
         hs_closed = layerwise_tokenwise_hidden(model, dict(enc_closed), location="layer_input")
         weight = (hs_open[cond_layer].mean(dim=(0, 1)) - hs_closed[cond_layer].mean(dim=(0, 1))).float()
@@ -357,9 +357,9 @@ class TestCaptureOnEngine:
             assert engine_ids[:overlap] == hf_ids[:overlap]
 
     def test_routed_decoding_end_to_end_on_engine(self, plugin_backend):
-        from aisteer360.algorithms.core.internals.data import ContrastivePairs
-        from aisteer360.algorithms.core.internals.probes import ProbeFitSpec, ProbeSetFit
-        from aisteer360.algorithms.output_control.routed_decoding import P, Route, RoutedDecoding, Router, respond
+        from steerability.algorithms.core.internals.data import ContrastivePairs
+        from steerability.algorithms.core.internals.probes import ProbeFitSpec, ProbeSetFit
+        from steerability.algorithms.output_control.routed_decoding import P, Route, RoutedDecoding, Router, respond
 
         pairs = ContrastivePairs(
             positives=["the committee approved it"],

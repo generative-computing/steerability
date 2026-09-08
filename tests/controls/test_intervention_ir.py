@@ -10,10 +10,10 @@ import dataclasses
 import pytest
 import torch
 
-from aisteer360.algorithms.core.execution.contracts import InterventionKinds
-from aisteer360.algorithms.core.execution.payloads import ModelFacts
-from aisteer360.algorithms.core.internals.probes.probe import Probe
-from aisteer360.algorithms.state_control.common.gating import (
+from steerability.algorithms.core.execution.contracts import InterventionKinds
+from steerability.algorithms.core.execution.payloads import ModelFacts
+from steerability.algorithms.core.internals.probes.probe import Probe
+from steerability.algorithms.state_control.common.gating import (
     AffineReadout,
     CallableReadout,
     CosineReadout,
@@ -24,11 +24,11 @@ from aisteer360.algorithms.state_control.common.gating import (
     SumThreshold,
     gate_from_probe,
 )
-from aisteer360.algorithms.state_control.common.lowering import lower_interventions
-from aisteer360.algorithms.state_control.common.selectors import FractionalDepthSelector
-from aisteer360.algorithms.state_control.common.specs import Intervention, TokenScope, WireForm, combine_kinds
-from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
-from aisteer360.algorithms.state_control.common.transforms import (
+from steerability.algorithms.state_control.common.lowering import lower_interventions
+from steerability.algorithms.state_control.common.selectors import FractionalDepthSelector
+from steerability.algorithms.state_control.common.specs import Intervention, TokenScope, WireForm, combine_kinds
+from steerability.algorithms.state_control.common.steering_vector import SteeringVector
+from steerability.algorithms.state_control.common.transforms import (
     AdditiveTransform,
     AlignmentAdaptiveTransform,
     HeadAdditiveTransform,
@@ -36,7 +36,7 @@ from aisteer360.algorithms.state_control.common.transforms import (
     ProjectionTransform,
     RotationTransform,
 )
-from aisteer360.algorithms.state_control.common.transforms.base import unwrap_modifiers
+from steerability.algorithms.state_control.common.transforms.base import unwrap_modifiers
 
 plugin_kinds = pytest.importorskip("vllm_hook_plugins.core.kinds")
 from vllm_hook_plugins.core.interpreter import MODIFIERS, TRANSFORMS  # noqa: E402
@@ -80,7 +80,7 @@ class TestWireKindTables:
         assert CallableReadout.wire_kind is None
 
     def test_backend_seed_advertisement_matches_plugin_tables(self):
-        from aisteer360.backends.vllm.capabilities import _PLUGIN_INTERVENTION_KINDS as seed
+        from steerability.backends.vllm.capabilities import _PLUGIN_INTERVENTION_KINDS as seed
 
         assert seed.transforms == plugin_kinds.TRANSFORM_KINDS
         assert seed.modifiers == plugin_kinds.MODIFIER_KINDS
@@ -361,7 +361,7 @@ class TestBind:
             intervention.bind(None, None, layout=_layout())
 
     def test_gate_source_resolves_to_gate(self):
-        from aisteer360.algorithms.state_control.common.sources import ConditionPointSearch
+        from steerability.algorithms.state_control.common.sources import ConditionPointSearch
 
         source = ConditionPointSearch(
             condition_vector=SteeringVector(model_type="test", directions={2: torch.ones(1, H)}),
@@ -511,8 +511,8 @@ class TestReviewRegressions:
     """Regression pins from the adversarial review of the seam landing."""
 
     def test_two_interventions_at_the_same_lowest_layer_elect_one_opener(self):
-        from aisteer360.algorithms.state_control.common.model_layout import ModelLayout as ModulePaths
-        from aisteer360.algorithms.state_control.common.runtime import build_hooks
+        from steerability.algorithms.state_control.common.model_layout import ModelLayout as ModulePaths
+        from steerability.algorithms.state_control.common.runtime import build_hooks
 
         layout = ModulePaths(
             family="llama_style", layer_prefix="model.layers", num_layers=8,

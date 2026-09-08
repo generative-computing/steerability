@@ -1,4 +1,4 @@
-"""Pad-position pooling invariance tests for direction estimators (Issue 5).
+"""Pad-position pooling invariance tests for direction estimators.
 
 With variable-length contrastive pairs, activations at pad positions are garbage and the amount
 of padding differs per pair. Pooling must be mask-driven so poisoning pad positions cannot bias
@@ -7,9 +7,9 @@ the learned direction, regardless of padding side.
 import pytest
 import torch
 
-from aisteer360.algorithms.core.internals.pooling import pool_over_spans as _pool_over_spans
-from aisteer360.algorithms.core.internals.pooling import select_spans as _select_spans
-from aisteer360.algorithms.state_control.common.estimators.mean_difference import _masked_mean
+from steerability.algorithms.core.internals.pooling import pool_over_spans as _pool_over_spans
+from steerability.algorithms.core.internals.pooling import select_spans as _select_spans
+from steerability.algorithms.state_control.common.estimators.mean_difference import _masked_mean
 
 
 def _poison_pads(hidden: torch.Tensor, attention_mask: torch.Tensor, value: float = 1e6) -> torch.Tensor:

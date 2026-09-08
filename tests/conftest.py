@@ -5,32 +5,25 @@ This module provides:
 
 - Device and model fixtures for integration tests
 - Recording mock controls for each category, subclassing the package base classes
-- Mock metrics and a mock use case, subclassing the package base classes
 - Mock model and tokenizer factories for isolating tests from Hugging Face loading
-- Common evaluation-data fixtures
 
 Mock controls record the calls the pipeline makes into them (call counts, received
 `runtime_kwargs`) while inheriting construction, validation, and lifecycle behavior from the
 real base classes. Only the model and tokenizer boundaries are replaced with `MagicMock`s.
 """
-import json
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from aisteer360.algorithms.core.base_args import BaseArgs
-from aisteer360.algorithms.core.execution.access import ModelAccess
-from aisteer360.algorithms.input_control.base import InputControl
-from aisteer360.algorithms.output_control.base import OutputControl
-from aisteer360.algorithms.state_control.base import StateControl
-from aisteer360.algorithms.structural_control.base import StructuralControl
-from aisteer360.evaluation.metrics.base import Metric
-from aisteer360.evaluation.use_cases.base import UseCase
+from steerability.algorithms.core.base_args import BaseArgs
+from steerability.algorithms.core.execution.access import ModelAccess
+from steerability.algorithms.input_control.base import InputControl
+from steerability.algorithms.output_control.base import OutputControl
+from steerability.algorithms.state_control.base import StateControl
+from steerability.algorithms.structural_control.base import StructuralControl
 from tests.utils.load_ci_models import get_models
 
 # Real Model/Device Fixtures (for integration tests)
@@ -252,121 +245,6 @@ class MockOutputControl(OutputControl):
         self.tokenizer = tokenizer
 
 
-# Mock Metrics
-class MockAccuracyMetric(Metric):
-    """Exact-match accuracy over responses and reference answers."""
-
-    def compute(
-            self,
-            responses: list[str],
-            reference_answers: list[str] = None,
-            **kwargs
-    ) -> dict[str, float]:
-        if reference_answers is None:
-            return {"accuracy": 0.0}
-
-        correct = sum(1 for r, ref in zip(responses, reference_answers) if r == ref)
-        accuracy = correct / len(responses) if responses else 0.0
-        return {"accuracy": accuracy}
-
-
-class MockScoreMetric(Metric):
-    """Metric that returns a fixed score."""
-
-    def __init__(self, fixed_score: float = 0.5, **extras):
-        super().__init__(**extras)
-        self.fixed_score = fixed_score
-
-    def compute(self, responses: list[str], **kwargs) -> dict[str, float]:
-        return {"score": self.fixed_score}
-
-
-class MockPerSampleMetric(Metric):
-    """Metric that returns per-sample scores and their mean."""
-
-    def compute(self, responses: list[str], **kwargs) -> dict[str, Any]:
-        scores = [0.5 + 0.1 * i for i in range(len(responses))]
-        return {
-            "mean": sum(scores) / len(scores) if scores else 0.0,
-            "scores": scores,
-        }
-
-
-# Mock UseCase
-class MockUseCase(UseCase):
-    """Recording use case.
-
-    `generate` returns one canned generation per evaluation item and records its call
-    arguments; `evaluate` applies each configured metric to the generations; `export` writes
-    the profiles to `profiles.json` under `save_dir`.
-
-    Attributes:
-        _generate_calls: One entry per `generate` invocation, holding the received arguments.
-        _evaluate_calls: One entry per `evaluate` invocation, holding the received generations.
-    """
-
-    def __init__(
-            self,
-            evaluation_data: list[dict],
-            evaluation_metrics: list[Metric],
-            num_samples: int = -1,
-            **kwargs
-    ):
-        super().__init__(
-            evaluation_data=evaluation_data,
-            evaluation_metrics=evaluation_metrics,
-            num_samples=num_samples,
-            **kwargs,
-        )
-        self._generate_calls = []
-        self._evaluate_calls = []
-
-    def generate(
-            self,
-            model_or_pipeline,
-            tokenizer,
-            gen_kwargs=None,
-            runtime_overrides: dict | None = None,
-            **kwargs
-    ) -> list[dict[str, Any]]:
-        self._generate_calls.append({
-            "model_or_pipeline": model_or_pipeline,
-            "tokenizer": tokenizer,
-            "gen_kwargs": gen_kwargs,
-            "runtime_overrides": runtime_overrides,
-            "kwargs": kwargs,
-        })
-
-        generations = []
-        for item in self.evaluation_data:
-            generations.append({
-                "response": "A",
-                "prompt": item.get("question", item.get("prompt", "test prompt")),
-                "question_id": item.get("id", "test_id"),
-                "reference_answer": item.get("answer", "A"),
-            })
-        return generations
-
-    def evaluate(self, generations: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-        self._evaluate_calls.append(generations)
-
-        eval_data = {
-            "responses": [g["response"] for g in generations],
-            "reference_answers": [g["reference_answer"] for g in generations],
-            "question_ids": [g["question_id"] for g in generations],
-        }
-
-        scores = {}
-        for metric in self.evaluation_metrics:
-            scores[metric.name] = metric(**eval_data)
-
-        return scores
-
-    def export(self, profiles: dict[str, Any], save_dir: str) -> None:
-        with open(Path(save_dir) / "profiles.json", "w") as f:
-            json.dump(profiles, f, indent=4)
-
-
 # Mock Model/Tokenizer Factories
 def create_mock_model(device: str = "cpu") -> MagicMock:
     """Create a mock causal language model.
@@ -433,59 +311,15 @@ def create_mock_tokenizer() -> MagicMock:
         }
 
     tokenizer.side_effect = mock_call
-    tokenizer.batch_decode = MagicMock(return_value=["decoded text"])
-    tokenizer.decode = MagicMock(return_value="decoded text")
+
+    def mock_decode(token_ids, **kwargs):
+        """v5 unified `decode`: a batch (2D input) decodes to a list, a single row to a string."""
+        first = token_ids[0] if len(token_ids) else None
+        is_batch = hasattr(first, "__len__") or (hasattr(first, "dim") and first.dim() > 0)
+        return ["decoded text"] * len(token_ids) if is_batch else "decoded text"
+
+    tokenizer.decode = MagicMock(side_effect=mock_decode)
     return tokenizer
-
-
-# Common Test Data Fixtures
-@pytest.fixture
-def sample_evaluation_data() -> list[dict]:
-    """Sample evaluation data for testing."""
-    return [
-        {"id": "q1", "question": "What is 2+2?", "answer": "A", "choices": ["4", "5", "6", "7"]},
-        {"id": "q2", "question": "Capital of France?", "answer": "B", "choices": ["London", "Paris", "Berlin"]},
-        {"id": "q3", "question": "Closest planet to sun?", "answer": "A", "choices": ["Mercury", "Venus", "Earth"]},
-    ]
-
-
-@pytest.fixture
-def large_evaluation_data() -> list[dict]:
-    """Larger evaluation dataset for testing."""
-    return [
-        {"id": f"q{i}", "question": f"Question {i}?", "answer": "A", "choices": ["A", "B", "C", "D"]}
-        for i in range(100)
-    ]
-
-
-@pytest.fixture
-def evaluation_data_with_metadata() -> list[dict]:
-    """Evaluation data with additional metadata fields."""
-    return [
-        {
-            "id": "q1",
-            "question": "Test question",
-            "answer": "A",
-            "instructions": ["instruction1", "instruction2"],
-            "context": "Some context",
-            "metadata": {"source": "test"},
-        },
-    ]
-
-
-@pytest.fixture
-def sample_metrics() -> list[Metric]:
-    """Sample metrics for testing."""
-    return [MockAccuracyMetric(), MockScoreMetric()]
-
-
-@pytest.fixture
-def sample_use_case(sample_evaluation_data, sample_metrics) -> MockUseCase:
-    """Sample use case for testing."""
-    return MockUseCase(
-        evaluation_data=sample_evaluation_data,
-        evaluation_metrics=sample_metrics,
-    )
 
 
 @pytest.fixture

@@ -1,6 +1,6 @@
 # Core
 
-::: aisteer360.algorithms.core
+::: steerability.algorithms.core
     handler: python
     options:
         show_if_no_docstring: true

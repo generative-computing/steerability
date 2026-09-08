@@ -14,29 +14,29 @@ import pytest
 import torch
 from transformers import LlamaConfig, LlamaForSequenceClassification
 
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.output_control.common.logit_sources import AuxModelSource, CallableSource
-from aisteer360.algorithms.output_control.common.processors.contrastive_mixture import ContrastiveMixtureProcessor
-from aisteer360.algorithms.output_control.common.processors.value_guided import ValueGuidedProcessor
-from aisteer360.algorithms.output_control.common.resolve import resolve_scorer, resolve_source, resolve_value
-from aisteer360.algorithms.output_control.common.scorers.majority_vote import MajorityVoteScorer
-from aisteer360.algorithms.output_control.common.scorers.reward_model import RewardModelScorer
-from aisteer360.algorithms.output_control.common.values.base import BaseCandidateValue, StepContext
-from aisteer360.algorithms.output_control.common.values.callable import CallableValue
-from aisteer360.algorithms.output_control.common.values.classifier import ClassifierValue
-from aisteer360.algorithms.output_control.common.values.reward_model import RewardModelValue
-from aisteer360.algorithms.output_control.common.values.subspace_margin import (
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.output_control.common.logit_sources import AuxModelSource, CallableSource
+from steerability.algorithms.output_control.common.processors.contrastive_mixture import ContrastiveMixtureProcessor
+from steerability.algorithms.output_control.common.processors.value_guided import ValueGuidedProcessor
+from steerability.algorithms.output_control.common.resolve import resolve_scorer, resolve_source, resolve_value
+from steerability.algorithms.output_control.common.scorers.majority_vote import MajorityVoteScorer
+from steerability.algorithms.output_control.common.scorers.reward_model import RewardModelScorer
+from steerability.algorithms.output_control.common.values.base import BaseCandidateValue, StepContext
+from steerability.algorithms.output_control.common.values.callable import CallableValue
+from steerability.algorithms.output_control.common.values.classifier import ClassifierValue
+from steerability.algorithms.output_control.common.values.reward_model import RewardModelValue
+from steerability.algorithms.output_control.common.values.subspace_margin import (
     SubspaceMarginValue,
     load_single_file_probe,
 )
-from aisteer360.algorithms.output_control.contrastive_guidance.control import ContrastiveGuidance
-from aisteer360.algorithms.output_control.deal.control import DeAL
-from aisteer360.algorithms.output_control.phased_decoding.control import PhasedDecoding
-from aisteer360.algorithms.output_control.rad.control import RAD
-from aisteer360.algorithms.output_control.sasa.control import SASA
-from aisteer360.algorithms.output_control.search_decoding.control import SearchDecoding
-from aisteer360.algorithms.output_control.stopping_rules.control import StoppingRules
-from aisteer360.algorithms.output_control.value_guidance.control import ValueGuidance
+from steerability.algorithms.output_control.contrastive_guidance.control import ContrastiveGuidance
+from steerability.algorithms.output_control.deal.control import DeAL
+from steerability.algorithms.output_control.phased_decoding.control import PhasedDecoding
+from steerability.algorithms.output_control.rad.control import RAD
+from steerability.algorithms.output_control.sasa.control import SASA
+from steerability.algorithms.output_control.search_decoding.control import SearchDecoding
+from steerability.algorithms.output_control.stopping_rules.control import StoppingRules
+from steerability.algorithms.output_control.value_guidance.control import ValueGuidance
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 VOCAB = 100
@@ -598,7 +598,7 @@ class TestStoppingRules:
         pipeline, model, tokenizer = _pipeline([sr])
         prompt = tokenizer("the cat", return_tensors="pt").input_ids
         # force token 5 via a composed step-level control so the stop fires deterministically
-        from aisteer360.algorithms.output_control.value_guidance.control import ValueGuidance
+        from steerability.algorithms.output_control.value_guidance.control import ValueGuidance
         vg = ValueGuidance(value=lambda ctx: (ctx.candidate_ids == 5).float() * 1000.0,
                            policy="top_k", k=VOCAB, mask_non_candidates=True)
         pipeline2, model2, tokenizer2 = _pipeline([vg, sr])
@@ -626,7 +626,7 @@ class TestStoppingRules:
 # registry
 class TestRegistry:
     def test_all_five_discoverable(self):
-        import aisteer360.algorithms.core.registry as r
+        import steerability.algorithms.core.registry as r
         names = r.REGISTRY["output_control"]
         for name in ("value_guidance", "contrastive_guidance", "search_decoding",
                      "phased_decoding", "stopping_rules"):

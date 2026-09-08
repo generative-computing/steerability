@@ -1,6 +1,6 @@
 # CAST
 
-::: aisteer360.algorithms.state_control.cast
+::: steerability.algorithms.state_control.cast
     handler: python
     options:
         show_if_no_docstring: true

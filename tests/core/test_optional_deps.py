@@ -9,20 +9,20 @@ from pathlib import Path
 
 import pytest
 
-from aisteer360.utils.optional import OPTIONAL_MODULE_EXTRAS, require
+from steerability.utils.optional import OPTIONAL_MODULE_EXTRAS, require
 
 PYPROJECT = Path(__file__).parents[2] / "pyproject.toml"
 
 
 def test_require_returns_installed_module():
-    """Case 9a: `require` returns the module object for an installed package."""
+    """`require` returns the module object for an installed package."""
     import os
 
     assert require("os") is os
 
 
 def test_require_missing_module_raises_naming_package():
-    """Case 9b: `require` raises ModuleNotFoundError (an ImportError) naming the missing package.
+    """`require` raises ModuleNotFoundError (an ImportError) naming the missing package.
 
     The error must stay a `ModuleNotFoundError` with `name` preserved so the registry can
     classify optional-dependency skips by module name; it remains an `ImportError` subclass so
@@ -36,17 +36,17 @@ def test_require_missing_module_raises_naming_package():
 
 
 def test_require_missing_optional_names_extra():
-    """A mapped module's error message carries the `aisteer360[<extra>]` install hint."""
+    """A mapped module's error message carries the `steerability[<extra>]` install hint."""
     try:
         require("mergekit")
     except ImportError as exc:
-        assert 'aisteer360[merging]' in str(exc)
+        assert 'steerability[merging]' in str(exc)
     else:
         pytest.skip("mergekit installed; can't test the missing-optional hint path.")
 
 
 def test_optional_map_matches_pyproject():
-    """Case 10: every mapped module is in its declared extra and absent from core deps."""
+    """Every mapped module is in its declared extra and absent from core deps."""
     with PYPROJECT.open("rb") as handle:
         pyproject = tomllib.load(handle)
 
@@ -57,11 +57,25 @@ def test_optional_map_matches_pyproject():
     for module_name, extra_name in OPTIONAL_MODULE_EXTRAS.items():
         assert extra_name in extras, f"{module_name!r} maps to undeclared extra {extra_name!r}"
 
+        # requirement strings use hyphenated distribution names; module names use underscores
+        normalized_name = module_name.replace("_", "-")
         requirements = extras[extra_name]
-        assert any(module_name in requirement for requirement in requirements), (
+        assert any(normalized_name in requirement.replace("_", "-") for requirement in requirements), (
             f"extra {extra_name!r} does not require {module_name!r}: {requirements}"
         )
 
-        assert not any(module_name in requirement for requirement in core_dependencies), (
+        assert not any(
+            normalized_name in requirement.replace("_", "-") for requirement in core_dependencies
+        ), (
             f"{module_name!r} must not appear in core [project.dependencies]"
         )
+
+
+def test_all_extra_is_eval():
+    """`all` is every extra that coexists on every platform; today that is eval alone."""
+    with PYPROJECT.open("rb") as handle:
+        pyproject = tomllib.load(handle)
+
+    declared = set(pyproject["project"]["optional-dependencies"]["all"])
+
+    assert declared == {"steerability[eval]"}

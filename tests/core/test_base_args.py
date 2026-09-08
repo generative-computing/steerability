@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from aisteer360.algorithms.core.base_args import BaseArgs
+from steerability.algorithms.core.base_args import BaseArgs
 
 
 # Test Args Subclasses

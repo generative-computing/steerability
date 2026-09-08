@@ -1,18 +1,18 @@
-"""Unit tests for aisteer360/algorithms/input_control/common/."""
+"""Unit tests for steerability/algorithms/input_control/common/."""
 import numpy as np
 import pytest
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from aisteer360.algorithms.input_control.common import ParetoFrontier, RolloutBudget
-from aisteer360.algorithms.input_control.common.formatters import (
+from steerability.algorithms.input_control.common import ParetoFrontier, RolloutBudget
+from steerability.algorithms.input_control.common.formatters import (
     ChatTemplateSlotFormatter,
     FewShotBlockFormatter,
     PrependTextFormatter,
     SystemPromptFormatter,
 )
-from aisteer360.algorithms.input_control.common.memory import Memory, PoolMemory, TextMemory
-from aisteer360.algorithms.input_control.common.proposers import (
+from steerability.algorithms.input_control.common.memory import Memory, PoolMemory, TextMemory
+from steerability.algorithms.input_control.common.proposers import (
     BaseProposer,
     LLMMetaPromptProposer,
     RetrievalProposer,
@@ -20,15 +20,14 @@ from aisteer360.algorithms.input_control.common.proposers import (
     parse_fenced_or_whole,
     parse_whole,
 )
-from aisteer360.algorithms.input_control.common.scorers import BaseScorer, TaskEvaluationScorer
-from aisteer360.algorithms.input_control.common.selectors import (
+from steerability.algorithms.input_control.common.scorers import BaseScorer, TaskEvaluationScorer
+from steerability.algorithms.input_control.common.selectors import (
     BaseSelector,
     DenseRetrievalSelector,
     MMRSelector,
     RandomSelector,
     TopKSelector,
 )
-from aisteer360.evaluation.metrics.base import Metric
 
 
 class _CallableScorer(BaseScorer):
@@ -266,6 +265,70 @@ class TestSystemPromptFormatter:
         with pytest.raises(TypeError):
             f.apply_to_messages([[{"role": "user", "content": "hi"}]], TextMemory())
 
+    def test_default_mode_is_replace(self):
+        # backward compatibility: the no-arg formatter replaces the leading system message
+        f = SystemPromptFormatter()
+        assert f.mode == "replace"
+        memory = TextMemory(slots={"instruction": "new"})
+        out = f.apply_to_messages(
+            [[{"role": "system", "content": "old"}, {"role": "user", "content": "hi"}]],
+            memory,
+        )
+        assert out[0][0]["content"] == "new"
+
+    def test_prepend_merges_ahead_of_existing(self):
+        f = SystemPromptFormatter(mode="prepend", separator=" | ")
+        memory = TextMemory(slots={"instruction": "ctx"})
+        out = f.apply_to_messages(
+            [[{"role": "system", "content": "old"}, {"role": "user", "content": "hi"}]],
+            memory,
+        )
+        assert out[0][0]["content"] == "ctx | old"
+        assert len(out[0]) == 2
+
+    def test_append_merges_after_existing(self):
+        f = SystemPromptFormatter(mode="append", separator=" | ")
+        memory = TextMemory(slots={"instruction": "ctx"})
+        out = f.apply_to_messages(
+            [[{"role": "system", "content": "old"}, {"role": "user", "content": "hi"}]],
+            memory,
+        )
+        assert out[0][0]["content"] == "old | ctx"
+        assert len(out[0]) == 2
+
+    @pytest.mark.parametrize("mode", ["replace", "prepend", "append"])
+    def test_no_system_message_identical_across_modes(self, mode):
+        # with no leading system message, a merge with nothing is a set: one new system message at position 0
+        f = SystemPromptFormatter(mode=mode, separator=" | ")
+        memory = TextMemory(slots={"instruction": "ctx"})
+        out = f.apply_to_messages([[{"role": "user", "content": "hi"}]], memory)[0]
+        assert out[0] == {"role": "system", "content": "ctx"}
+        assert out[1]["role"] == "user"
+
+    @pytest.mark.parametrize("mode", ["replace", "prepend", "append"])
+    def test_input_messages_not_mutated(self, mode):
+        f = SystemPromptFormatter(mode=mode, separator=" | ")
+        memory = TextMemory(slots={"instruction": "ctx"})
+        original = [[{"role": "system", "content": "old"}, {"role": "user", "content": "hi"}]]
+        _ = f.apply_to_messages(original, memory)
+        assert original == [[{"role": "system", "content": "old"}, {"role": "user", "content": "hi"}]]
+
+    def test_invalid_mode_raises(self):
+        with pytest.raises(ValueError, match="mode"):
+            SystemPromptFormatter(mode="merge")
+
+    def test_apply_to_ids_batch_roundtrips(self, tiny_lm):
+        # apply_to_ids must handle a 2-row batch (batch_decode), returning two rows without raising
+        model, tokenizer = tiny_lm
+        f = SystemPromptFormatter()
+        memory = TextMemory(slots={"instruction": "be brief"})
+        enc = tokenizer(["first question", "second question here"], return_tensors="pt", padding=True)
+        with pytest.warns(UserWarning):
+            out = f.apply_to_ids(enc["input_ids"], memory, tokenizer)
+        assert out.shape[0] == 2
+        for row in out:
+            tokenizer.decode(row.tolist(), skip_special_tokens=True)  # round-trips without raising
+
 
 class TestPrependTextFormatter:
     def test_prepends_to_first_user_message(self):
@@ -293,6 +356,55 @@ class TestPrependTextFormatter:
         f = PrependTextFormatter()
         with pytest.raises(TypeError):
             f._resolve_text(TextMemory(slots={"text": 123}))
+
+    def test_default_target_is_first_user(self):
+        # backward compatibility: the no-arg formatter targets the first user turn
+        f = PrependTextFormatter(separator=" | ")
+        assert f.target == "first_user"
+        memory = TextMemory(slots={"text": "ctx"})
+        chat = [[{"role": "user", "content": "a"}, {"role": "assistant", "content": "x"},
+                 {"role": "user", "content": "b"}]]
+        out = f.apply_to_messages(chat, memory)[0]
+        assert out[0]["content"] == "ctx | a"
+        assert out[2]["content"] == "b"
+
+    def test_target_last_user(self):
+        f = PrependTextFormatter(separator=" | ", target="last_user")
+        memory = TextMemory(slots={"text": "ctx"})
+        chat = [[{"role": "user", "content": "a"}, {"role": "assistant", "content": "x"},
+                 {"role": "user", "content": "b"}]]
+        out = f.apply_to_messages(chat, memory)[0]
+        assert out[0]["content"] == "a"
+        assert out[2]["content"] == "ctx | b"
+
+    def test_target_all_user(self):
+        f = PrependTextFormatter(separator=" | ", target="all_user")
+        memory = TextMemory(slots={"text": "ctx"})
+        chat = [[{"role": "user", "content": "a"}, {"role": "assistant", "content": "x"},
+                 {"role": "user", "content": "b"}]]
+        out = f.apply_to_messages(chat, memory)[0]
+        assert out[0]["content"] == "ctx | a"
+        assert out[1]["content"] == "x"  # assistant turn untouched
+        assert out[2]["content"] == "ctx | b"
+
+    @pytest.mark.parametrize("target", ["first_user", "last_user", "all_user"])
+    def test_no_user_message_appends_user_turn(self, target):
+        f = PrependTextFormatter(target=target)
+        memory = TextMemory(slots={"text": "ctx"})
+        out = f.apply_to_messages([[{"role": "system", "content": "s"}]], memory)[0]
+        assert any(m.get("role") == "user" and "ctx" in m.get("content", "") for m in out)
+
+    @pytest.mark.parametrize("target", ["first_user", "last_user", "all_user"])
+    def test_input_messages_not_mutated(self, target):
+        f = PrependTextFormatter(separator=" | ", target=target)
+        memory = TextMemory(slots={"text": "ctx"})
+        original = [[{"role": "user", "content": "a"}, {"role": "user", "content": "b"}]]
+        _ = f.apply_to_messages(original, memory)
+        assert original == [[{"role": "user", "content": "a"}, {"role": "user", "content": "b"}]]
+
+    def test_invalid_target_raises(self):
+        with pytest.raises(ValueError, match="target"):
+            PrependTextFormatter(target="middle_user")
 
 
 class TestChatTemplateSlotFormatter:
@@ -405,14 +517,11 @@ class TestCallableScorer:
         assert isinstance(scorer, BaseScorer)
 
 
-class _ConstantMetric(Metric):
-    """Trivial metric that returns a fixed score regardless of input."""
-    def __init__(self, value: float = 0.5, **extras):
-        super().__init__(**extras)
-        self._value = value
-
-    def compute(self, responses, prompts=None, **kwargs):
-        return {"score": self._value}
+def _constant_scorer(value: float = 0.5):
+    """Trivial per-row scorer returning a fixed score regardless of input."""
+    def score(response, row):
+        return value
+    return score
 
 
 @pytest.fixture(scope="module")
@@ -432,7 +541,7 @@ class TestTaskEvaluationScorerSmoke:
             task_lm=model,
             tokenizer=tokenizer,
             dev_set=[{"input": "hello"}, {"input": "world"}],
-            metric=_ConstantMetric(value=0.7),
+            row_scorer=_constant_scorer(value=0.7),
             gen_kwargs={"max_new_tokens": 2, "do_sample": False},
         )
         scores = scorer.score(["be brief", "be concise"])
@@ -442,37 +551,33 @@ class TestTaskEvaluationScorerSmoke:
         model, tokenizer = tiny_lm
         captured = []
 
-        class _CaptureMetric(Metric):
-            def compute(self, responses, prompts=None, **kwargs):
-                captured.append(len(responses))
-                return {"score": 1.0}
+        def capture_scorer(response, row):
+            captured.append(row["input"])
+            return 1.0
 
         scorer = TaskEvaluationScorer(
             task_lm=model,
             tokenizer=tokenizer,
             dev_set=[{"input": "a"}, {"input": "b"}, {"input": "c"}],
-            metric=_CaptureMetric(),
+            row_scorer=capture_scorer,
             gen_kwargs={"max_new_tokens": 1, "do_sample": False},
             max_dev_size=2,
         )
         scorer.score(["x"])
-        assert captured == [2]
+        assert captured == ["a", "b"]
 
     def test_batched_dev_rows_deterministic(self, tiny_lm):
         """Greedy generation on the batched path should be reproducible."""
         model, tokenizer = tiny_lm
 
-        class _ResponseLengthMetric(Metric):
-            """Score depends only on responses (stable, deterministic)."""
-            def compute(self, responses, prompts=None, **kwargs):
-                total = sum(len(r) for r in responses)
-                return {"score": total / max(len(responses), 1)}
+        def response_length_scorer(response, row):
+            return float(len(response))
 
         scorer = TaskEvaluationScorer(
             task_lm=model,
             tokenizer=tokenizer,
             dev_set=[{"input": "hello"}, {"input": "world"}, {"input": "test"}],
-            metric=_ResponseLengthMetric(),
+            row_scorer=response_length_scorer,
             gen_kwargs={"max_new_tokens": 4, "do_sample": False},
         )
         prompts = ["be helpful", "be brief"]
@@ -493,7 +598,7 @@ class TestTaskEvaluationScorerSmoke:
                 task_lm=model,
                 tokenizer=tokenizer,
                 dev_set=[{"input": "a"}, {"input": "b"}],
-                metric=_ConstantMetric(value=0.5),
+                row_scorer=_constant_scorer(value=0.5),
                 gen_kwargs={"max_new_tokens": 1, "do_sample": False},
             )
             scorer.score(["x"])
@@ -591,6 +696,10 @@ class TestLLMMetaPromptProposerSmoke:
             tokenizer=tokenizer,
             meta_prompt_template="task={task}; seed={seed}",
             gen_kwargs={"max_new_tokens": 1, "do_sample": False},
+            # the tiny double's model vocab exceeds its tokenizer's, so the sampled id can
+            # decode to nothing; map any response (even empty) to one candidate so the test
+            # exercises template substitution rather than the double's decode luck
+            parse_fn=lambda response: [response or "<empty>"],
         )
         # if the format substitution fails, .format will KeyError
         out = proposer.propose(seed="x", n=1, context={"task": "rewrite"})
@@ -1018,7 +1127,7 @@ class TestDenseRetrievalSelector:
 
 class TestGenerateWithSystemPrompt:
     def test_smoke_returns_one_per_query(self, tiny_lm):
-        from aisteer360.algorithms.input_control.common.generation import generate_with_system_prompt
+        from steerability.algorithms.input_control.common.generation import generate_with_system_prompt
         model, tokenizer = tiny_lm
         out = generate_with_system_prompt(
             model, tokenizer, "be brief", ["hello", "world", "test"],
@@ -1028,12 +1137,12 @@ class TestGenerateWithSystemPrompt:
         assert all(isinstance(o, str) for o in out)
 
     def test_empty_queries_returns_empty(self, tiny_lm):
-        from aisteer360.algorithms.input_control.common.generation import generate_with_system_prompt
+        from steerability.algorithms.input_control.common.generation import generate_with_system_prompt
         model, tokenizer = tiny_lm
         assert generate_with_system_prompt(model, tokenizer, "x", []) == []
 
     def test_padding_side_restored(self, tiny_lm):
-        from aisteer360.algorithms.input_control.common.generation import generate_with_system_prompt
+        from steerability.algorithms.input_control.common.generation import generate_with_system_prompt
         model, tokenizer = tiny_lm
         original = tokenizer.padding_side
         try:

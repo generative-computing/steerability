@@ -1,6 +1,6 @@
 # SearchDecoding
 
-::: aisteer360.algorithms.output_control.search_decoding
+::: steerability.algorithms.output_control.search_decoding
     handler: python
     options:
         show_if_no_docstring: true

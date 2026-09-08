@@ -7,8 +7,8 @@ and shape for its source.
 import pytest
 import torch
 
-from aisteer360.algorithms.core.output import Output
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.core.output import Output
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
 
 TINY_MODEL = "hf-internal-testing/tiny-random-LlamaForCausalLM"
 

@@ -1,6 +1,6 @@
 # CPO
 
-::: aisteer360.algorithms.input_control.cpo
+::: steerability.algorithms.input_control.cpo
     handler: python
     options:
         show_if_no_docstring: true

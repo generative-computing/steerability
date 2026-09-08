@@ -6,7 +6,7 @@ means the last real token.
 import pytest
 import torch
 
-from aisteer360.algorithms.core.internals.pooling import (
+from steerability.algorithms.core.internals.pooling import (
     aggregate_condition_hidden,
     get_last_token_positions,
     masked_mean,

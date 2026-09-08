@@ -1,6 +1,6 @@
 # Angular Steering
 
-::: aisteer360.algorithms.state_control.angular_steering
+::: steerability.algorithms.state_control.angular_steering
     handler: python
     options:
         show_if_no_docstring: true

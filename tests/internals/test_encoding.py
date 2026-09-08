@@ -7,7 +7,7 @@ tokens), plus the prior default behavior when the new parameters are unset.
 """
 import torch
 
-from aisteer360.algorithms.core.internals.encoding import tokenize_pairs, tokenize_texts
+from steerability.algorithms.core.internals.encoding import tokenize_pairs, tokenize_texts
 from tests.utils.tiny_models import wordlevel_tokenizer
 
 TEXTS = ["the cat sat on mat", "dog ran fast", "attention span"]

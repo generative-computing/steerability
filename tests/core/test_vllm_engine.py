@@ -17,16 +17,16 @@ vllm = pytest.importorskip("vllm")
 import torch  # noqa: E402
 from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: E402
 
-from aisteer360.algorithms.core.execution import (  # noqa: E402
+from steerability.algorithms.core.execution import (  # noqa: E402
     BackendSpec,
     GenerationItem,
     GenerationParams,
     PreparedPrompt,
     ScoringItem,
 )
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline  # noqa: E402
-from aisteer360.backends.vllm import VLLMBackend  # noqa: E402
-from aisteer360.utils.tokenization import ensure_pad_token  # noqa: E402
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline  # noqa: E402
+from steerability.backends.vllm import VLLMBackend  # noqa: E402
+from steerability.utils.tokenization import ensure_pad_token  # noqa: E402
 
 TINY_MODEL = "JackFram/llama-68m"
 
@@ -120,10 +120,8 @@ class TestConstraintParityOnEngine:
     def test_json_schema_constrained_parity(self, engine_backend):
         import json
 
-        from aisteer360.algorithms.output_control.constrained_decoding import ConstrainedDecoding
-        from aisteer360.backends.vllm.backend import _structured_outputs_engine_kwargs
+        from steerability.algorithms.output_control.constrained_decoding import ConstrainedDecoding
 
-        pytest.importorskip("xgrammar")
         schema = {
             "type": "object",
             "properties": {"ok": {"type": "boolean"}},
@@ -155,10 +153,4 @@ class TestConstraintParityOnEngine:
 
         assert parsed("engine", engine_text) is not None
         assert parsed("hf", hf_text) is not None
-        # byte equality holds only when the engine grammar is whitespace-compact; on the legacy
-        # guided-decoding surface without that switch, compare parsed structure instead
-        defaults = _structured_outputs_engine_kwargs()
-        if "structured_outputs_config" in defaults or "guided_decoding_disable_any_whitespace" in defaults:
-            assert engine_text == hf_text
-        else:
-            assert parsed("engine", engine_text) == parsed("hf", hf_text)
+        assert engine_text == hf_text

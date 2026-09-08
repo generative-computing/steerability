@@ -10,12 +10,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from aisteer360.algorithms.core.utils.controls import merge_controls
-from aisteer360.algorithms.input_control.base import InputControl
-from aisteer360.algorithms.output_control.base import DecodingDriver
-from aisteer360.algorithms.state_control.base import StateControl
-from aisteer360.algorithms.structural_control.base import StructuralControl
-from aisteer360.utils.tokenization import ensure_pad_token
+from steerability.algorithms.core.utils.controls import merge_controls
+from steerability.algorithms.input_control.base import InputControl
+from steerability.algorithms.output_control.base import DecodingDriver
+from steerability.algorithms.state_control.base import StateControl
+from steerability.algorithms.structural_control.base import StructuralControl
+from steerability.utils.tokenization import ensure_pad_token
 from tests.conftest import MockInputControl, MockOutputControl, MockStateControl, MockStructuralControl
 
 

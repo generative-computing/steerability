@@ -1,4 +1,4 @@
-"""Output-control mechanism split in `SteeringPipeline` (output multiplicity design).
+"""Output-control mechanisms in `SteeringPipeline`.
 
 Covers the mechanism-based composition of the output category: step-level controls
 (`get_logits_processors` / `get_stopping_criteria`) compose in `controls`-list order; the decode
@@ -15,9 +15,9 @@ import pytest
 import torch
 from transformers import LogitsProcessorList, StoppingCriteria
 
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.core.utils.controls import merge_controls
-from aisteer360.algorithms.output_control.base import DecodingDriver, OutputControl
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.core.utils.controls import merge_controls
+from steerability.algorithms.output_control.base import DecodingDriver, OutputControl
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 HIDDEN = 32
@@ -389,13 +389,13 @@ class TestComputeLogprobs:
         prompt = _prompt_ids()
         ref = torch.tensor([[3, 4, 5]], dtype=torch.long)
 
-        with caplog.at_level("INFO", logger="aisteer360.algorithms.core.utils.assembly"):
+        with caplog.at_level("INFO", logger="steerability.algorithms.core.utils.assembly"):
             pipeline.compute_logprobs(input_ids=prompt, ref_output_ids=ref)
         assert any("_OptOutUniform" in r.message and "include_in_scoring" in r.message
                    for r in caplog.records)
 
         caplog.clear()
-        with caplog.at_level("INFO", logger="aisteer360.algorithms.core.utils.assembly"):
+        with caplog.at_level("INFO", logger="steerability.algorithms.core.utils.assembly"):
             pipeline.generate(input_ids=prompt, max_new_tokens=2, do_sample=False, eos_token_id=None)
         # the skip log is a scoring concern only; generate must not emit it
         assert not any("_OptOutUniform" in r.message for r in caplog.records)

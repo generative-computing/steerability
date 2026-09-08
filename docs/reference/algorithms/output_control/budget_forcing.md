@@ -1,6 +1,6 @@
 # BudgetForcing
 
-::: aisteer360.algorithms.output_control.budget_forcing
+::: steerability.algorithms.output_control.budget_forcing
     handler: python
     options:
         show_if_no_docstring: true

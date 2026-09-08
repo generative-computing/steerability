@@ -6,9 +6,9 @@ closing tag, and extension rounds are asserted deterministically.
 import pytest
 import torch
 
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.output_control.budget_forcing.control import BudgetForcing
-from aisteer360.algorithms.output_control.common.drivers.phased import Fixed, Generated
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.output_control.budget_forcing.control import BudgetForcing
+from steerability.algorithms.output_control.common.drivers.phased import Fixed, Generated
 from tests.utils.runtime_helpers import script_session_generate
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
@@ -56,7 +56,7 @@ class TestPlan:
 
 class TestConfig:
     def test_is_decoding_driver(self):
-        from aisteer360.algorithms.output_control.base import DecodingDriver
+        from steerability.algorithms.output_control.base import DecodingDriver
         assert isinstance(BudgetForcing(max_thinking_tokens=8), DecodingDriver)
 
     def test_no_extract_rule(self):
@@ -126,7 +126,7 @@ class TestEndToEnd:
         model = tiny_llama(num_layers=2, hidden=16, heads=2, vocab=VOCAB)
         tokenizer = wordlevel_tokenizer()
 
-        from aisteer360.algorithms.output_control.base import OutputControl
+        from steerability.algorithms.output_control.base import OutputControl
 
         class _ForceToken(OutputControl):
             Args = None
@@ -156,5 +156,5 @@ class TestEndToEnd:
         assert all(saw_processor)
 
     def test_registered_in_registry(self):
-        import aisteer360.algorithms.core.registry as r
+        import steerability.algorithms.core.registry as r
         assert "budget_forcing" in r.REGISTRY["output_control"]

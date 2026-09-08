@@ -4,8 +4,8 @@ import types
 
 import pytest
 
-from aisteer360.algorithms.core.execution import BackendSpec
-from aisteer360.backends.vllm import VLLMBackend
+from steerability.algorithms.core.execution import BackendSpec
+from steerability.backends.vllm import VLLMBackend
 
 
 class _FakeLLM:
@@ -25,12 +25,12 @@ def test_post_boot_failure_releases_engine(monkeypatch):
     monkeypatch.setitem(sys.modules, "vllm", module)
     _FakeLLM.instances.clear()
     # hermetic: no hub lookups, and the realistic failure (tokenizer resolution) raises
-    monkeypatch.setattr("aisteer360.backends.vllm.backend._reject_encoder_decoder", lambda *a, **k: None)
+    monkeypatch.setattr("steerability.backends.vllm.backend._reject_encoder_decoder", lambda *a, **k: None)
 
     def failing(source, trust_remote_code=False):
         raise OSError("no such tokenizer")
 
-    monkeypatch.setattr("aisteer360.backends.vllm.backend._client_tokenizer", failing)
+    monkeypatch.setattr("steerability.backends.vllm.backend._client_tokenizer", failing)
     with pytest.raises(OSError, match="no such tokenizer"):
         VLLMBackend(BackendSpec(kind="vllm", model="tiny"))
     (engine,) = _FakeLLM.instances

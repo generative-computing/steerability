@@ -6,7 +6,7 @@ layer `l` observes, i.e. `hidden_states[l]`), batching consistency, and input va
 import pytest
 import torch
 
-from aisteer360.algorithms.core.internals.capture import layerwise_tokenwise_hidden
+from steerability.algorithms.core.internals.capture import layerwise_tokenwise_hidden
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
 NUM_LAYERS = 4

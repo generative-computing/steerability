@@ -15,13 +15,13 @@ from vllm_hook_plugins.core.interpreter import apply_op, build_gate  # noqa: E40
 from vllm_hook_plugins.core.interpreter.gates import GateState  # noqa: E402
 from vllm_hook_plugins.core.schema import parse_intervention_spec  # noqa: E402
 
-from aisteer360.algorithms.core.execution import ModelFacts
-from aisteer360.algorithms.core.internals.pooling import aggregate_condition_hidden
-from aisteer360.algorithms.core.internals.probes import Probe
-from aisteer360.algorithms.state_control.activation_adapter.control import ActivationAdapter
-from aisteer360.algorithms.state_control.angular_steering.control import AngularSteering
-from aisteer360.algorithms.state_control.caa.control import CAA
-from aisteer360.algorithms.state_control.common.gating import (
+from steerability.algorithms.core.execution import ModelFacts
+from steerability.algorithms.core.internals.pooling import aggregate_condition_hidden
+from steerability.algorithms.core.internals.probes import Probe
+from steerability.algorithms.state_control.activation_adapter.control import ActivationAdapter
+from steerability.algorithms.state_control.angular_steering.control import AngularSteering
+from steerability.algorithms.state_control.caa.control import CAA
+from steerability.algorithms.state_control.common.gating import (
     AffineReadout,
     CosineReadout,
     Evidence,
@@ -31,10 +31,10 @@ from aisteer360.algorithms.state_control.common.gating import (
     SumThreshold,
     gate_from_probe,
 )
-from aisteer360.algorithms.state_control.common.lowering import artifact_id_for, lower_interventions
-from aisteer360.algorithms.state_control.common.specs import Intervention, TokenScope
-from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
-from aisteer360.algorithms.state_control.common.transforms import (
+from steerability.algorithms.state_control.common.lowering import artifact_id_for, lower_interventions
+from steerability.algorithms.state_control.common.specs import Intervention, TokenScope
+from steerability.algorithms.state_control.common.steering_vector import SteeringVector
+from steerability.algorithms.state_control.common.transforms import (
     AdditiveTransform,
     AlignmentAdaptiveTransform,
     HeadAdditiveTransform,
@@ -42,8 +42,8 @@ from aisteer360.algorithms.state_control.common.transforms import (
     ProjectionTransform,
     RotationTransform,
 )
-from aisteer360.algorithms.state_control.directional_ablation.control import DirectionalAblation
-from aisteer360.algorithms.state_control.iti.control import ITI
+from steerability.algorithms.state_control.directional_ablation.control import DirectionalAblation
+from steerability.algorithms.state_control.iti.control import ITI
 
 LAYERS = 4
 HIDDEN = 16
@@ -201,7 +201,7 @@ class TestPerTransformEquality:
 class TestModifierChain:
 
     def _forms(self):
-        from aisteer360.algorithms.state_control.common.transforms.base import unwrap_modifiers
+        from steerability.algorithms.state_control.common.transforms.base import unwrap_modifiers
 
         vector = _vector(k=2)
         transform = NormPreservingTransform(

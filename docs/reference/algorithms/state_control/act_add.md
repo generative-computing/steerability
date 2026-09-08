@@ -1,6 +1,6 @@
 # ActAdd
 
-::: aisteer360.algorithms.state_control.act_add
+::: steerability.algorithms.state_control.act_add
     handler: python
     options:
         show_if_no_docstring: true

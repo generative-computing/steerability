@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.input_control.prewrite import PRewrite
-from aisteer360.algorithms.structural_control.wrappers.trl.sfttrainer import SFT
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.input_control.prewrite import PRewrite
+from steerability.algorithms.structural_control.wrappers.trl.sfttrainer import SFT
 
 
 def _mock_tokenizer() -> MagicMock:
@@ -31,10 +31,10 @@ class TestSteeringPipelineTrustRemoteCode:
         """Construct a real SteeringPipeline with both loaders patched; return the two mocks."""
         with (
             patch(
-                "aisteer360.algorithms.core.steering_pipeline.AutoModelForCausalLM"
+                "steerability.algorithms.core.steering_pipeline.AutoModelForCausalLM"
             ) as model_cls,
             patch(
-                "aisteer360.algorithms.core.steering_pipeline.AutoTokenizer"
+                "steerability.algorithms.core.steering_pipeline.AutoTokenizer"
             ) as tokenizer_cls,
         ):
             model_cls.from_pretrained.return_value = _mock_model()
@@ -67,10 +67,10 @@ class TestPRewriteTrustRemoteCode:
         )
         with (
             patch(
-                "aisteer360.algorithms.input_control.prewrite.control.AutoModelForCausalLM"
+                "steerability.algorithms.input_control.prewrite.control.AutoModelForCausalLM"
             ) as model_cls,
             patch(
-                "aisteer360.algorithms.input_control.prewrite.control.AutoTokenizer"
+                "steerability.algorithms.input_control.prewrite.control.AutoTokenizer"
             ) as tokenizer_cls,
         ):
             model_cls.from_pretrained.return_value = _mock_model()
@@ -95,10 +95,10 @@ class TestTRLWrapperTrustRemoteCode:
         sft = SFT(base_model_name_or_path="some/base", **kwargs)
         with (
             patch(
-                "aisteer360.algorithms.structural_control.wrappers.trl.base_mixin.AutoModelForCausalLM"
+                "steerability.algorithms.structural_control.wrappers.trl.base_mixin.AutoModelForCausalLM"
             ) as model_cls,
             patch(
-                "aisteer360.algorithms.structural_control.wrappers.trl.base_mixin.AutoTokenizer"
+                "steerability.algorithms.structural_control.wrappers.trl.base_mixin.AutoTokenizer"
             ) as tokenizer_cls,
         ):
             model = _mock_model()

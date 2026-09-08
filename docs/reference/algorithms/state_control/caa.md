@@ -1,6 +1,6 @@
 # CAA
 
-::: aisteer360.algorithms.state_control.caa
+::: steerability.algorithms.state_control.caa
     handler: python
     options:
         show_if_no_docstring: true

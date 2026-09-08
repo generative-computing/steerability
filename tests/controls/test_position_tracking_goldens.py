@@ -1,12 +1,11 @@
-"""Golden token-id sequences for the runtime-migrated state controls.
+"""Golden token-id sequences for the `TransformHookRuntime`-backed state controls.
 
 Pins the greedy generations of `ITI`, `AngularSteering`, and `ActAdd` on the hub-free tiny
-fixtures so the position-tracking consolidation (moving these controls onto
-`TransformHookRuntime`) is verified to be token-identical, not merely close. Recorded against the
-pre-migration implementations and asserted unchanged afterwards.
+fixtures, in both position-tracking modes, so any change to position tracking is caught as a
+token-level difference rather than a merely approximate one.
 
 The literals are produced by the controls themselves; regenerate with
-`AISTEER_CAPTURE_GOLDENS=1 pytest tests/controls/test_position_tracking_goldens.py -s` and paste
+`STEERABILITY_CAPTURE_GOLDENS=1 pytest tests/controls/test_position_tracking_goldens.py -s` and paste
 the printed mapping into `GOLDENS`.
 
 Runs hub-free on a tiny randomly-initialized Llama.
@@ -16,11 +15,11 @@ import os
 import pytest
 import torch
 
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.state_control.act_add.control import ActAdd
-from aisteer360.algorithms.state_control.angular_steering.control import AngularSteering
-from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
-from aisteer360.algorithms.state_control.iti.control import ITI
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.state_control.act_add.control import ActAdd
+from steerability.algorithms.state_control.angular_steering.control import AngularSteering
+from steerability.algorithms.state_control.common.steering_vector import SteeringVector
+from steerability.algorithms.state_control.iti.control import ITI
 from tests.utils.runtime_helpers import strip_clock
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
@@ -129,7 +128,7 @@ def test_position_tracking_goldens(control_name, prompt_len, strip):
     """Greedy generation is bit-identical to the recorded golden sequence in both position modes."""
     produced = _generate(control_name, prompt_len, strip=strip)
 
-    if os.environ.get("AISTEER_CAPTURE_GOLDENS"):
+    if os.environ.get("STEERABILITY_CAPTURE_GOLDENS"):
         print(f'    ("{control_name}", {prompt_len}): {produced},')
         return
 

@@ -1,9 +1,9 @@
 import pytest
 import torch
 
-from aisteer360.algorithms.core.steering_pipeline import SteeringPipeline
-from aisteer360.algorithms.state_control.cast.control import CAST
-from aisteer360.algorithms.state_control.common.steering_vector import SteeringVector
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.state_control.cast.control import CAST
+from steerability.algorithms.state_control.common.steering_vector import SteeringVector
 from tests.utils.sweep import build_param_grid
 
 PROMPT_TEXT = (
@@ -136,14 +136,14 @@ class _ProbeAblation:
 
 class TestBehaviorTransformValidation:
     def _base(self, **overrides):
-        from aisteer360.algorithms.state_control.cast.args import CASTArgs
+        from steerability.algorithms.state_control.cast.args import CASTArgs
 
         kwargs = dict()
         kwargs.update(overrides)
         return CASTArgs(**kwargs)
 
     def _ablation(self, layers=(0, 1), **kwargs):
-        from aisteer360.algorithms.state_control.common.transforms import ProjectionTransform
+        from steerability.algorithms.state_control.common.transforms import ProjectionTransform
 
         return ProjectionTransform(_steering_vector(seed=100, layers=layers), **kwargs)
 
@@ -172,7 +172,7 @@ class TestBehaviorTransformValidation:
 
     def test_nondefault_behavior_fit_is_inert(self):
         # behavior_fit is only read when fitting from behavior_data (absent here), so it does not raise
-        from aisteer360.algorithms.state_control.common.fit_specs import VectorTrainSpec
+        from steerability.algorithms.state_control.common.fit_specs import VectorTrainSpec
 
         args = self._base(
             behavior_transform=self._ablation(),
@@ -191,7 +191,7 @@ class TestBehaviorTransformValidation:
 
 class TestBehaviorTransformApplication:
     def test_bound_instance_ablates_along_direction(self):
-        from aisteer360.algorithms.state_control.common.transforms import ProjectionTransform
+        from steerability.algorithms.state_control.common.transforms import ProjectionTransform
 
         direction = _unit_vector(7)
         transform = ProjectionTransform({0: direction.unsqueeze(0), 1: _unit_vector(8).unsqueeze(0)})
@@ -213,8 +213,8 @@ class TestBehaviorTransformApplication:
             assert post < 0.02 * pre + 1e-6
 
     def test_source_carrying_transform_bound_after_steer(self):
-        from aisteer360.algorithms.state_control.common.sources import ContrastiveFit
-        from aisteer360.algorithms.state_control.common.transforms import ProjectionTransform
+        from steerability.algorithms.state_control.common.sources import ContrastiveFit
+        from steerability.algorithms.state_control.common.transforms import ProjectionTransform
 
         source_transform = ProjectionTransform(
             ContrastiveFit(
@@ -235,7 +235,7 @@ class TestBehaviorTransformApplication:
         pipeline.generate(input_ids=torch.tensor([[3, 4, 5]]), max_new_tokens=2)
 
     def test_factory_receives_context_and_result_applied(self):
-        from aisteer360.algorithms.state_control.common.transforms import ProjectionTransform, TransformContext
+        from steerability.algorithms.state_control.common.transforms import ProjectionTransform, TransformContext
 
         seen = {}
 
@@ -254,7 +254,7 @@ class TestBehaviorTransformApplication:
         pipeline.generate(input_ids=torch.tensor([[3, 4, 5]]), max_new_tokens=2)
 
     def test_coverage_error_when_transform_misses_behavior_layer(self):
-        from aisteer360.algorithms.state_control.common.transforms import ProjectionTransform
+        from steerability.algorithms.state_control.common.transforms import ProjectionTransform
 
         transform = ProjectionTransform(_steering_vector(seed=100, layers=[0]))  # missing layer 1
         control = CAST(behavior_transform=transform, behavior_layer_ids=[0, 1])
