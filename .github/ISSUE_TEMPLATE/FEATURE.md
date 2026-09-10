@@ -1,39 +1,27 @@
 ---
 name: Feature request
-about: Request a new feature
+about: Suggest a new feature or an improvement to an existing one
+labels: enhancement
 ---
 
-# Feature
-<!-- Please, complete the following form for a feature request. If some fields do not apply to your situation, feel free to skip them.-->
+<!-- If some fields do not apply to your situation, feel free to skip them. -->
+<!-- To propose a new steering method specifically, use the "New steering method" template instead. -->
 
-## Story / Description
-<!-- Describe your software feature. It can be written down as a story, which is a general explanation of a feature written from the end user's perspective. Describe the end to end flow / end goal -->
+## Description
+<!-- What would you like the toolkit to do that it does not do today? If this is an improvement to existing
+behavior, describe the current behavior and how it falls short. -->
 
-As a ...
-I want ...
-so that ...
 
-- *screenshot here*
-- [link to designs]()
+## Motivation
+<!-- What are you trying to accomplish? A concrete use case helps us judge the design. -->
 
-## Test Cases
-<!-- Describe the test cases required for this feature -->
 
-- Given ... then ... should ...
-- Given ... then ... should ...
-- ...
+## Proposed solution
+<!-- Do you have ideas about how this could work? Sketching the API you would want to write is helpful. -->
 
-## Implementation Details
-<!-- Describe any relevant implementation details for this feature -->
+```python
 
-- Written as ... in ...
-- Tested using ...
+```
 
-## Acceptance Criteria
-<!-- Include the minimum requirements for the issue to be marked as completed. -->
-
-- [ ] Code reviewed by ___.
-- [ ] Automated tests exist.
-- [ ] Manually tested in ___.
-- [ ] Documentation written here:
-- [ ] ...
+## Alternatives considered
+<!-- Are there existing controls, arguments, or workarounds that partially cover this? -->

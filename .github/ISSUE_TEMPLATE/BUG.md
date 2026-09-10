@@ -1,32 +1,42 @@
 ---
 name: Bug
-about: Complete the following form to report a bug
+about: Report a bug
 labels: bug
 ---
 
-# Bug
-<!-- Please, complete the following form to report a bug. If some fields do not apply to your situation, feel free to skip them.-->
+<!-- If some fields do not apply to your situation, feel free to skip them. -->
 
-## Environment:
-<!-- Describe the environment you used when you encountered the bug. -->
+## Summary
+<!-- What went wrong? -->
+
+
+## Environment
+
+**Steerability version or commit SHA:**
+**Python version:**
 **OS:**
-**Browser:**
+**Device:** <!-- cpu / cuda / mps -->
+**Execution backend:** <!-- hugging face (default) / vllm offline / vllm server -->
+**torch / transformers versions:**
+**Extras installed:** <!-- e.g. all, vllm, eval, merging -->
 
-## Issue Summary
+## Steps to reproduce
+<!-- A minimal script is the most useful thing you can provide. Include the model ID, the controls in the
+pipeline, and any runtime_kwargs. -->
 
-* Describe what you were doing when you observed the problem?
-* Did this used to work? If so what changed?
-* Was the error recoverable? Did you perform any maintenance or workaround?
-- *screenshot here*
+```python
 
-## Steps to Reproduce:
-<!-- Describe in detail how you encountered the bug.-->
-1. First ...
-2. Click ...
-3. Enter ...
+```
 
-## Expected Behaviour
-<!-- What was the intended behaviour? -->
-* Should have ...
+## Expected behavior
+<!-- What did you expect to happen instead? -->
 
-## Relevant Logs
+
+## Actual behavior
+<!-- What happened, including the full traceback if there was one. -->
+
+```
+```
+
+## Additional context
+<!-- Did this used to work? If so, what changed? Was there a workaround? -->
