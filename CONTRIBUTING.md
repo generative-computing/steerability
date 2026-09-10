@@ -29,10 +29,11 @@ Install the toolkit with the `all` extra and the default `dev` dependency group 
 tooling):
 `uv sync --extra all`
 
-Coding Style Guidelines
-We are using tools to enforce code style:
-- iSort, to sort imports
-- Black, to format code
+## Coding style guidelines
+We use tools to enforce code style:
+- isort, to sort imports (configured in `[tool.isort]` in `pyproject.toml`)
+- detect-secrets, to scan for credentials
+- a set of file checks, covering trailing whitespace, end-of-file newlines, large files, and YAML/TOML syntax
 
 We run a series of checks on the codebase on every commit using pre-commit. To install the hooks, run:
 `pre-commit install`
