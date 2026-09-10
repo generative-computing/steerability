@@ -1,25 +1,18 @@
 ---
 name: Documentation
-about: Complete the following form to open a documentation issue
+about: Report a problem with the documentation or request new documentation
 labels: documentation
 ---
 
-# Documentation
-<!-- Please, complete the following form to open a documentation issue. If some fields do not apply to your situation, feel free to skip them.-->
+<!-- If some fields do not apply to your situation, feel free to skip them. -->
 
-## Select if this is a defect or new requirement
-
-- [ ] Bug
-- [ ] New requirement
-
---------------------------------------------------
-## Provide information about the requirement/bug:
-<!-- Description of the documentation issue -->
+## What is the issue?
+<!-- Describe what is missing, unclear, out of date, or incorrect. -->
 
 
-### Content location (URL or repository) (if applicable):
-<!-- Provide the URL of the page referenced -->
+## Location
+<!-- The URL on the docs site, or the path to the file, notebook, or docstring in the repository. -->
 
 
-### Git issue/epic related to this documentation task:
- <!-- Attach the issue to an epic if one applies or link it to the corresponding dev issue, if applicable -->
+## Suggested change
+<!-- If you have wording or content in mind, include it here. -->
