@@ -15,15 +15,31 @@ Covers the registry failure modes plus the happy paths:
     - malformed export -> RegistryError
     - duplicate name within a category -> RegistryError
     - no export -> silent skip
+
+A second group covers `register_method`, the explicit registration route for control classes
+defined outside the toolkit tree, including a save/load round trip through a `.spipe` bundle.
 """
 import logging
 import sys
 import textwrap
+from dataclasses import dataclass, field
 
 import pytest
 
 import steerability.algorithms.core.registry as registry
-from steerability.algorithms.core.registry import RegistryError, _crawl_methods
+from steerability.algorithms.core.base_args import BaseArgs
+from steerability.algorithms.core.registry import (
+    RegistryError,
+    _crawl_methods,
+    method_key_for,
+    register_method,
+    resolve_method_key,
+)
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.input_control.base import InputControl
+from steerability.spipe import SPipe, SpipeFormatError
+
+TINY_MODEL = "hf-internal-testing/tiny-random-LlamaForCausalLM"
 
 
 def _write(path, text):
@@ -218,3 +234,143 @@ def test_no_export_silently_skipped(synthetic_env, caplog):
     assert registry.REGISTRY.get("state_control", {}) == {}
     registry_records = [record for record in caplog.records if record.name == registry.logger.name]
     assert registry_records == []
+
+
+# register_method: controls defined outside the toolkit tree
+@dataclass
+class ExternalPrefixArgs(BaseArgs):
+    """Arguments for `ExternalPrefixControl`."""
+
+    marker: str = field(default="[external]", metadata={"help": "Text prepended to the last user turn."})
+
+
+class ExternalPrefixControl(InputControl):
+    """Input control defined outside the toolkit tree, prepending a marker to the last user turn."""
+
+    Args = ExternalPrefixArgs
+
+    def adapt(self, input_ids, runtime_kwargs=None):
+        return input_ids
+
+    def adapt_messages(self, messages, runtime_kwargs=None):
+        adapted = []
+        for chat in messages:
+            turns = [dict(turn) for turn in chat]
+            for turn in reversed(turns):
+                if turn.get("role") == "user":
+                    turn["content"] = f"{self.marker}\n\n{turn['content']}"
+                    break
+            adapted.append(turns)
+        return adapted
+
+
+class ExternalOtherControl(InputControl):
+    """A second out-of-tree input control, used to test name collisions."""
+
+    Args = None
+
+    def adapt(self, input_ids, runtime_kwargs=None):
+        return input_ids
+
+
+@pytest.fixture
+def clean_registry():
+    """Restore every registry bucket after a test that registers methods."""
+    snapshot = {category: bucket.copy() for category, bucket in registry.REGISTRY.items()}
+    yield
+    registry.REGISTRY.clear()
+    registry.REGISTRY.update(snapshot)
+
+
+def test_register_method_registers_under_category_bucket(clean_registry):
+    """A registered class resolves both ways and its record carries the bare category."""
+    register_method("input", "external_prefix", ExternalPrefixControl, ExternalPrefixArgs)
+
+    assert method_key_for(ExternalPrefixControl) == "input_control/external_prefix"
+    method = resolve_method_key("input_control/external_prefix")
+    assert method.control_cls is ExternalPrefixControl
+    assert method.args_cls is ExternalPrefixArgs
+    assert method.category == "input"
+    assert method.name == "external_prefix"
+
+
+def test_register_method_accepts_suffixed_category(clean_registry):
+    """'input_control' and 'input' name the same bucket."""
+    register_method("input_control", "external_prefix", ExternalPrefixControl, ExternalPrefixArgs)
+    assert "external_prefix" in registry.REGISTRY["input_control"]
+
+    register_method("input", "external_prefix", ExternalPrefixControl, ExternalPrefixArgs)
+    assert list(registry.REGISTRY["input_control"]).count("external_prefix") == 1
+
+
+def test_register_method_is_idempotent(clean_registry):
+    """Re-registering the same class under the same name is a no-op."""
+    register_method("input", "external_prefix", ExternalPrefixControl, ExternalPrefixArgs)
+    first = registry.REGISTRY["input_control"]["external_prefix"]
+
+    register_method("input", "external_prefix", ExternalPrefixControl, ExternalPrefixArgs)
+    assert registry.REGISTRY["input_control"]["external_prefix"] is first
+
+
+def test_register_method_rejects_taken_name(clean_registry):
+    """A different class under a taken name raises, naming the name."""
+    register_method("input", "external_prefix", ExternalPrefixControl, ExternalPrefixArgs)
+
+    with pytest.raises(RegistryError, match="external_prefix"):
+        register_method("input", "external_prefix", ExternalOtherControl, None)
+
+
+def test_register_method_rejects_second_key_for_one_class(clean_registry):
+    """One class registers under one key."""
+    register_method("input", "external_prefix", ExternalPrefixControl, ExternalPrefixArgs)
+
+    with pytest.raises(RegistryError, match="already registered"):
+        register_method("input", "external_prefix_alias", ExternalPrefixControl, ExternalPrefixArgs)
+
+
+def test_register_method_rejects_unknown_category(clean_registry):
+    with pytest.raises(RegistryError, match="Unknown steering category"):
+        register_method("sideways", "external_prefix", ExternalPrefixControl, ExternalPrefixArgs)
+
+
+def test_register_method_rejects_wrong_base_class(clean_registry):
+    """An input control cannot register in the state category."""
+    with pytest.raises(RegistryError, match="must subclass StateControl"):
+        register_method("state", "external_prefix", ExternalPrefixControl, ExternalPrefixArgs)
+
+
+def test_register_method_rejects_args_mismatch(clean_registry):
+    with pytest.raises(RegistryError, match="must be"):
+        register_method("input", "external_prefix", ExternalPrefixControl, None)
+
+
+def test_registered_method_round_trips_through_spipe(tmp_path, clean_registry):
+    """An externally registered control saves frozen (model-free) and loads back."""
+    register_method("input", "external_prefix", ExternalPrefixControl, ExternalPrefixArgs)
+
+    pipeline = SteeringPipeline(
+        model_name_or_path=TINY_MODEL,
+        controls=[ExternalPrefixControl(marker="[house style]")],
+    )
+    saved = pipeline.to_spipe(freeze=True).save(tmp_path / "external.spipe")
+
+    rebuilt = SPipe.load(saved).pipeline()
+    assert len(rebuilt.input_controls) == 1
+    control = rebuilt.input_controls[0]
+    assert isinstance(control, ExternalPrefixControl)
+    assert control.marker == "[house style]"
+
+
+def test_loading_unregistered_key_points_at_register_method(tmp_path, clean_registry):
+    """A bundle naming an unregistered method fails with a message naming the fix."""
+    register_method("input", "external_prefix", ExternalPrefixControl, ExternalPrefixArgs)
+    pipeline = SteeringPipeline(
+        model_name_or_path=TINY_MODEL,
+        controls=[ExternalPrefixControl(marker="[house style]")],
+    )
+    saved = pipeline.to_spipe(freeze=True).save(tmp_path / "external.spipe")
+
+    del registry.REGISTRY["input_control"]["external_prefix"]
+
+    with pytest.raises(SpipeFormatError, match="register_method"):
+        SPipe.load(saved).pipeline()

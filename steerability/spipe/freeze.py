@@ -180,8 +180,51 @@ def _freeze_control(control, ctx: EncodeContext, entry_path: str) -> Any:
     return resolved_entries[0] if len(resolved_entries) == 1 else resolved_entries
 
 
+def _recipe_frozen_blockers(controls: list) -> list[str]:
+    """Reasons the enabled controls cannot be frozen from their recipe alone, in pipeline order.
+
+    A control is recipe-frozen when its steer step declares `ModelAccess.FACTS`, declares no
+    fits, and exports no state, which makes its recipe its frozen form. `export_state()` is
+    called only for a control that passes the access and fit checks, since it is documented as
+    post-`steer()`.
+
+    Args:
+        controls: The pipeline's controls in manifest order (structural, input, state, output).
+
+    Returns:
+        One `"controls[<i>] (<ClassName>): <reasons>"` string per blocking control.
+    """
+    from steerability.algorithms.core.execution.access import ModelAccess
+
+    blockers = []
+    for i, control in enumerate(controls):
+        if not control.enabled:
+            continue
+        reasons = []
+        access = control.steer_access()
+        if access != ModelAccess.FACTS:
+            reasons.append(f"declares steer access {access.name}")
+        fits = control.steer_fits()
+        if fits:
+            reasons.append(f"declares fits {', '.join(fit[0] for fit in fits)}")
+        if not reasons:
+            try:
+                state = control.export_state()
+            except Exception as exc:
+                reasons.append(f"export_state() raised {type(exc).__name__}: {exc}")
+            else:
+                if state:
+                    reasons.append(f"exports state {', '.join(sorted(state))}")
+        if reasons:
+            blockers.append(f"controls[{i}] ({type(control).__name__}): {', '.join(reasons)}")
+    return blockers
+
+
 def build_spipe(pipeline: SteeringPipeline, *, freeze: bool | None = None, model_ref: str | None = None) -> "SPipe":
     """Build an `SPipe` from a pipeline.
+
+    An unsteered pipeline freezes when every enabled control is recipe-frozen (FACTS access, no
+    fits, no exported state); otherwise `freeze=True` raises.
 
     Args:
         pipeline: The `SteeringPipeline` to serialize.
@@ -194,8 +237,8 @@ def build_spipe(pipeline: SteeringPipeline, *, freeze: bool | None = None, model
 
     Raises:
         SpipeSaveError: If the model reference is unresolvable, a control is unregistered or
-            cannot serialize, freezing is requested on an unsteered pipeline, or a control
-            cannot freeze.
+            cannot serialize, freezing is requested on an unsteered pipeline whose controls are
+            not all recipe-frozen, or a control cannot freeze.
     """
     from steerability.algorithms.core.identity import config_descriptor_from_controls, config_digest
     from steerability.algorithms.core.registry import method_key_for
@@ -203,8 +246,6 @@ def build_spipe(pipeline: SteeringPipeline, *, freeze: bool | None = None, model
 
     if freeze is None:
         freeze = bool(pipeline._is_steered)
-    if freeze and not pipeline._is_steered:
-        raise SpipeSaveError("freeze=True requires a steered pipeline; call steer() first.")
 
     ref = _resolve_model_ref(pipeline, model_ref)
     revision = pipeline.hf_model_kwargs.get("revision") if pipeline.hf_model_kwargs else None
@@ -213,6 +254,15 @@ def build_spipe(pipeline: SteeringPipeline, *, freeze: bool | None = None, model
         *pipeline.structural_controls, *pipeline.input_controls,
         *pipeline.state_controls, *pipeline.output_controls,
     ]
+
+    if freeze and not pipeline._is_steered:
+        blockers = _recipe_frozen_blockers(controls)
+        if blockers:
+            raise SpipeSaveError(
+                "freeze=True on an unsteered pipeline requires every enabled control to be "
+                "recipe-frozen (steer access FACTS, no fits, no exported state); call steer() "
+                f"first. Blocking: {'; '.join(blockers)}"
+            )
 
     temp = tempfile.TemporaryDirectory(prefix="spipe-")
     base_dir = Path(temp.name)

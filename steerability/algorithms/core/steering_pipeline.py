@@ -600,7 +600,9 @@ class SteeringPipeline:
         exported into a content-addressed artifact store and its resolved constructor form is
         recorded alongside the recipe, so the loaded pipeline steers cheaply and model-free.
         An unsteered pipeline yields a recipe-only spipe; `freeze=False` forces recipe-only
-        from a steered pipeline.
+        from a steered pipeline. An unsteered pipeline freezes when every enabled control is
+        recipe-frozen (FACTS access, no fits, no exported state), which needs no model; the lock
+        then records no model or tokenizer fingerprint. Otherwise `freeze=True` raises.
 
         Args:
             freeze: Freeze the resolution. Defaults to the pipeline's steered state.
@@ -612,7 +614,8 @@ class SteeringPipeline:
 
         Raises:
             SpipeSaveError: If no model reference is resolvable, a control is unregistered or
-                cannot serialize, or a control cannot freeze.
+                cannot serialize, `freeze=True` is requested on an unsteered pipeline whose
+                controls are not all recipe-frozen, or a control cannot freeze.
         """
         from steerability.spipe.freeze import build_spipe
 

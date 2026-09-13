@@ -1,5 +1,9 @@
 """
 Discovers steering methods at import‑time for cli reference.
+
+Methods inside the toolkit tree are found by crawling the category packages for
+`STEERING_METHOD` exports. A control class defined in another package registers itself with
+`register_method`.
 """
 import logging
 from importlib import import_module
@@ -140,6 +144,84 @@ def _crawl_methods(root: Path = ROOT, package_prefix: str = __name__.rsplit(".co
 _crawl_methods()
 
 
+_CATEGORY_BASES = {
+    "input": ("steerability.algorithms.input_control.base", "InputControl"),
+    "structural": ("steerability.algorithms.structural_control.base", "StructuralControl"),
+    "state": ("steerability.algorithms.state_control.base", "StateControl"),
+    "output": ("steerability.algorithms.output_control.base", "OutputControl"),
+}
+
+
+def register_method(category: str, name: str, control_cls: type, args_cls: type | None) -> None:
+    """Register a control class defined outside the toolkit tree under `"<category>_control/<name>"`.
+
+    Auto-discovery only crawls the toolkit's own category packages, so a control defined in
+    another package must register itself before it can be written to or read from a `.spipe`
+    bundle. Registration is process-global; a package that defines controls calls this at import
+    time, and the same package must be imported before a bundle naming those keys is loaded.
+
+    Registering the same class under the same key again is a no-op.
+
+    Args:
+        category: One of `"input"`, `"structural"`, `"state"`, `"output"`. A `"_control"` suffix
+            is accepted and stripped.
+        name: The method name within the category.
+        control_cls: The control class, which must subclass the category's base class.
+        args_cls: The control's `Args` dataclass, which must be `control_cls.Args` (both may be
+            None for an arg-free control).
+
+    Raises:
+        RegistryError: If the category is unknown, `control_cls` does not subclass the category
+            base, `args_cls` is not `control_cls.Args`, the name is already taken in that
+            category by a different class, or `control_cls` is already registered under a
+            different key.
+    """
+    bare_category = category.removesuffix("_control")
+    base_ref = _CATEGORY_BASES.get(bare_category)
+    if base_ref is None:
+        raise RegistryError(
+            f"Unknown steering category {category!r}; expected one of {sorted(_CATEGORY_BASES)}."
+        )
+
+    label = f"register_method({category!r}, {name!r})"
+    _validate_export(label, {"name": name, "control": control_cls, "args": args_cls})
+
+    module_path, base_name = base_ref
+    base_cls = getattr(import_module(module_path), base_name)
+    if not issubclass(control_cls, base_cls):
+        raise RegistryError(
+            f"{label}: {control_cls.__qualname__} must subclass {base_name} to register in "
+            f"category {bare_category!r}."
+        )
+    if getattr(control_cls, "Args", None) is not args_cls:
+        raise RegistryError(
+            f"{label}: args must be {control_cls.__qualname__}.Args "
+            f"({getattr(getattr(control_cls, 'Args', None), '__qualname__', None)}); got "
+            f"{getattr(args_cls, '__qualname__', args_cls)}."
+        )
+
+    bucket_key = f"{bare_category}_control"
+    key = f"{bucket_key}/{name}"
+    for other_key, other_bucket in REGISTRY.items():
+        for other_name, other_method in other_bucket.items():
+            if other_method.control_cls is control_cls and f"{other_key}/{other_name}" != key:
+                raise RegistryError(
+                    f"{label}: {control_cls.__qualname__} is already registered as "
+                    f"{other_key}/{other_name}; one class registers under one key."
+                )
+
+    bucket = REGISTRY.setdefault(bucket_key, {})
+    existing = bucket.get(name)
+    if existing is not None:
+        if existing.control_cls is control_cls:
+            return
+        raise RegistryError(
+            f"{label}: the name {name!r} is already registered in category {bare_category!r} "
+            f"by {existing.control_cls.__module__}.{existing.control_cls.__qualname__}."
+        )
+    bucket[name] = SteeringMethod(bare_category, name, control_cls, args_cls)
+
+
 def method_key_for(control_cls: type) -> str:
     """The registry key `"<category>_control/<name>"` of a registered control class.
 
@@ -158,7 +240,8 @@ def method_key_for(control_cls: type) -> str:
                 return f"{category}/{name}"
     raise RegistryError(
         f"{control_cls.__module__}.{control_cls.__qualname__} is not a registered steering "
-        "method; register it via a STEERING_METHOD export before serializing it."
+        "method; register it before serializing it, via a STEERING_METHOD export inside the "
+        "toolkit tree or a register_method() call for a class defined outside it."
     )
 
 
@@ -172,8 +255,9 @@ def resolve_method_key(key: str) -> SteeringMethod:
         The registered method.
 
     Raises:
-        RegistryError: If the key is malformed or names no registered method; the message
-            lists the registered names of the category (or the known categories).
+        RegistryError: If the key is malformed or specifies no registered method; the message
+            lists the registered names of the category (or the known categories) and, for an
+            unknown name, points at `register_method` for methods defined outside the toolkit.
     """
     category, _, name = key.partition("/")
     bucket = REGISTRY.get(category)
@@ -186,6 +270,7 @@ def resolve_method_key(key: str) -> SteeringMethod:
     if method is None:
         raise RegistryError(
             f"Unknown method {name!r} in category {category!r}; registered names are "
-            f"{sorted(bucket)}."
+            f"{sorted(bucket)}. A method defined outside the toolkit resolves only once its "
+            "package has been imported, since the package registers it with register_method()."
         )
     return method

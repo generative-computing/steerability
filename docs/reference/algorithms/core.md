@@ -17,5 +17,4 @@
         filters:
           - "!^_"
           - "!^internals"
-          - "!^registry"
           - "!^STEERING_METHOD"

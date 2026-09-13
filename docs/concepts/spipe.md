@@ -40,6 +40,19 @@ response = pipeline.generate(...)
 back into its recipe. `save(..., artifacts="thin")` writes the manifest without the artifact payloads. A thin bundle
 loads against an external store via `SPipe.load(path, artifact_store=...)`.
 
+### Freezing without a model
+
+A pipeline with nothing to fit can be frozen without loading the model. `to_spipe(freeze=True)` on an unsteered
+pipeline succeeds when every enabled control is recipe-frozen, i.e., its steer step declares only `facts` access,
+declares no fits, and exports no state. A prompt-only pipeline (`SystemPrompt`, `UserPrefix`, a `FewShot` with fixed
+pools) qualifies, since its recipe already is its frozen form. A control that blocks the freeze is named in the error,
+with the reason.
+
+The lock section of such a bundle records no model or tokenizer fingerprint and no dtype, since no model was present
+to fingerprint. Everything else (both digests, the backend spec hash, the `fit` posture, package versions) is filled as
+usual. A consumer that treats the lock as the guarantee that nothing fits at load time therefore gets that guarantee
+without either side loading weights, and the bundle steers cheaply on load.
+
 ## Staleness
 
 The lock records, per frozen artifact, a digest of the recipe fields a re-fit would consume. Editing an inert
@@ -72,6 +85,11 @@ hash. Two things require an explicit `allow_code=True` at load, similar to `trus
 
 Frozen prompt-optimization bundles keep their search-only arguments (scorers, budgets) for provenance. A bundle whose
 optimizer used a custom scorer is therefore code-dependent even though the frozen memory never calls it.
+
+A bundle can also name a method defined outside the toolkit tree, registered with `register_method` (see
+[adding your own steering method](../tutorials/add_new_steering_method.md#controls-outside-the-toolkit-tree)). Since
+registration happens at import time, the defining package must be imported before the bundle is loaded. The registry
+error raised otherwise names `register_method` as the fix.
 
 ## Identity
 

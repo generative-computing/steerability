@@ -159,6 +159,31 @@ under each of the four categories, via a small example implementation, are given
     decoding, split it into two small controls and chain them together in `controls=[...]`.
 
 
+## Controls outside the toolkit tree
+
+Auto-discovery only crawls the toolkit's own category packages, so a control class defined in another package
+registers itself explicitly with `register_method`. We put the call in the defining package's `__init__.py` so that
+importing the package is what registers the method:
+
+```python
+# my_steering_methods/__init__.py
+from steerability.algorithms.core.registry import register_method
+
+from .house_style.args import HouseStyleArgs
+from .house_style.control import HouseStyle
+
+register_method("input", "house_style", HouseStyle, HouseStyleArgs)
+```
+
+The category is one of `input`, `structural`, `state`, and `output` (the `_control` suffix is also accepted), the
+control class must subclass that category's base class, and the args class must be the control's own `Args`. The key
+becomes `input_control/house_style`, which is the name a `.spipe` manifest records.
+
+Registration lives in the process rather than on disk, which means the defining package must be imported before
+saving or loading a bundle that names its keys. Loading a bundle whose method is unregistered raises an error naming
+`register_method` as the fix.
+
+
 ## Testing your method
 
 To ensure your method is operating as intended, we ask that you write a small unit test in `./tests/controls/`. We

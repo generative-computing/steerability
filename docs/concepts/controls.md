@@ -258,7 +258,7 @@ and the following decoding drivers:
     - *Description*: the config-first generic over the segment shape (propose → score → keep → iterate, with best-of-N defaults). Best-of-N, self-consistency, blockwise controlled decoding, and DeAL are assignments of its config.
     - *Backends*: HF, vLLM with `propose_mode="sample"` (beam proposals are HF-only).
 - `PhasedDecoding` ([API reference](../reference/algorithms/output_control/phased_decoding.md), [notebook](../examples/notebooks/algorithms/generics/phased_decoding.ipynb))
-    - *Description*: the config-first generic over the phase shape (forced / generated segments via a declarative plan grammar). Budget forcing, response prefill, and thinking intervention[@wu2025effectively] are assignments of its config. A `generate` phase ends at its `until` substring, any token in `until_token_ids`, or its `budget`, whichever first.
+    - *Description*: the config-first generic over the phase shape (forced / generated segments via a declarative plan grammar). Budget forcing, response prefill, and thinking intervention[@wu2025effectively] are assignments of its config. A `generate` phase ends at its `until` substring, any token in `until_token_ids`, or its `budget`, whichever first. Note that under a chat template that opens the reasoning block in its generation prompt (the case `ProviderOptions.reasoning_opened_at_start` describes), a plan whose first phase is `fixed` must splice the reasoning close tag before the answer text. Without it the evaluation provider reads the fixed text as unclosed reasoning and grades an empty answer.
     - *Backends*: HF, vLLM.
 
 Some decoding strategies are native to Hugging Face's `generate` and need no dedicated control. They flow through the

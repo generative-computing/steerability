@@ -378,6 +378,10 @@ cheap and model-free; `prefer="recipe"` forces re-fits instead. Backend, device,
 caller's. `verify()` is the model-free report, `thaw()` drops the resolution, and `allow_code=True` at load gates
 callable references, non-toolkit dataclass imports, and pickle-backed memories.
 
+An unsteered pipeline freezes without loading the model when every enabled control is recipe-frozen (`FACTS` steer
+access, no fits, no exported state, as for a prompt-only pipeline), and the lock then records no model or tokenizer
+fingerprint and no dtype; otherwise `freeze=True` raises naming each blocking control.
+
 Loading a stale bundle (fit-relevant recipe fields edited after freezing) raises unless `allow_stale=True`. Trained
 structural controls freeze as `load_checkpoint` / `load_lora` entries; intervention controls freeze as
 `activation_adapter` entries unless they declare a same-class frozen form (as `caa`, `act_add`, and `iti` do).
@@ -465,6 +469,10 @@ steerability/algorithms/<category>_control/<method_name>/
 ├── control.py     # the control class; all steering behavior lives here
 └── utils/         # optional local helpers; use sparingly
 ```
+
+A control class defined outside the toolkit tree is not discovered by the crawl and registers itself at import time
+with `register_method(category, name, control_cls, args_cls)` from `algorithms/core/registry.py`, which is what lets it
+appear in a `.spipe` manifest.
 
 `args.py` defines every hyperparameter as a `BaseArgs` dataclass; use `__post_init__` for cross-field validation:
 

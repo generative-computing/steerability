@@ -19,6 +19,11 @@ class PhasedDecodingArgs(BaseArgs):
 
     Plans whose `fixed` values are all strings are fully JSON-serializable (sweepable through
     `ControlSpec` and log-friendly). Grammar validation happens in the control's `_configure()`.
+
+    Under a chat template that opens the reasoning block in its generation prompt (the case
+    `ProviderOptions.reasoning_opened_at_start` describes), a plan whose first phase is `fixed`
+    must splice the reasoning close tag before the answer text. Without it the evaluation provider
+    reads the fixed text as unclosed reasoning and grades an empty answer.
     """
 
     plan: list = field(
