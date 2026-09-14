@@ -34,14 +34,20 @@ PEFT wrappers are peeled before resolution: `PeftModel.base_model` is the tuner 
 prefix `"base_model.model."` and the resulting paths resolve through `get_submodule` without relying
 on attribute forwarding.
 
+`lora_target_pattern` scopes a LoRA `target_modules` suffix list to the resolved decoder stack, so an
+adapter injected by the TRL wrappers attaches to the text decoder and not to a multimodal wrapper's
+vision or audio tower.
+
 `register_layout_detector` adds a callable consulted before the built-in resolution, so a user on an
 unlisted family is not blocked on a toolkit release.
 """
 from __future__ import annotations
 
 import logging
+import re
+import warnings
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Sequence
 
 import torch.nn as nn
 from peft import PeftModel
@@ -396,3 +402,50 @@ def resolve_model_layout(model: PreTrainedModel) -> ModelLayout:
         "sub-modules on the first layer and its attention module on at least one layer); "
         "register a detector with register_layout_detector() for other architectures."
     )
+
+
+def lora_target_pattern(
+    target_modules: Sequence[str] | str | None,
+    model: nn.Module,
+) -> str | list[str] | None:
+    """Scope a bare-suffix LoRA target list to the model's decoder stack.
+
+    A list of module-name suffixes (PEFT's list form, which PEFT matches by
+    `key.endswith("." + suffix)` over every module of the model) becomes one full-match regex over
+    the decoder layers of `resolve_model_layout(model)`, so modules outside the stack (a multimodal
+    wrapper's vision or audio tower, the embeddings, the head) are never selected. A `str` is a user
+    regex and passes through unchanged, as does `None`.
+
+    PEFT injects adapters by walking `named_modules()` of the innermost wrapped model, so the
+    pattern is relative to that model: PEFT wrappers on `model` are peeled first and their
+    `base_model.model.` prefix is not part of the pattern.
+
+    Args:
+        target_modules: PEFT `target_modules` as declared: a list of suffixes, a regex, or None.
+        model: The model the adapter will be injected into, possibly PEFT-wrapped.
+
+    Returns:
+        The full-match regex for a list input, else `target_modules` unchanged.
+
+    Warns:
+        UserWarning: If no layout resolves for the model. The list is returned unchanged and
+            matches over the whole model, which is PEFT's list semantics.
+    """
+    if not isinstance(target_modules, (list, tuple)):
+        return target_modules
+    _, inner = _unwrap_peft(model)
+    try:
+        layout = resolve_model_layout(inner)
+    except ValueError as exc:
+        warnings.warn(
+            f"LoRA target_modules {list(target_modules)} could not be scoped to a decoder stack "
+            f"({exc}); the suffixes match over the whole model. Pass target_modules as a regex, "
+            "or register a layout detector, to scope them.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return list(target_modules)
+    names = "|".join(re.escape(str(name)) for name in target_modules)
+    pattern = rf"{re.escape(layout.layer_prefix)}\.\d+\.(?:.*\.)?(?:{names})"
+    logger.debug("LoRA targets scoped to %s: %s", layout.layer_prefix, pattern)
+    return pattern

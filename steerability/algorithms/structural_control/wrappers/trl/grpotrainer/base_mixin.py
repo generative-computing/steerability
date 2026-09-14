@@ -1,7 +1,6 @@
 from typing import Any, Callable
 
 import torch
-from peft import LoraConfig, PeftType
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 from trl import GRPOConfig, GRPOTrainer
 
@@ -49,9 +48,7 @@ class GRPOTrainerMixin(TRLMixin, StructuralControl):
         config_kwargs = resolve_config_kwargs(GRPOConfig, self.training_args)
         training_config = GRPOConfig(**config_kwargs)
 
-        peft_config = None
-        if self.use_peft and self.peft_type == PeftType.LORA:
-            peft_config = LoraConfig(**self.lora_kwargs)
+        peft_config = self._peft_config(model)
 
         if train_dataset is not None:
             trainer = GRPOTrainer(

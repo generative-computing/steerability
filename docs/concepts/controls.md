@@ -102,7 +102,7 @@ around existing libraries. The toolkit implements:
     - *Description*: model merging via MergeKit[@goddard-etal-2024-arcees], combining multiple checkpoints with strategies such as linear interpolation, SLERP, and TIES from a YAML/dict config.
     - *Backends*: HF, vLLM (the merged checkpoint is served).
 - `TRL` ([API reference](../reference/algorithms/structural_control/trl_wrapper.md), [notebook](../examples/notebooks/algorithms/wrappers/trl.ipynb))
-    - *Description*: weight-level training via Hugging Face TRL[@vonwerra2022trl], exposing SFT, DPO, APO, PPO, and GRPO trainers, with optional LoRA/PEFT and a post-training merge. Since `training_args` is forwarded verbatim to the installed TRL config, a key the config does not declare raises an error at control construction.
+    - *Description*: weight-level training via Hugging Face TRL[@vonwerra2022trl], exposing SFT, DPO, APO, PPO, and GRPO trainers, with optional LoRA/PEFT and a post-training merge. Since `training_args` is forwarded verbatim to the installed TRL config, a key the config does not declare raises an error at control construction. A `target_modules` list of module-name suffixes is scoped at steer time to the decoder stack of the resolved model layout, so a multimodal wrapper's vision and audio towers are not adapted; a regex targets other modules.
     - *Backends*: HF, vLLM (serves the steer-time artifact, a checkpoint or LoRA adapter, and requires a configured output directory).
 
 
@@ -183,8 +183,9 @@ models (Llama, Mistral, Qwen, and Gemma), for composite multimodal wrappers load
 (Qwen3.5 and Qwen3-Next) are supported by the residual-stream controls and by hidden-state capture, while controls that
 act on attention (`PASTA` and o_proj-site interventions) are restricted to the attention layers, and `ITI` does not
 support them. A multimodal checkpoint is steered on its text decoder under text-only prompting, and images and audio
-are out of scope. A state control listed after an unmerged LoRA adapter steers the adapted model. For an architecture
-not on this list, register a detector with `register_layout_detector` (from `steerability.algorithms.core.internals`).
+are out of scope. The LoRA adapters the TRL wrappers train attach to that decoder as well. A state control listed after
+an unmerged LoRA adapter steers the adapted model. For an architecture not on this list, register a detector with
+`register_layout_detector` (from `steerability.algorithms.core.internals`).
 
 
 

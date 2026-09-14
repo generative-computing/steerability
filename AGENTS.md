@@ -336,10 +336,12 @@ DeltaNet `linear_attn` layers precede each `self_attn` layer) resolves to its at
 o_proj-site interventions, and `pasta` refuse the other layers with a message naming the attention layers, and `iti`
 refuses hybrid stacks.
 
-A multimodal checkpoint is steered on its text decoder under text-only prompting; images and audio stay out. An
-unmerged LoRA adapter (`LoadLoRA(merge=False)`, or a TRL LoRA run without `merge_lora_after_train`) is hooked through
-the PEFT wrapper, so a state control listed after it steers the adapted model. Register a detector with
-`register_layout_detector` (from `steerability.algorithms.core.internals`) for an architecture not on this list.
+A multimodal checkpoint is steered on its text decoder under text-only prompting; images and audio stay out. The LoRA
+adapters the TRL wrappers train attach to that decoder as well, since a `target_modules` suffix list is scoped at steer
+time to the resolved decoder stack. An unmerged LoRA adapter (`LoadLoRA(merge=False)`, or a TRL LoRA run without
+`merge_lora_after_train`) is hooked through the PEFT wrapper, so a state control listed after it steers the adapted
+model. Register a detector with `register_layout_detector` (from `steerability.algorithms.core.internals`) for an
+architecture not on this list.
 
 ### Runtime kwargs
 
@@ -502,7 +504,9 @@ own in the common case. Required hooks per category:
   that control's token-level `adapt` for the call, so implementing both does not double-apply.
 - **structural**: `steer(model, tokenizer, **kwargs) -> PreTrainedModel`; return the new or modified model. The
   TRL wrappers forward `training_args` verbatim to the installed TRL config, so a convenience field loses to a
-  `training_args` entry of the same name, and a key the config does not declare raises at construction.
+  `training_args` entry of the same name, and a key the config does not declare raises at construction. A LoRA
+  `target_modules` list of module-name suffixes is scoped at steer time to the resolved decoder stack; a regex string
+  is passed to PEFT unchanged.
 - **state**: residual-stream methods subclass `InterventionControl` and declare an unbound intervention template
   in `_configure()`: a tuple of `Intervention` objects from `state_control/common/specs.py`, each naming layers or
   a selector, a transform possibly carrying an `ArtifactSource`, a `TokenScope`, and an optional gate. The base
@@ -660,7 +664,8 @@ A new control needs `tests/controls/test_<method>.py` following the existing pat
 - Read structural facts (`hidden_size`, `num_attention_heads`, `head_dim`, `num_hidden_layers`) through
   `text_config(model)` (from `steerability.algorithms.core.internals`), which returns the text sub-config on composite
   multimodal models; never read `model.config.hidden_size` directly, and never default a missing fact to `0`. Resolve
-  decoder module paths through `resolve_model_layout(model)` rather than by matching `model.model.layers`.
+  decoder module paths through `resolve_model_layout(model)` rather than by matching `model.model.layers`, and scope
+  LoRA adapter targets through `lora_target_pattern(target_modules, model)`.
 
 ### Docstrings and documentation
 

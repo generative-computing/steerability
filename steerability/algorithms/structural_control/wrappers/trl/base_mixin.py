@@ -2,13 +2,15 @@ import difflib
 from dataclasses import fields
 from typing import Any
 
+import torch.nn as nn
 import trl
-from peft import PeftType
+from peft import LoraConfig, PeftType
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
 
 from steerability.algorithms.core.base_control import NotFreezableError
 from steerability.algorithms.core.execution.contracts import Capability
 from steerability.algorithms.core.execution.payloads import Artifact, CheckpointArtifact, LoRAArtifact
+from steerability.algorithms.core.internals import lora_target_pattern
 
 
 def resolve_config_kwargs(config_cls: type, training_args: dict[str, Any]) -> dict[str, Any]:
@@ -118,6 +120,26 @@ class TRLMixin:
 
         self.device = next(model.parameters()).device
         return model, self.tokenizer
+
+    def _peft_config(self, model: nn.Module) -> LoraConfig | None:
+        """The `LoraConfig` for this run, or None when PEFT is off or not LoRA.
+
+        Built at steer time from a copy of `lora_kwargs`, with a suffix-list `target_modules` scoped
+        to the decoder stack of `model` through `lora_target_pattern`. The declared `target_modules`
+        on `self.args` is not modified, so `fit_identity()` and the recipe contain the list as the
+        caller wrote it.
+
+        Args:
+            model: The resolved model the trainer will wrap.
+
+        Returns:
+            The config, or None.
+        """
+        if not (self.use_peft and self.peft_type == PeftType.LORA):
+            return None
+        kwargs = dict(self.lora_kwargs)
+        kwargs["target_modules"] = lora_target_pattern(kwargs.get("target_modules"), model)
+        return LoraConfig(**kwargs)
 
     def _post_train_freeze(self, model: PreTrainedModel) -> PreTrainedModel:
         """Put `model` in eval mode, freeze its parameters, and return it.

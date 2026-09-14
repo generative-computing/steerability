@@ -1,5 +1,4 @@
 import torch
-from peft import LoraConfig, PeftType
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 from trl import DPOConfig, DPOTrainer
 
@@ -72,9 +71,8 @@ class DPOTrainerMixin(TRLMixin, StructuralControl):
         training_config = DPOConfig(**config_kwargs)
 
         # build PEFT config
-        peft_config = None
-        if self.use_peft and self.peft_type == PeftType.LORA:
-            peft_config = LoraConfig(**self.lora_kwargs)
+        peft_config = self._peft_config(model)
+        if peft_config is not None:
             ref_model = None  # TRL constructs frozen ref from base weights
 
         # train if a dataset is provided

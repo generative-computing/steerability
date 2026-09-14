@@ -1,6 +1,5 @@
 from typing import Any
 
-from peft import LoraConfig, PeftType
 from transformers import DataCollatorForLanguageModeling, PreTrainedModel, PreTrainedTokenizerBase
 from trl import SFTConfig, SFTTrainer
 
@@ -30,9 +29,7 @@ class SFTTrainerMixin(TRLMixin, StructuralControl):
         training_config = SFTConfig(**config_kwargs)
 
         # build PEFT config
-        peft_config = None
-        if self.use_peft and self.peft_type == PeftType.LORA:
-            peft_config = LoraConfig(**self.lora_kwargs)
+        peft_config = self._peft_config(model)
 
         # default collator for tokenized datasets (labels from input_ids)
         data_collator = self.data_collator

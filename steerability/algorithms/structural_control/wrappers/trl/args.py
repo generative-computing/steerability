@@ -10,6 +10,14 @@ from steerability.algorithms.core.base_args import BaseArgs
 
 @dataclass
 class TRLArgs(BaseArgs):
+    """Arguments shared by the TRL-backed structural controls.
+
+    `target_modules` selects the modules a LoRA adapter attaches to. A list of module-name suffixes
+    (the default, `["q_proj", "v_proj"]`) is scoped at `steer()` to the decoder stack of the resolved
+    model layout, so a multimodal wrapper's vision and audio towers are not adapted. A string is a
+    PEFT full-match regex over module names and is passed through unchanged, which is how modules
+    outside the decoder stack are targeted.
+    """
 
     # when the pipeline has no base model of its own, the structural control can load these.
     base_model_name_or_path: str | None = None
@@ -45,7 +53,7 @@ class TRLArgs(BaseArgs):
     peft_type: PeftType = PeftType.LORA
     r: int = 16
     lora_alpha: int = 32
-    target_modules: list[str] = field(default_factory=lambda: ["q_proj", "v_proj"])
+    target_modules: list[str] | str = field(default_factory=lambda: ["q_proj", "v_proj"])
     modules_to_save: list[str] | None = None
     lora_dropout: float = 0.05
     bias: str = "none"  # "none" | "all" | "lora_only"
@@ -101,6 +109,16 @@ class TRLArgs(BaseArgs):
             raise ValueError("`lora_dropout` must be in [0, 1).")
         if self.bias not in {"none", "all", "lora_only"}:
             raise ValueError(f"bias must be 'none'|'all'|'lora_only'; got {self.bias!r}")
+        if isinstance(self.target_modules, (list, tuple)):
+            self.target_modules = list(self.target_modules)
+            valid_targets = bool(self.target_modules) and all(isinstance(name, str) for name in self.target_modules)
+        else:
+            valid_targets = isinstance(self.target_modules, str) and bool(self.target_modules)
+        if not valid_targets:
+            raise ValueError(
+                "`target_modules` must be a non-empty list of module-name suffixes or a non-empty regex string; got "
+                f"{self.target_modules!r}"
+            )
 
         self.lora_kwargs = {
             "r": self.r,

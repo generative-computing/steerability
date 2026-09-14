@@ -2,7 +2,6 @@ import warnings
 from typing import Any
 
 import torch
-from peft import LoraConfig, PeftType
 from transformers import AutoModelForSequenceClassification, PreTrainedModel, PreTrainedTokenizerBase
 
 # TRL 1.x ships PPO under `trl.experimental`; importing from there emits a
@@ -77,9 +76,8 @@ class PPOTrainerMixin(TRLMixin, StructuralControl):
         config_kwargs = resolve_config_kwargs(PPOConfig, self.training_args)
         training_config = PPOConfig(**config_kwargs)
 
-        peft_config = None
-        if self.use_peft and self.peft_type == PeftType.LORA:
-            peft_config = LoraConfig(**self.lora_kwargs)
+        peft_config = self._peft_config(model)
+        if peft_config is not None:
             ref_model = None
 
         if train_dataset is not None:
