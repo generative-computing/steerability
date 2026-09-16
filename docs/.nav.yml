@@ -47,6 +47,9 @@ nav:
         - AngularSteering: "examples/notebooks/algorithms/angular_steering.ipynb"
         - CAA: "examples/notebooks/algorithms/caa.ipynb"
         - CAST: "examples/notebooks/algorithms/cast.ipynb"
+        - CorDA-derived PCA: "examples/notebooks/algorithms/corda_pca.ipynb"
+        - S-space: "examples/notebooks/algorithms/sspace.ipynb"
+        - Linear-AcT: "examples/notebooks/algorithms/linear_act.ipynb"
         - DirectionalAblation: "examples/notebooks/algorithms/directional_ablation.ipynb"
         - ITI: "examples/notebooks/algorithms/iti.ipynb"
         - PASTA: "examples/notebooks/algorithms/pasta.ipynb"
@@ -109,6 +112,9 @@ nav:
             - ActAdd: reference/algorithms/state_control/act_add.md
             - ActivationAdapter: reference/algorithms/state_control/activation_adapter.md
             - Angular Steering: reference/algorithms/state_control/angular_steering.md
+            - CorDA-derived PCA: reference/algorithms/state_control/corda_pca.md
+            - S-space: reference/algorithms/state_control/sspace.md
+            - Linear-AcT: reference/algorithms/state_control/linear_act.md
             - CAA: reference/algorithms/state_control/caa.md
             - CAST: reference/algorithms/state_control/cast.md
             - Directional Ablation: reference/algorithms/state_control/directional_ablation.md

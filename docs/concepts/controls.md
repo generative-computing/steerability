@@ -137,6 +137,15 @@ patching. The toolkit implements:
 - `AngularSteering` ([API reference](../reference/algorithms/state_control/angular_steering.md), [notebook](../examples/notebooks/algorithms/angular_steering.ipynb))
     - *Description*: angular steering[@vu2025angular], rotating the hidden state within a per-layer 2D plane (feature axis + companion axis) to a target angle while leaving the orthogonal complement untouched. It is norm-preserving by construction, and vector addition and directional ablation are special cases.
     - *Backends*: HF, vLLM (`intervention_point="layer_output"` only, since the default norm-input placement is HF-only).
+- `CordaPCA` ([API reference](../reference/algorithms/state_control/corda_pca.md), [notebook](../examples/notebooks/algorithms/corda_pca.ipynb))
+    - *Description*: an activation-steering adaptation of CorDA's context-oriented decomposition, fitted from paired Linear inputs.
+    - *Backends*: HF.
+- `SSpace` ([API reference](../reference/algorithms/state_control/sspace.md), [notebook](../examples/notebooks/algorithms/sspace.ipynb))
+    - *Description*: weight-SVD steering with contrast-ranked coordinates and per-token cosine gates.
+    - *Backends*: HF.
+- `LinearAcT` ([API reference](../reference/algorithms/state_control/linear_act.md), [notebook](../examples/notebooks/algorithms/linear_act.ipynb))
+    - *Description*: coordinate-wise affine transport fitted by least squares on sorted activations.
+    - *Backends*: HF.
 - `CAA` ([API reference](../reference/algorithms/state_control/caa.md), [notebook](../examples/notebooks/algorithms/caa.ipynb))
     - *Description*: contrastive activation addition[@panickssery2023steering], adding a learned mean-difference direction to the residual stream at a single layer.
     - *Backends*: HF, vLLM (norm-preserving configurations included).

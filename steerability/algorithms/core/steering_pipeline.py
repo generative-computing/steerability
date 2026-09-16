@@ -646,6 +646,17 @@ class SteeringPipeline:
         if "session" not in kwargs:
             scoped = ScopedSession(venue_session, type(control).__name__, access)
             kwargs = {**kwargs, "session": scoped}
+        tensor_records = getattr(control, "_spipe_tensor_records", ())
+        if tensor_records and control._spipe_verify != "off":
+            from steerability.algorithms.core.internals.fingerprint import verify_model_fingerprint
+
+            verification_session = venue_session if kwargs["session"] is None else kwargs["session"]
+            live_fingerprint = verification_session.layout.model_fingerprint
+            for record in tensor_records:
+                verify_model_fingerprint(
+                    record.provenance.get("model_fingerprint"), live_fingerprint,
+                    artifact_class=record.artifact_class, policy=control._spipe_verify,
+                )
         model = self.model if access >= ModelAccess.MODULE else None
         control_name = type(control).__name__
         logger.info("Steering %s (access=%s).", control_name, access.name.lower())

@@ -129,18 +129,23 @@ def _freeze_control(control, ctx: EncodeContext, entry_path: str) -> Any:
     fit_digest = digest_of(fit_identity) if fit_identity is not None else None
     fit_source = fits[0][0] if fits else (type(control).__name__ if fit_digest is not None else None)
 
-    # encode each exported state value with its metadata installed, giving artifact sidecars
-    # and manifest records the fit provenance; content-equal values re-encoded later inside
-    # the frozen args reuse these records (first write wins)
+    # Encode each exported state value into the shared content store. The stored bytes may
+    # deduplicate, but every resolved control entry keeps its own fit provenance record.
     artifacts: dict[str, dict] = {}
+    state_classes = control.export_state_classes()
     remaining_fits = list(fits)
     for name, value in state.items():
-        artifact_class = _artifact_class_of(value)
+        explicit_class = state_classes.get(name)
+        artifact_class = explicit_class or _artifact_class_of(value)
         source = None
         digest = None
-        matched = next((fit for fit in remaining_fits if fit[1] == artifact_class), None)
+        if explicit_class is not None:
+            matched = next((fit for fit in fits if fit[1] == artifact_class), None)
+        else:
+            matched = next((fit for fit in remaining_fits if fit[1] == artifact_class), None)
+            if matched is not None:
+                remaining_fits.remove(matched)
         if matched is not None:
-            remaining_fits.remove(matched)
             source, digest = matched[0], fit_digest
         elif fit_digest is not None and not fits:
             source, digest = fit_source, fit_digest
@@ -154,7 +159,9 @@ def _freeze_control(control, ctx: EncodeContext, entry_path: str) -> Any:
         ids: list[str] = []
         _collect_artifact_ids(encoded_value, ids)
         if ids:
-            artifacts[name] = ctx.records[ids[0]].manifest_entry()
+            record = ctx.records[ids[0]].manifest_entry()
+            record.update(artifact_class=artifact_class, source=source, fit_digest=digest)
+            artifacts[name] = record
 
     forms = control.frozen_form(state)
     if isinstance(forms, tuple):
