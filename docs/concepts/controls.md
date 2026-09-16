@@ -40,7 +40,8 @@ Some examples of input control methods are few-shot prompting, reasoning guidanc
 self-consistency), automatic prompting methods, and prompt routing. The toolkit implements:
 
 - `FewShot` ([API reference](../reference/algorithms/input_control/few_shot.md), [notebook](../examples/notebooks/algorithms/few_shot.ipynb))
-    - *Description*: pool- or runtime-supplied few-shot examples with a pluggable selector.
+    - *Description*: pool- or runtime-supplied few-shot examples with a pluggable selector. On chat input the
+      rendered example block merges into the leading system message (appended by default, via `system_mode`).
     - *Backends*: HF, vLLM.
 - `PRewrite` ([API reference](../reference/algorithms/input_control/prewrite.md), [notebook](../examples/notebooks/algorithms/prewrite.ipynb))
     - *Description*: RL-trained instruction rewriter ([Kong et al. 2024](https://arxiv.org/abs/2401.08189)) supporting a greedy "inference" strategy and a best-of-K "search" strategy. The rewriter can optionally be trained with GRPO using a scorer-in-the-loop reward (apply the rewrite with the frozen task model over a dev set and score each response with a per-row `SampleScorer`, the paper's reward).

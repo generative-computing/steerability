@@ -158,10 +158,10 @@ def test_pipeline_prepend_preserves_setting_prompt(model_and_tokenizer, device: 
 
 
 def test_composes_with_few_shot(model_and_tokenizer):
-    """The a2-shaped stack: SystemPrompt merges ahead of the setting's system prompt, and FewShot inserts its
-    example block afterward without deleting the setting's prompt. Verified over the folded message adaptation
-    (as the pipeline chains input controls in list order), since two consecutive system messages exceed what the
-    tiny CI chat templates accept."""
+    """The a2-shaped stack: SystemPrompt merges ahead of the setting's system prompt, and FewShot (default
+    `system_mode="append"`) appends its example block to that merged message without deleting the setting's prompt,
+    so the stack yields exactly one leading system message. Verified over the folded message adaptation (as the
+    pipeline chains input controls in list order)."""
     _, tokenizer = model_and_tokenizer
     system_prompt = SystemPrompt(text=CONTROL_SYS, mode="prepend", separator=SEPARATOR)
     few_shot = FewShot(positive_example_pool=[{"input": "hey", "output": "Good afternoon."}], k_positive=1)
@@ -174,10 +174,10 @@ def test_composes_with_few_shot(model_and_tokenizer):
         adapted = control.adapt_messages(adapted)
 
     out = adapted[0]
+    assert [m["role"] for m in out] == ["system", "user"]
     leading_system = out[0]
-    assert leading_system["role"] == "system"
-    assert leading_system["content"] == f"{CONTROL_SYS}{SEPARATOR}{SETTING_SYS}"
-    assert any("Good afternoon." in m["content"] for m in out if m["role"] == "system")
+    assert leading_system["content"].startswith(f"{CONTROL_SYS}{SEPARATOR}{SETTING_SYS}")
+    assert "Good afternoon." in leading_system["content"]
 
 
 # token path (no chat structure)

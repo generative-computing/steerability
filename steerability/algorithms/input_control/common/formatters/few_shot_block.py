@@ -7,6 +7,8 @@ from transformers import PreTrainedTokenizerBase
 from steerability.algorithms.input_control.common.formatters.base import BaseFormatter
 from steerability.algorithms.input_control.common.memory.base import Memory
 
+_MODES = frozenset({"append", "prepend", "insert"})
+
 
 class FewShotBlockFormatter(BaseFormatter):
     """Renders memory['directive'] and memory['examples'] as a single system message.
@@ -14,6 +16,35 @@ class FewShotBlockFormatter(BaseFormatter):
     Each example dict's non-private fields (those not prefixed with `_`) are emitted as
     `Title-Cased Key: value` lines under a header determined by the example's `_polarity`.
     The `_polarity` key is set internally by `FewShot` and is the only required field.
+
+    Only the leading system message (`chat[0]` when its role is `"system"`) participates in placement;
+    messages after it are left untouched. When a leading system message is present, `mode` controls how
+    the rendered block combines with it:
+
+        - `"append"`: `existing + separator + block`.
+        - `"prepend"`: `block + separator + existing`.
+        - `"insert"`: the block becomes a separate second system message at index 1.
+
+    When no leading system message is present, all three modes insert a single
+    `{"role": "system", "content": block}` at position 0, so `separator` has no effect. Message dicts are
+    copied, so the caller's structures are not mutated. Under `"append"` and `"prepend"` every input shape
+    yields exactly one leading system message; `"insert"` yields two, which some chat templates (Qwen3)
+    reject.
+
+    The token path (`apply_to_ids`) prepends the block text to the token stream. There is no message
+    structure to merge with, so `mode` does not apply there.
+
+    Args:
+        positive_header: Header emitted above each positive example.
+        negative_header: Header emitted above each negative example.
+        mode: How the block combines with an existing leading system message (`"append"` (default),
+            `"prepend"`, or `"insert"`). Ignored when no leading system message is present.
+        separator: String inserted between the existing content and the block for `"append"` and
+            `"prepend"`. Empty string allowed.
+
+    Raises:
+        ValueError: If `mode` is not one of the supported values.
+        TypeError: If `separator` is not a `str`.
     """
 
     DEFAULT_POSITIVE_HEADER = "### Positive example (behavior to follow)"
@@ -23,9 +54,17 @@ class FewShotBlockFormatter(BaseFormatter):
         self,
         positive_header: str = DEFAULT_POSITIVE_HEADER,
         negative_header: str = DEFAULT_NEGATIVE_HEADER,
+        mode: str = "append",
+        separator: str = "\n\n",
     ) -> None:
+        if mode not in _MODES:
+            raise ValueError(f"FewShotBlockFormatter mode must be one of {sorted(_MODES)}; got {mode!r}.")
+        if not isinstance(separator, str):
+            raise TypeError(f"separator must be a str; got {type(separator).__name__}.")
         self.positive_header = positive_header
         self.negative_header = negative_header
+        self.mode = mode
+        self.separator = separator
 
     def _render_example(self, example: dict) -> str:
         header = (
@@ -61,8 +100,18 @@ class FewShotBlockFormatter(BaseFormatter):
         out: list[list[dict]] = []
         for chat in messages:
             chat = [dict(m) for m in chat]
-            insert_at = 1 if chat and chat[0].get("role") == "system" else 0
-            out.append(chat[:insert_at] + [{"role": "system", "content": block}] + chat[insert_at:])
+            if chat and chat[0].get("role") == "system":
+                if self.mode == "insert":
+                    chat.insert(1, {"role": "system", "content": block})
+                else:
+                    existing = chat[0].get("content", "")
+                    if self.mode == "prepend":
+                        chat[0]["content"] = block + self.separator + existing
+                    else:
+                        chat[0]["content"] = existing + self.separator + block
+            else:
+                chat.insert(0, {"role": "system", "content": block})
+            out.append(chat)
         return out
 
     def apply_to_ids(

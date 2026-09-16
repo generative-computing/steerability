@@ -488,3 +488,225 @@ def test_render_path_parity():
 
     assert message_text.index("Q1?") < message_text.index("Q2?")
     assert ids_text.index("Q1?") < ids_text.index("Q2?")
+
+
+# placement of the block relative to an existing leading system message
+
+ROW_SYSTEM_TEXT = "You are answering as a helpful reviewer."
+USER_QUESTION = "How was the movie?"
+
+
+def _steered_few_shot(model, tokenizer, **kwargs) -> FewShot:
+    fewshot = FewShot(
+        directive="follow examples",
+        positive_example_pool=POS_POOL,
+        k_positive=1,
+        **kwargs,
+    )
+    SteeringPipeline(controls=[fewshot], model=model, tokenizer=tokenizer).steer()
+    return fewshot
+
+
+@pytest.mark.parametrize("system_mode", ["append", "prepend", "insert"])
+def test_placement_with_existing_system_message(model_and_tokenizer, device: torch.device, system_mode: str):
+    """Each `system_mode` places the block relative to the row's own leading system message."""
+    base_model, tokenizer = model_and_tokenizer
+    model = base_model.to(device)
+
+    fewshot = _steered_few_shot(model, tokenizer, system_mode=system_mode)
+    messages = [[
+        {"role": "system", "content": ROW_SYSTEM_TEXT},
+        {"role": "user", "content": USER_QUESTION},
+    ]]
+    chat = fewshot.adapt_messages(messages)[0]
+
+    if system_mode == "insert":
+        assert [m["role"] for m in chat] == ["system", "system", "user"]
+        assert chat[0]["content"] == ROW_SYSTEM_TEXT
+        block = chat[1]["content"]
+    else:
+        assert [m["role"] for m in chat] == ["system", "user"]
+        merged = chat[0]["content"]
+        if system_mode == "append":
+            assert merged.startswith(ROW_SYSTEM_TEXT + "\n\n")
+            block = merged[len(ROW_SYSTEM_TEXT) + 2:]
+        else:
+            assert merged.endswith("\n\n" + ROW_SYSTEM_TEXT)
+            block = merged[: -(len(ROW_SYSTEM_TEXT) + 2)]
+
+    assert "follow examples" in block
+    assert FewShotBlockFormatter.DEFAULT_POSITIVE_HEADER in block
+    assert chat[-1] == {"role": "user", "content": USER_QUESTION}
+    # the caller's structures are untouched
+    assert messages[0][0]["content"] == ROW_SYSTEM_TEXT
+
+
+@pytest.mark.parametrize("separator", ["", " || "])
+@pytest.mark.parametrize("system_mode", ["append", "prepend"])
+def test_separator_honored(model_and_tokenizer, device: torch.device, system_mode: str, separator: str):
+    base_model, tokenizer = model_and_tokenizer
+    model = base_model.to(device)
+
+    fewshot = _steered_few_shot(model, tokenizer, system_mode=system_mode, separator=separator)
+    chat = fewshot.adapt_messages([[
+        {"role": "system", "content": ROW_SYSTEM_TEXT},
+        {"role": "user", "content": USER_QUESTION},
+    ]])[0]
+
+    merged = chat[0]["content"]
+    if system_mode == "append":
+        assert merged.startswith(ROW_SYSTEM_TEXT + separator)
+    else:
+        assert merged.endswith(separator + ROW_SYSTEM_TEXT)
+
+
+@pytest.mark.parametrize("separator", ["\n\n", "", " || "])
+@pytest.mark.parametrize("system_mode", ["append", "prepend", "insert"])
+def test_placement_without_system_message_is_mode_independent(
+    model_and_tokenizer, device: torch.device, system_mode: str, separator: str,
+):
+    """With no leading system message every mode and separator inserts one system message with the block."""
+    base_model, tokenizer = model_and_tokenizer
+    model = base_model.to(device)
+
+    fewshot = _steered_few_shot(model, tokenizer, system_mode=system_mode, separator=separator)
+    chat = fewshot.adapt_messages([[{"role": "user", "content": USER_QUESTION}]])[0]
+
+    assert [m["role"] for m in chat] == ["system", "user"]
+    assert "follow examples" in chat[0]["content"]
+    assert FewShotBlockFormatter.DEFAULT_POSITIVE_HEADER in chat[0]["content"]
+    assert chat[1] == {"role": "user", "content": USER_QUESTION}
+
+
+def test_invalid_system_mode_raises():
+    with pytest.raises(ValueError, match="system_mode must be one of"):
+        FewShot(directive="x", system_mode="nope")
+    with pytest.raises(ValueError, match="mode must be one of"):
+        FewShotBlockFormatter(mode="nope")
+
+
+def test_invalid_separator_raises():
+    with pytest.raises(TypeError, match="separator must be a str"):
+        FewShot(directive="x", separator=3)
+    with pytest.raises(TypeError, match="separator must be a str"):
+        FewShotBlockFormatter(separator=3)
+
+
+SYSTEM_FIRST_ONLY_TEMPLATE = (
+    "{% for message in messages %}"
+    "{% if message['role'] == 'system' and not loop.first %}"
+    "{{ raise_exception('System message must be at the beginning.') }}"
+    "{% endif %}"
+    "{{ message['role'] }}: {{ message['content'] }}\n"
+    "{% endfor %}"
+    "{% if add_generation_prompt %}assistant: {% endif %}"
+)
+
+
+@pytest.mark.parametrize(
+    "control_kwargs, expect_error",
+    [({}, False), ({"system_mode": "insert"}, True)],
+)
+def test_template_rejecting_second_system_message(
+    model_and_tokenizer, device: torch.device, control_kwargs: dict, expect_error: bool,
+):
+    """A template that allows a system message only in first position accepts the default placement."""
+    base_model, tokenizer = model_and_tokenizer
+    model = base_model.to(device)
+
+    fewshot = FewShot(
+        directive="follow examples",
+        positive_example_pool=POS_POOL,
+        k_positive=1,
+        **control_kwargs,
+    )
+    pipeline = SteeringPipeline(controls=[fewshot], model=model, tokenizer=tokenizer)
+    pipeline.steer()
+
+    messages = [
+        {"role": "system", "content": ROW_SYSTEM_TEXT},
+        {"role": "user", "content": USER_QUESTION},
+    ]
+
+    original_template = tokenizer.chat_template
+    tokenizer.chat_template = SYSTEM_FIRST_ONLY_TEMPLATE
+    try:
+        if expect_error:
+            with pytest.raises(Exception, match="System message must be at the beginning"):
+                pipeline.generate(messages=messages, max_new_tokens=2)
+        else:
+            assert pipeline.generate(messages=messages, max_new_tokens=2) is not None
+    finally:
+        tokenizer.chat_template = original_template
+
+
+def test_spipe_round_trip_preserves_placement(tmp_path):
+    """`system_mode` and `separator` are recipe fields, so a model-free frozen bundle retains them."""
+    from steerability.spipe import SPipe
+
+    tiny_model = "hf-internal-testing/tiny-random-LlamaForCausalLM"
+    # a single-example pool makes the selection deterministic, so the comparison isolates placement
+    kwargs = dict(
+        directive="follow examples",
+        positive_example_pool=POS_POOL[:1],
+        k_positive=1,
+        selector="random",
+        system_mode="prepend",
+        separator=" | ",
+    )
+    original = FewShot(**kwargs)
+    spipe = SteeringPipeline(model_name_or_path=tiny_model, controls=[original]).to_spipe(freeze=True)
+    assert spipe.is_frozen
+    assert spipe.manifest["controls"][0]["args"]["system_mode"] == "prepend"
+    assert spipe.manifest["controls"][0]["args"]["separator"] == " | "
+
+    loaded = SPipe.load(spipe.save(tmp_path / "few_shot.spipe")).pipeline()
+    reloaded = loaded.input_controls[0]
+    assert reloaded.system_mode == "prepend"
+    assert reloaded.separator == " | "
+
+    messages = [[
+        {"role": "system", "content": ROW_SYSTEM_TEXT},
+        {"role": "user", "content": USER_QUESTION},
+    ]]
+    original.steer()
+    expected = original.adapt_messages(messages)
+    reloaded.steer()
+    assert reloaded.adapt_messages(messages) == expected
+    # placement is prepend with the custom separator
+    assert expected[0][0]["content"].endswith(" | " + ROW_SYSTEM_TEXT)
+
+
+def test_formatter_instance_wins_over_system_mode(model_and_tokenizer, device: torch.device):
+    """An explicit formatter owns its placement; `system_mode` is not consulted."""
+    base_model, tokenizer = model_and_tokenizer
+    model = base_model.to(device)
+
+    fewshot = FewShot(
+        directive="follow examples",
+        positive_example_pool=POS_POOL,
+        k_positive=1,
+        formatter=FewShotBlockFormatter(mode="insert"),
+        system_mode="append",
+    )
+    SteeringPipeline(controls=[fewshot], model=model, tokenizer=tokenizer).steer()
+
+    chat = fewshot.adapt_messages([[
+        {"role": "system", "content": ROW_SYSTEM_TEXT},
+        {"role": "user", "content": USER_QUESTION},
+    ]])[0]
+    assert [m["role"] for m in chat] == ["system", "system", "user"]
+    assert chat[0]["content"] == ROW_SYSTEM_TEXT
+
+
+def test_system_mode_changes_config_identity():
+    """Two configurations differing only in `system_mode` get distinct config identities."""
+    tiny_model = "hf-internal-testing/tiny-random-LlamaForCausalLM"
+    kwargs = dict(directive="follow examples", positive_example_pool=POS_POOL, k_positive=1)
+
+    def config_id(system_mode: str) -> str:
+        control = FewShot(system_mode=system_mode, **kwargs)
+        pipeline = SteeringPipeline(model_name_or_path=tiny_model, controls=[control])
+        return pipeline.to_spipe(freeze=False).config_id
+
+    assert config_id("append") != config_id("insert")

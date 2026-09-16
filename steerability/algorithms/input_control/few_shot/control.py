@@ -32,9 +32,13 @@ class FewShot(InputControl):
     2. **Runtime injection**: Accepts examples directly at inference time through runtime_kwargs, enabling
         context-specific demonstrations without predefined pools. Useful for dynamic or user-provided examples.
 
-    The selected examples are formatted into a system prompt with clear positive/negative labels and prepended to the
-    user query using the model's chat template, allowing the model to learn the desired behavior pattern from the
-    demonstrations.
+    The selected examples are rendered as a single block with positive/negative labels. On chat input the block is
+    combined with the leading system message according to `system_mode`: `"append"` places it after the existing
+    content, `"prepend"` before it, and `"insert"` adds it as a separate second system message. Under `"append"` and
+    `"prepend"` every chat input yields exactly one leading system message. Under `"insert"` a chat that already has
+    a leading system message yields two, which some chat templates (Qwen3) reject. When the chat has no leading
+    system message, all three modes insert one containing the block. On raw token input the block text is prepended
+    to the stream and `system_mode` does not apply.
 
     Runtime keyword arguments:
 
@@ -49,6 +53,15 @@ class FewShot(InputControl):
     - If no examples are provided, the original input is returned unchanged
     - Keys with a leading underscore in example dicts are reserved by the framework (e.g. `_polarity`);
         user fields should not start with `_`.
+
+    Args:
+        system_mode: How the rendered block combines with an existing leading system message on chat input
+            (`"append"` (default), `"prepend"`, or `"insert"`). Ignored when the chat has no leading system
+            message.
+        separator: String inserted between the existing system content and the block for `"append"` and
+            `"prepend"`. Empty string allowed.
+        formatter: Formatter that renders the block. When given, the instance owns its placement and
+            `system_mode` and `separator` are not consulted.
     """
 
     Args = FewShotArgs
@@ -77,6 +90,8 @@ class FewShot(InputControl):
     negative_example_pool: Sequence[dict] | None = None
     k_positive: int | None = None
     k_negative: int | None = None
+    system_mode: str = "append"
+    separator: str = "\n\n"
     selector: Any = None  # str | BaseSelector | None — resolved in steer()
     formatter: Any = None  # BaseFormatter | None — resolved in steer()
 
@@ -109,7 +124,7 @@ class FewShot(InputControl):
             prepare(model=model, tokenizer=tokenizer, data=self.pool)
 
         # formatter is shared between adapt and adapt_messages
-        self._formatter = self.formatter or FewShotBlockFormatter()
+        self._formatter = self.formatter or FewShotBlockFormatter(mode=self.system_mode, separator=self.separator)
 
     def adapt(
         self,
@@ -261,7 +276,11 @@ class FewShot(InputControl):
         messages: list[list[dict]],
         runtime_kwargs: dict | None = None,
     ) -> list[list[dict]] | None:
-        """Insert a single system message containing the directive and labeled example blocks.
+        """Merge the directive and labeled example blocks into the leading system message of each chat.
+
+        Placement follows `system_mode`. Under `"append"` and `"prepend"` each chat ends up with exactly one
+        leading system message, while `"insert"` adds a separate second one. A chat with no leading system
+        message gains one containing the block.
 
         Runtime examples (`positive_examples` / `negative_examples` in `runtime_kwargs`) take precedence
         over pool-based selection. If there are no examples and no directive, returns None (no change).

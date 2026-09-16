@@ -455,7 +455,7 @@ class TestFewShotBlockFormatter:
         assert out[0][-1]["content"] == "3+3?"
 
     def test_preserves_existing_system_message(self):
-        f = FewShotBlockFormatter()
+        f = FewShotBlockFormatter(mode="insert")
         memory = TextMemory(slots={"examples": [{"input": "a", "output": "b"}]})
         out = f.apply_to_messages(
             [[{"role": "system", "content": "be brief"}, {"role": "user", "content": "?"}]],
