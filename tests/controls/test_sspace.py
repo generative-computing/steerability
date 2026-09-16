@@ -118,6 +118,38 @@ def test_cached_hook_preserves_small_basis_scales_under_autocast(dtype, device):
             torch.testing.assert_close(actual, expected)
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
+def test_cached_hook_reuses_constants_and_tracks_application_settings(dtype, device):
+    """Only token-dependent norms remain after preparing a hook. Authored by PI/Astra."""
+    artifact = {"u": torch.tensor([[0.6, -0.8], [0.8, 0.6]]),
+                "sqrt_s": torch.tensor([1e-8, 2.]), "bias": torch.tensor([0.2, -0.3]),
+                "directions": torch.tensor([[2., 0.], [0., 3.], [0., 0.]])}
+    model = torch.nn.Module()
+    model.linear = torch.nn.Linear(2, 2)
+    control = SSpace(artifacts={"linear": artifact})
+    control.steer(model)
+    hook = control.get_hooks(torch.ones(1, 1, dtype=torch.long))["forward"][0]["hook_func"]
+    output = torch.tensor([[[0., 1.], [2., -1.]]], dtype=dtype, device=device)
+    for gate in ("off", "cosine", "signed", "off"):
+        control.gate = gate
+        for strength in (0.7, -0.5, 0., 0.7):
+            control.strength = strength
+            expected = apply_sspace(output, artifact, strength, gate)
+            with torch.autocast(device.type, dtype=torch.bfloat16):
+                for _ in range(2):
+                    actual = hook(model.linear, (), {}, output)
+                    torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+                    if strength == 0:
+                        assert actual is output
+        with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU]) as profile:
+            hook(model.linear, (), {}, output)
+        operations = {event.key: event.count for event in profile.key_averages()}
+        assert operations.get("aten::linalg_vector_norm", 0) == (0 if gate == "off" else 1)
+        assert "aten::sum" not in operations
+        if gate == "off":
+            assert "aten::mm" not in operations
+
+
 def test_control_generates_and_frozen_fit_rejects_changed_rank(tmp_path):
     torch.manual_seed(0)
     model = tiny_llama(hidden=HIDDEN, heads=4)

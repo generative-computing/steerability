@@ -28,6 +28,30 @@ def test_dense_covariance_formula(shape, rank):
     assert actual.norm() > 0
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
+def test_cached_offset_tracks_strength_without_tokenwise_scaling(dtype, device):
+    """Check cached scaling through the production hook. Authored by PI/Astra."""
+    model = torch.nn.Module()
+    model.linear = torch.nn.Linear(3, 3)
+    control = CordaPCA(directions={"linear": torch.tensor([0.1, -0.3, 0.7])})
+    control.steer(model)
+    hook = control.get_hooks(torch.ones(1, 1, dtype=torch.long))["forward"][0]["hook_func"]
+    output = torch.tensor([[[0.2, -1., 2.]]], dtype=dtype, device=device)
+    for strength in (0.7, -0.5, 0., 0.7):
+        control.strength = strength
+        expected = output + strength * control.fitted_directions["linear"].to(output)
+        for _ in range(2):
+            actual = hook(model.linear, (), {}, output)
+            torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+            if strength == 0:
+                assert actual is output
+    with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU]) as profile:
+        hook(model.linear, (), {}, output)
+    operations = {event.key for event in profile.key_averages()}
+    assert "aten::add" in operations
+    assert "aten::mul" not in operations
+
+
 @pytest.mark.parametrize("negative", [
     torch.tensor([[-2., 0., 1.], [0., 1., -1.], [2., -1., 0.]]),
     torch.eye(3),

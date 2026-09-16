@@ -92,10 +92,10 @@ class CordaPCA(HookControl):
             def hook(module, inputs, kwargs, output, direction=direction, runtime=runtime):
                 if self.strength == 0:
                     return output
-                key = (output.device, output.dtype)
+                key = (output.device, output.dtype, self.strength)
                 if key not in runtime:
-                    runtime[key] = direction.to(output)
-                return output + self.strength * runtime[key]
+                    runtime[key] = self.strength * direction.to(output)
+                return output + runtime[key]
 
             hooks.append({"module": name, "hook_func": hook})
         return {"pre": [], "forward": hooks, "backward": []}

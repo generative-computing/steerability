@@ -1,4 +1,6 @@
 """Weight-SVD S-space steering."""
+from collections.abc import Callable
+
 import torch
 
 from steerability.algorithms.core.execution.access import ModelAccess
@@ -33,6 +35,35 @@ def fit_sspace(
             "bias": b.clone(), "directions": direction.unsqueeze(0).contiguous()}
 
 
+def _prepare_sspace_transform(
+    artifact: dict[str, torch.Tensor], strength: float, gate: str,
+) -> Callable[[torch.Tensor], torch.Tensor]:
+    """Prepare token-independent arithmetic on runtime tensors. Authored by PI/Astra."""
+    u, sqrt_s, directions, bias = (artifact[k] for k in ("u", "sqrt_s", "directions", "bias"))
+    with torch.autocast(u.device.type, enabled=False):
+        if gate == "off":
+            offset = strength * (directions.sum(0) * sqrt_s) @ u.T
+        elif gate in ("cosine", "signed"):
+            amplitudes = directions.norm(dim=-1)
+            unit = directions / (amplitudes.unsqueeze(-1) + 1e-8)
+        else:
+            raise ValueError("gate must be cosine, signed, or off")
+
+    def apply(output: torch.Tensor) -> torch.Tensor:
+        with torch.autocast(output.device.type, enabled=False):
+            values = output.to(u.dtype)
+            if gate == "off":
+                return (values + offset).to(output.dtype)
+            projected = ((values - bias) @ u) / sqrt_s
+            projected = projected / (projected.norm(dim=-1, keepdim=True) + 1e-8)
+            cosine = projected @ unit.T
+            engagement = cosine.abs() if gate == "cosine" else cosine
+            delta = (engagement * amplitudes) @ unit
+            return (values + strength * (delta * sqrt_s) @ u.T).to(output.dtype)
+
+    return apply
+
+
 def apply_sspace(
     output: torch.Tensor, artifact: dict[str, torch.Tensor], strength: float = 1.0, gate: str = "cosine",
 ) -> torch.Tensor:
@@ -40,24 +71,8 @@ def apply_sspace(
     if strength == 0:
         return output
     dtype = torch.float32 if output.dtype in (torch.float16, torch.bfloat16) else output.dtype
-    with torch.autocast(output.device.type, enabled=False):
-        values = output.to(dtype)
-        u = artifact["u"].to(values)
-        sqrt_s = artifact["sqrt_s"].to(values)
-        directions = artifact["directions"].to(values)
-        if gate == "off":
-            delta = directions.sum(0)
-        elif gate in ("cosine", "signed"):
-            projected = ((values - artifact["bias"].to(values)) @ u) / sqrt_s
-            projected = projected / (projected.norm(dim=-1, keepdim=True) + 1e-8)
-            amplitudes = directions.norm(dim=-1)
-            unit = directions / (amplitudes.unsqueeze(-1) + 1e-8)
-            cosine = projected @ unit.T
-            engagement = cosine.abs() if gate == "cosine" else cosine
-            delta = (engagement * amplitudes) @ unit
-        else:
-            raise ValueError("gate must be cosine, signed, or off")
-        return (values + strength * (delta * sqrt_s) @ u.T).to(output.dtype)
+    runtime = {k: v.to(device=output.device, dtype=dtype) for k, v in artifact.items()}
+    return _prepare_sspace_transform(runtime, strength, gate)(output)
 
 
 class SSpace(HookControl):
@@ -114,10 +129,11 @@ class SSpace(HookControl):
                 if self.strength == 0:
                     return output
                 dtype = torch.float32 if output.dtype in (torch.float16, torch.bfloat16) else output.dtype
-                key = (output.device, dtype)
+                key = (output.device, dtype, self.strength, self.gate)
                 if key not in runtime:
-                    runtime[key] = {k: v.to(device=output.device, dtype=dtype) for k, v in artifact.items()}
-                return apply_sspace(output, runtime[key], self.strength, self.gate)
+                    tensors = {k: v.to(device=output.device, dtype=dtype) for k, v in artifact.items()}
+                    runtime[key] = _prepare_sspace_transform(tensors, self.strength, self.gate)
+                return runtime[key](output)
 
             hooks.append({"module": name, "hook_func": hook})
         return {"pre": [], "forward": hooks, "backward": []}
