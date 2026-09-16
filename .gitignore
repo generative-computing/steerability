@@ -12,6 +12,7 @@
 .cache
 
 # environments
+.local/
 .env
 .venv/
 .venv**/

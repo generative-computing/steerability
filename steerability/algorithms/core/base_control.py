@@ -127,6 +127,14 @@ class BaseControl(ABC):
         """
         return {}
 
+    def export_state_classes(self) -> dict[str, str]:
+        """Artifact class overrides for exported state, keyed by state name.
+
+        Most values infer their class from their Python type. Controls exporting raw tensors
+        from a calibrated fit override this mapping so frozen bundles retain the fit digest.
+        """
+        return {}
+
     def frozen_form(self, state: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         """The `(registry method key, constructor kwargs)` of this control's frozen form.
 
