@@ -22,7 +22,7 @@ def test_dense_covariance_formula(shape, rank):
     z = (pos - neg) @ torch.linalg.solve(covariance, vh[:r].T) * s[:r].sqrt()
     _, _, pc = torch.linalg.svd(z - z.mean(0), full_matrices=False)
     v = pc[0] * torch.sign(z.mean(0) @ pc[0] + 1e-8)
-    expected = (v / (v.norm() + 1e-8) * s[:r].sqrt()) @ u[:, :r].T
+    expected = (v * s[:r].sqrt()) @ u[:, :r].T
     actual = fit_corda_direction(w, pos, neg, rank, 0.07)
     torch.testing.assert_close(actual, expected, atol=2e-4, rtol=2e-4)
     assert actual.norm() > 0

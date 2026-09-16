@@ -552,6 +552,12 @@ class SPipe:
                     if verify != "strict" and item["method"] == "structural_control/load_lora":
                         args["allow_base_mismatch"] = True
                     control = self._instantiate(item["method"], args, ctx)
+                    # raw tensors have no source wrapper to check provenance at bind. -- PI/Astra
+                    control._spipe_tensor_records = tuple(
+                        ArtifactRecord.from_mapping(record) for record in item.get("artifacts", {}).values()
+                        if record["type"] == "Tensor" and record["artifact_class"] in ("direction", "calibrated")
+                    )
+                    control._spipe_verify = verify
                     control.enabled = entry["enabled"]
                     controls.append(control)
             else:

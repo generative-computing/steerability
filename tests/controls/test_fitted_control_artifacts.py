@@ -1,9 +1,12 @@
 """Fit provenance and runtime tensor reuse for the three ports. Authored by PI/Astra."""
+import copy
 import json
+import warnings
 
 import pytest
 import torch
 
+from steerability.algorithms.core.internals.fingerprint import model_fingerprint
 from steerability.algorithms.core.steering_pipeline import SteeringPipeline
 from steerability.algorithms.state_control.corda_pca.control import CordaPCA
 from steerability.algorithms.state_control.linear_act.control import LinearAcT
@@ -52,7 +55,10 @@ def test_every_fitted_artifact_has_provenance_and_reload_preserves_scores(fitted
     assert all(record["source"] == control.steer_fits()[0][0] for record in records.values())
     rebuilt = loaded.pipeline()
     rebuilt.model, rebuilt.tokenizer = pipeline.model, pipeline.tokenizer
-    rebuilt.steer()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        rebuilt.steer()
+    assert not caught
     torch.testing.assert_close(rebuilt.compute_logprobs(query, ref_output_ids=answer), expected)
 
     second_save = rebuilt.to_spipe(model_ref="tiny-llama").save(tmp_path / "precomputed")
@@ -67,9 +73,96 @@ def test_every_fitted_artifact_has_provenance_and_reload_preserves_scores(fitted
     if isinstance(control, (CordaPCA, SSpace)):
         entry["args"]["rank"] = 3
     if isinstance(control, CordaPCA):
-        entry["args"].update(damping=0.5, normalize=False)
+        entry["args"]["damping"] = 0.5
     manifest_path.write_text(json.dumps(manifest))
     SPipe.load(second_save)
+
+
+@pytest.mark.parametrize("policy", ["strict", "warn", "off"])
+def test_frozen_tensors_check_changed_weights_before_installing(fitted_pipeline, tmp_path, policy):
+    saved = fitted_pipeline.to_spipe(model_ref="tiny-llama").save(tmp_path / "fitted")
+    other_model = copy.deepcopy(fitted_pipeline.model)
+    with torch.no_grad():
+        next(other_model.parameters()).add_(0.01)
+    assert model_fingerprint(other_model) != model_fingerprint(fitted_pipeline.model)
+    rebuilt = SPipe.load(saved).pipeline(
+        model=other_model, tokenizer=fitted_pipeline.tokenizer, verify=policy,
+    )
+    control = rebuilt.state_controls[0]
+    if policy == "strict" and not isinstance(control, CordaPCA):
+        with pytest.raises(ValueError, match="Precomputed calibrated artifact.*different model"):
+            rebuilt.steer()
+        assert not rebuilt._is_steered
+        if isinstance(control, SSpace):
+            assert not hasattr(control, "fitted")
+        else:
+            assert not control.interventions
+    elif policy == "off":
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            rebuilt.steer()
+        assert not caught
+    else:
+        with pytest.warns(UserWarning, match="Precomputed .* artifact.*different model"):
+            rebuilt.steer()
+
+
+@pytest.mark.parametrize("policy", ["strict", "warn", "off"])
+@pytest.mark.parametrize("provenance", ["missing", "null"])
+def test_frozen_tensors_allow_unrecorded_identity(fitted_pipeline, tmp_path, policy, provenance):
+    saved = fitted_pipeline.to_spipe(model_ref="tiny-llama").save(tmp_path / "fitted")
+    manifest_path = saved / "spipe.json"
+    manifest = json.loads(manifest_path.read_text())
+    for record in manifest["controls"][0]["resolved"]["artifacts"].values():
+        if provenance == "missing":
+            del record["provenance"]
+        else:
+            record["provenance"] = None
+    manifest_path.write_text(json.dumps(manifest))
+    rebuilt = SPipe.load(saved).pipeline(
+        model=fitted_pipeline.model, tokenizer=fitted_pipeline.tokenizer, verify=policy,
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        rebuilt.steer()
+    assert not caught
+    assert all(not record.provenance for record in rebuilt.state_controls[0]._spipe_tensor_records)
+
+
+@pytest.mark.parametrize("fitted_pipeline", [CordaPCA, SSpace], indirect=True)
+@pytest.mark.parametrize("changed_weights", [False, True])
+def test_frozen_hook_control_checks_model_with_explicit_none_session(fitted_pipeline, tmp_path, changed_weights):
+    saved = fitted_pipeline.to_spipe(model_ref="tiny-llama").save(tmp_path / "fitted")
+    other_model = copy.deepcopy(fitted_pipeline.model)
+    if changed_weights:
+        with torch.no_grad():
+            next(other_model.parameters()).add_(0.01)
+    rebuilt = SPipe.load(saved).pipeline(model=other_model, tokenizer=fitted_pipeline.tokenizer)
+    if changed_weights and isinstance(rebuilt.state_controls[0], SSpace):
+        with pytest.raises(ValueError, match="Precomputed calibrated artifact.*different model"):
+            rebuilt.steer(session=None)
+    elif changed_weights:
+        with pytest.warns(UserWarning, match="Precomputed direction artifact.*different model"):
+            rebuilt.steer(session=None)
+    else:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            rebuilt.steer(session=None)
+        assert not caught
+
+
+def test_recipe_refit_does_not_check_discarded_frozen_weights(fitted_pipeline, tmp_path):
+    saved = fitted_pipeline.to_spipe(model_ref="tiny-llama").save(tmp_path / "fitted")
+    other_model = copy.deepcopy(fitted_pipeline.model)
+    with torch.no_grad():
+        next(other_model.parameters()).add_(0.01)
+    rebuilt = SPipe.load(saved).pipeline(
+        model=other_model, tokenizer=fitted_pipeline.tokenizer, prefer="recipe",
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        rebuilt.steer()
+    assert not caught
 
 
 def test_changed_fit_recipe_is_stale(fitted_pipeline, tmp_path):

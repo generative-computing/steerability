@@ -9,7 +9,7 @@ from .args import CordaPCAArgs
 
 def fit_corda_direction(
     weight: torch.Tensor, positive: torch.Tensor, negative: torch.Tensor,
-    rank: int = -1, damping: float = 0.01, normalize: bool = True,
+    rank: int = -1, damping: float = 0.01,
 ) -> torch.Tensor:
     """Return an output-space offset from paired `[N, in_features]` inputs."""
     weight = weight.detach().float().cpu()
@@ -39,8 +39,6 @@ def fit_corda_direction(
         raise ValueError("CorDA centered paired differences need numerically nonzero variance")
     direction = pcs[0]
     direction = direction * torch.sign(differences.mean(0) @ direction + 1e-8)
-    if normalize:
-        direction = direction / (direction.norm() + 1e-8)
     return ((direction * sqrt_s) @ u.T).contiguous()
 
 
@@ -78,7 +76,7 @@ class CordaPCA(HookControl):
             if self.directions is None:
                 direction = fit_corda_direction(
                     module.weight, self.positive_inputs[name], self.negative_inputs[name],
-                    self.rank, self.damping, self.normalize,
+                    self.rank, self.damping,
                 )
             else:
                 direction = self.directions[name].detach().cpu().clone()
@@ -117,4 +115,4 @@ class CordaPCA(HookControl):
     def fit_identity(self) -> tuple | None:
         if self.directions is not None:
             return None
-        return (self.positive_inputs, self.negative_inputs, self.rank, self.damping, self.normalize)
+        return (self.positive_inputs, self.negative_inputs, self.rank, self.damping)

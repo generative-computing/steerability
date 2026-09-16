@@ -16,7 +16,6 @@ class CordaPCAArgs(BaseArgs):
         directions: Frozen output offsets, supplied instead of calibration inputs.
         rank: Leading singular modes to retain; -1 keeps all modes.
         damping: Multiplier of the calibration mean square for covariance damping.
-        normalize: Normalize the PCA vector before reconstruction, not the output offset.
         strength: Multiplier of the output offset; zero disables the edit.
     """
 
@@ -25,7 +24,6 @@ class CordaPCAArgs(BaseArgs):
     directions: dict[str, torch.Tensor] | None = None
     rank: int = -1
     damping: float = 0.01
-    normalize: bool = True
     strength: float = 1.0
 
     def __post_init__(self) -> None:

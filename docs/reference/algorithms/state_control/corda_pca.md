@@ -15,8 +15,8 @@ the mean difference and mapped back to an output-space steering vector.
 Inference adds `strength * direction` to each token's module output. Model weights
 stay fixed, and only the resulting vector is needed at inference; the decomposition
 is not retained. Supplying `directions` reuses fitted output vectors without fitting
-again. `normalize` applies before reconstruction, so the output vector need not have
-unit norm.
+again. The PCA vector has unit norm before reconstruction; the output vector need
+not have unit norm.
 
 <!-- Authored by PI/Astra. -->
 

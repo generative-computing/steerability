@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import warnings
 from typing import TYPE_CHECKING
 
 import torch
@@ -50,6 +51,24 @@ def model_fingerprint(model: PreTrainedModel) -> str:
             digest.update(sample.numpy().tobytes())
 
     return digest.hexdigest()[:16]
+
+
+def verify_model_fingerprint(
+    recorded: str | None, live: str | None, *, artifact_class: str, policy: str,
+) -> None:
+    """Apply the frozen-artifact weight mismatch policy. Authored by PI/Astra."""
+    if policy == "off" or not recorded or not live or recorded == live:
+        return
+    message = (
+        f"Precomputed {artifact_class} artifact was produced on a different "
+        f"model (fingerprint {recorded!r} vs {live!r})."
+        + ("" if artifact_class == "calibrated"
+           else " Direction artifacts may transfer across fine-tunes of one "
+                "architecture; verify the behavior.")
+    )
+    if artifact_class == "calibrated" and policy == "strict":
+        raise ValueError(message)
+    warnings.warn(message, UserWarning, stacklevel=2)
 
 
 def session_artifact_identity(session: SteeringSession | None) -> tuple[str, dict]:
