@@ -54,8 +54,7 @@ vllm = [
     "vllm>=0.26.0,<1.0.0",
     # keeps the resolved vLLM inside trl's supported range
     "trl[vllm]",
-    # "vllm-hook-plugins @ git+https://github.com/IBM/vLLM-Hook.git@steerability-challenge#subdirectory=vllm_hook_plugins",
-    "vllm-hook-plugins @ git+https://github.com/emiehling/vLLM-Hook.git@steerability-interface#subdirectory=vllm_hook_plugins",
+    "vllm-hook-plugins @ git+https://github.com/IBM/vLLM-Hook.git@steerability-challenge#subdirectory=vllm_hook_plugins",
 ]
 eval = [
     "inspect-ai>=0.3.262,<0.4.0",
@@ -79,9 +78,7 @@ all = [
 dev = [
     "pytest>=8.3.2,<9.0.0",
     "pre-commit>=4.3.0",
-    # the plugin core (pure Python, no vLLM), for the spec-lowering tests on CPU
-    # "vllm-hook-plugins @ git+https://github.com/IBM/vLLM-Hook.git@steerability-challenge#subdirectory=vllm_hook_plugins",
-    "vllm-hook-plugins @ git+https://github.com/emiehling/vLLM-Hook.git@steerability-interface#subdirectory=vllm_hook_plugins",
+    "vllm-hook-plugins @ git+https://github.com/IBM/vLLM-Hook.git@steerability-challenge#subdirectory=vllm_hook_plugins",
     { include-group = "notebooks" },
 ]
 notebooks = [

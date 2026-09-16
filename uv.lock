@@ -7134,7 +7134,7 @@ wheels = [
 
 [[package]]
 name = "steerability"
-version = "0.5.0"
+version = "0.5.1"
 source = { editable = "." }
 dependencies = [
     { name = "accelerate" },
@@ -7229,7 +7229,7 @@ requires-dist = [
     { name = "trl", specifier = ">=1.0.0,<2.0.0" },
     { name = "trl", extras = ["vllm"], marker = "extra == 'vllm'" },
     { name = "vllm", marker = "extra == 'vllm'", specifier = ">=0.26.0,<1.0.0" },
-    { name = "vllm-hook-plugins", marker = "extra == 'vllm'", git = "https://github.com/emiehling/vLLM-Hook.git?subdirectory=vllm_hook_plugins&rev=steerability-interface" },
+    { name = "vllm-hook-plugins", marker = "extra == 'vllm'", git = "https://github.com/IBM/vLLM-Hook.git?subdirectory=vllm_hook_plugins&rev=steerability-challenge" },
     { name = "xgrammar", specifier = ">=0.1.19" },
 ]
 provides-extras = ["vllm", "eval", "merging", "all"]
@@ -7244,7 +7244,7 @@ dev = [
     { name = "pre-commit", specifier = ">=4.3.0" },
     { name = "pytest", specifier = ">=8.3.2,<9.0.0" },
     { name = "textstat", specifier = ">=0.7.0" },
-    { name = "vllm-hook-plugins", git = "https://github.com/emiehling/vLLM-Hook.git?subdirectory=vllm_hook_plugins&rev=steerability-interface" },
+    { name = "vllm-hook-plugins", git = "https://github.com/IBM/vLLM-Hook.git?subdirectory=vllm_hook_plugins&rev=steerability-challenge" },
 ]
 docs = [
     { name = "griffe-inherited-docstrings" },
@@ -8105,7 +8105,7 @@ wheels = [
 [[package]]
 name = "vllm-hook-plugins"
 version = "0.4.0"
-source = { git = "https://github.com/emiehling/vLLM-Hook.git?subdirectory=vllm_hook_plugins&rev=steerability-interface#092cd4ad0658bd788bd8903e36e9d98bee5660c5" }
+source = { git = "https://github.com/IBM/vLLM-Hook.git?subdirectory=vllm_hook_plugins&rev=steerability-challenge#825440323db1cd18af2da9b89b150fde2bc60cfe" }
 dependencies = [
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-12-steerability-vllm') or (extra == 'extra-12-steerability-all' and extra == 'extra-12-steerability-merging') or (extra == 'extra-12-steerability-eval' and extra == 'extra-12-steerability-merging') or (extra == 'extra-12-steerability-merging' and extra == 'extra-12-steerability-vllm')" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.13' and extra == 'extra-12-steerability-vllm') or (extra == 'extra-12-steerability-merging' and extra == 'extra-12-steerability-vllm') or (extra == 'extra-12-steerability-all' and extra == 'extra-12-steerability-merging') or (extra == 'extra-12-steerability-eval' and extra == 'extra-12-steerability-merging')" },

@@ -34,9 +34,9 @@ every extra that can share one environment.
 
 ## Contributing
 
-We welcome contributions, particularly in the form of new steering methods (controls) and evaluation tasks, along with bug reports,
-documentation improvements, and new features. See the [contribution guidelines](CONTRIBUTING.md) and the tutorial on
-[adding a steering method](./docs/tutorials/add_new_steering_method.md).
+We welcome contributions of [new steering methods](./docs/tutorials/add_new_steering_method.md) or novel combinations of methods into
+[steering pipelines](docs/concepts/steering_pipelines.md). See our [contribution guidelines](CONTRIBUTING.md) for some general info on
+contributing.
 
 ## Reference
 

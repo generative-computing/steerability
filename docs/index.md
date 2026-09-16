@@ -30,11 +30,11 @@ given \( x \), control for each category is exerted as follows.
 
 - **State control:** \( y \sim p_{\theta}^a(x) \)
     - Methods that modify the model's internal states (e.g., activations, attentions) at inference time.
-    - Facilitated through hooks that are inserted into the model to manipulate internal variables during the forward pass.
+    - Facilitated through interventions that manipulate internal variables during the forward pass.
 
 - **Output control:** \( y \sim d(p_\theta)(x) \)
-    - Methods that modify model outputs or constrain/transform what leaves the decoder.
-    - Facilitated through decoding-time algorithms/filters that override the `generate` method.
+    - Methods that modify the decoding process, leaving the base distribution \( p_\theta \) intact.
+    - Facilitated through logits processors and stopping criteria applied at each step, or a driver that implements the decode loop.
 
 </div>
 
