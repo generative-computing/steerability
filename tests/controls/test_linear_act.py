@@ -79,6 +79,31 @@ def test_supplied_affine_is_cloned_at_steer_time():
     assert torch.isfinite(control.interventions[0].transform.affine[0]).all()
 
 
+def test_precomputed_affine_freezes_without_loading_or_steering_model(tmp_path):
+    """An unbound precomputed control is already a complete recipe. Authored by PI/Astra."""
+    affine = {0: torch.stack((torch.full((HIDDEN,), 1.5), torch.full((HIDDEN,), 0.2)))}
+    control = LinearAcT(affine=affine, strength=0.4)
+    pipeline = SteeringPipeline(model_name_or_path="tiny-llama", controls=[control])
+    saved = pipeline.to_spipe(freeze=True).save(tmp_path / "precomputed.spipe")
+    assert pipeline.model is None
+    assert not pipeline._is_steered
+    assert control.export_state() == {}
+    loaded = SPipe.load(saved)
+    assert loaded.manifest["controls"][0]["resolved"] is None
+    assert loaded.manifest["lock"]["model_fingerprint"] is None
+    model, tokenizer = tiny_llama(hidden=HIDDEN, heads=4), wordlevel_tokenizer()
+    rebuilt = loaded.pipeline(model=model, tokenizer=tokenizer)
+    rebuilt.steer()
+    torch.testing.assert_close(rebuilt.state_controls[0].export_state()["0"], affine[0])
+    pipeline.model, pipeline.tokenizer = model, tokenizer
+    pipeline.steer()
+    query, answer = torch.tensor([[1, 2, 3]]), torch.tensor([[4, 5]])
+    torch.testing.assert_close(
+        rebuilt.compute_logprobs(query, ref_output_ids=answer),
+        pipeline.compute_logprobs(query, ref_output_ids=answer),
+    )
+
+
 def test_frozen_calibrated_affine_records_fit_digest():
     torch.manual_seed(0)
     control = LinearAcT(

@@ -106,6 +106,8 @@ class LinearAcT(InterventionControl):
         return () if self.affine is not None else (("linear_act", "calibrated"),)
 
     def export_state(self) -> dict[str, torch.Tensor]:
+        if not self.interventions:
+            return {}
         return {str(lid): value for lid, value in self.interventions[0].transform.affine.items()}
 
     def export_state_classes(self) -> dict[str, str]:
