@@ -241,6 +241,15 @@ def test_invalid_layer_order_and_zero_direction_fail_clearly():
         _source().resolve(model, tokenizer)
 
 
+def test_autograd_error_keeps_the_original_diagnostic(monkeypatch):
+    def out_of_memory(*_args, **_kwargs):
+        raise RuntimeError("CUDA out of memory while allocating a gradient buffer")
+
+    monkeypatch.setattr(torch.autograd, "grad", out_of_memory)
+    with pytest.raises(RuntimeError, match="VJP-delta autograd.grad failed: CUDA out of memory"):
+        _source().resolve(tiny_llama(), wordlevel_tokenizer())
+
+
 def test_additive_zero_strength_preserves_hidden_and_nonzero_adds_vector():
     torch.manual_seed(11)
     tokenizer = wordlevel_tokenizer()
@@ -350,3 +359,5 @@ def test_fit_holds_only_a_weak_model_reference_and_control_cleanup_drops_bound_t
     del model
     gc.collect()
     assert ref() is None
+    with pytest.raises(ValueError, match="requires a live model"):
+        source.resolve(None, tokenizer)

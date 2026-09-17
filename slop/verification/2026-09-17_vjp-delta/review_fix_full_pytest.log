@@ -1,0 +1,138 @@
+.....................ssss..s....ss..s..s..s............................. [  2%]
+...ssssssssssssssss........ssss..s..s................................... [  4%]
+.............ssssssssssssssssssssssss........ssss..s..s..s..s..s..s..s.. [  6%]
+s..s..s..s..s................................................sssssssssss [  8%]
+sssssssssssss..s..s..s..s.............s..s...s...........s..s..s...s..s. [ 10%]
+.......ssss..s....ss..s..s..s................................sssssssssss [ 12%]
+sssss........ssss..s..s................................................s [ 14%]
+sssssssssssssssssssssss........ssss..s..s..s..s..s..s..s..s..s..s..s..s. [ 16%]
+...............................................ssssssssssssssssssssssss. [ 18%]
+.s..s..s..s...........ssssss...ss........ssssss..ss..s..s........ssss..s [ 20%]
+....ss..s..s..s................................ssssssssssssssss........s [ 22%]
+sss..s..s................................................sssssssssssssss [ 24%]
+sssssssss........ssss..s..s..s..s..s..s..s..s..s..s..s..s............... [ 26%]
+.................................ssssssssssssssssssssssss..s..s..s..s... [ 28%]
+..........s..s...s...........s..s..s...s..s............................. [ 30%]
+........................................................................ [ 32%]
+........................................................................ [ 34%]
+........................................................................ [ 36%]
+........................................................................ [ 38%]
+........................................................................ [ 40%]
+..............................................s......................... [ 42%]
+........................................................................ [ 44%]
+........................................................................ [ 46%]
+........................................................................ [ 48%]
+........................................................................ [ 50%]
+........................................................................ [ 52%]
+........................................................................ [ 54%]
+........................................................................ [ 56%]
+........................................................................ [ 58%]
+........................................................................ [ 60%]
+........................................................................ [ 62%]
+........................................................................ [ 64%]
+........................................................................ [ 66%]
+........................................................................ [ 68%]
+........................................................................ [ 70%]
+........................................................................ [ 72%]
+.................................................................s...... [ 74%]
+........................................................................ [ 76%]
+........................................................................ [ 78%]
+........................................................................ [ 80%]
+........................................................................ [ 82%]
+...............................................s........................ [ 84%]
+........................................................................ [ 86%]
+........................................................................ [ 88%]
+........................................................................ [ 90%]
+........................................................................ [ 92%]
+........................................................................ [ 94%]
+........................................................................ [ 96%]
+........................................................................ [ 98%]
+...................................................................      [100%]
+=============================== warnings summary ===============================
+tests/controls/test_few_shot.py: 144 warnings
+  /home/code/dev/steerability-vjp/steerability/algorithms/core/utils/controls.py:163: UserWarning: FewShot override(s) `adapt_messages` but received tensor/text input; the message-level adaptation will not run. Pass `list[dict]` or `list[list[dict]]` to engage `adapt_messages`.
+    warnings.warn(
+
+tests/controls/test_user_prefix.py::test_token_path_prefixes_marker[llama-cpu]
+tests/controls/test_user_prefix.py::test_token_path_prefixes_marker[llama-cuda]
+tests/controls/test_user_prefix.py::test_token_path_prefixes_marker[mistral-cpu]
+tests/controls/test_user_prefix.py::test_token_path_prefixes_marker[mistral-cuda]
+tests/controls/test_user_prefix.py::test_token_path_prefixes_marker[gemma-cpu]
+tests/controls/test_user_prefix.py::test_token_path_prefixes_marker[gemma-cuda]
+  /home/code/dev/steerability-vjp/steerability/algorithms/core/utils/controls.py:163: UserWarning: UserPrefix override(s) `adapt_messages` but received tensor/text input; the message-level adaptation will not run. Pass `list[dict]` or `list[list[dict]]` to engage `adapt_messages`.
+    warnings.warn(
+
+tests/controls/test_condition_selector.py::TestSelectEndToEnd::test_returns_zero_based_layer
+tests/controls/test_condition_selector.py::TestSelectEndToEnd::test_returns_zero_based_layer
+tests/controls/test_condition_selector.py::TestSelectEndToEnd::test_returns_zero_based_layer
+tests/controls/test_condition_selector.py::TestSelectEndToEnd::test_returns_zero_based_layer
+tests/controls/test_condition_selector.py::TestMarginAwareSelection::test_select_reports_margin
+tests/controls/test_condition_selector.py::TestMarginAwareSelection::test_select_reports_margin
+tests/controls/test_condition_selector.py::TestMarginAwareSelection::test_select_reports_margin
+tests/controls/test_condition_selector.py::TestMarginAwareSelection::test_select_reports_margin
+  /home/code/dev/steerability/.venv/lib/python3.13/site-packages/sklearn/decomposition/_pca.py:646: RuntimeWarning: invalid value encountered in divide
+    explained_variance_ratio_ = explained_variance_ / total_var
+
+tests/controls/test_lora_composition.py::test_lora_then_caa_steers_and_hooks_adapted_layer
+  /home/code/dev/steerability/.venv/lib/python3.13/site-packages/peft/utils/save_and_load.py:438: UserWarning: Could not find a config file in  - will assume that the vocabulary was not modified.
+    warnings.warn(
+
+tests/controls/test_model_layout.py::test_double_wrapped_peft_accumulates_prefix
+  /home/code/dev/steerability/.venv/lib/python3.13/site-packages/peft/mapping_func.py:72: UserWarning: You are trying to modify a model with PEFT for a second time. If you want to reload the model with a different config, make sure to call `.unload()` before.
+    warnings.warn(
+
+tests/controls/test_model_layout.py::test_double_wrapped_peft_accumulates_prefix
+  /home/code/dev/steerability/.venv/lib/python3.13/site-packages/peft/tuners/tuners_utils.py:305: UserWarning: Already found a `peft_config` attribute in the model. This will lead to having multiple adapters in the model. Make sure to know what you are doing!
+    warnings.warn(
+
+tests/evaluation/test_inspect_integration.py::TestMessagesPathIntegration::test_batched_eval_fires_adapt_messages_once_per_sample
+  /home/code/dev/steerability/.venv/lib/python3.13/site-packages/pydantic/_internal/_generate_schema.py:954: PydanticDeprecatedSince20: `__get_validators__` is deprecated and will be removed, use `__get_pydantic_core_schema__` instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    warnings.warn(
+
+tests/evaluation/test_plotting.py::TestSmokeAllPublicFunctions::test_all_nine_render_without_warnings
+  /home/code/dev/steerability/.venv/lib/python3.13/site-packages/_pytest/unraisableexception.py:67: PytestUnraisableExceptionWarning: Exception ignored in: <function MemoryObjectReceiveStream.__del__ at 0x78b55e57a980>
+
+  Traceback (most recent call last):
+    File "/home/code/dev/steerability/.venv/lib/python3.13/site-packages/anyio/streams/memory.py", line 190, in __del__
+      warnings.warn(
+      ~~~~~~~~~~~~~^
+          f"Unclosed <{self.__class__.__name__} at {id(self):x}>",
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      ...<2 lines>...
+          source=self,
+          ^^^^^^^^^^^^
+      )
+      ^
+  ResourceWarning: Unclosed <MemoryObjectReceiveStream at 78b2f0a41ef0>
+
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+    warnings.warn(pytest.PytestUnraisableExceptionWarning(msg))
+
+tests/evaluation/test_plotting.py::TestSmokeAllPublicFunctions::test_all_nine_render_without_warnings
+  /home/code/dev/steerability/.venv/lib/python3.13/site-packages/_pytest/unraisableexception.py:67: PytestUnraisableExceptionWarning: Exception ignored in: <function MemoryObjectReceiveStream.__del__ at 0x78b55e57a980>
+
+  Traceback (most recent call last):
+    File "/home/code/dev/steerability/.venv/lib/python3.13/site-packages/anyio/streams/memory.py", line 190, in __del__
+      warnings.warn(
+      ~~~~~~~~~~~~~^
+          f"Unclosed <{self.__class__.__name__} at {id(self):x}>",
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      ...<2 lines>...
+          source=self,
+          ^^^^^^^^^^^^
+      )
+      ^
+  ResourceWarning: Unclosed <MemoryObjectReceiveStream at 78b2e33319f0>
+
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+    warnings.warn(pytest.PytestUnraisableExceptionWarning(msg))
+
+tests/evaluation/test_runner.py::TestRunShapeAndResults::test_run_shape_and_results_frame
+tests/evaluation/test_runner.py::TestRunShapeAndResults::test_one_provider_name_per_config_and_trial_seeds
+  /home/code/dev/steerability-vjp/steerability/evaluation/runner.py:203: UserWarning: seed is set but no temperature is configured in generate_defaults or any suite's generate_overrides; trial seeds are attached to sampling dispatches only, so the derived seeds will not be attached. Pass generate_defaults={'temperature': 0} for greedy decoding or an explicit sampling temperature.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+3258 passed, 340 skipped, 166 warnings in 283.24s (0:04:43)

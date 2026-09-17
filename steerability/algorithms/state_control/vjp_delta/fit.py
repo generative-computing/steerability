@@ -220,18 +220,15 @@ class VJPDeltaFit:
                     )
                 grad_outputs = torch.zeros_like(target)
                 grad_outputs[valid] = cotangent.to(dtype=target.dtype, device=target.device)
-                gradients = torch.autograd.grad(
-                    outputs=target,
-                    inputs=tuple(source_states[layer_id] for layer_id in source_modules),
-                    grad_outputs=grad_outputs,
-                    allow_unused=False,
-                )
-            except RuntimeError as error:
-                if "VJP-delta" in str(error):
-                    raise
-                raise RuntimeError(
-                    "VJP-delta backward failed. The configured model must support gradients through its decoder layers."
-                ) from error
+                try:
+                    gradients = torch.autograd.grad(
+                        outputs=target,
+                        inputs=tuple(source_states[layer_id] for layer_id in source_modules),
+                        grad_outputs=grad_outputs,
+                        allow_unused=False,
+                    )
+                except RuntimeError as error:
+                    raise RuntimeError(f"VJP-delta autograd.grad failed: {error}") from error
             finally:
                 for handle in handles:
                     handle.remove()
@@ -325,7 +322,7 @@ class VJPDeltaFit:
     ) -> SteeringVector:
         """Fit once per model identity and return a defensive clone."""
         del session
-        if self._model_ref is not None and self._model_ref() is model and self._master is not None:
+        if model is not None and self._model_ref is not None and self._model_ref() is model and self._master is not None:
             return self._master.clone()
         master = self._fit(model, tokenizer)
         self._model_ref = weakref.ref(model)

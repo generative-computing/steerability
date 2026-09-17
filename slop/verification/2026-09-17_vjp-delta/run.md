@@ -33,6 +33,14 @@ The two failed harness attempts are audited in [job_1647.md](../../audits/job_16
 
 The first full-suite run completed with `3256 passed, 340 skipped, 166 warnings in 262.72s`; see [full_pytest.log](full_pytest.log). A final full-suite run after the remaining regression updates is active at this log path: [full_pytest_final.log](full_pytest_final.log).
 
+## Review fixes
+
+- `VJPDeltaFit.resolve(None, tokenizer)` can no longer match a dead weakref cache entry; it runs the live-model guard and raises.
+- Model-forward failures now propagate unchanged. `torch.autograd.grad` failures retain their original message in the `VJP-delta autograd.grad failed: ...` headline.
+- Both parent review outputs are copied byte-for-byte to `slop/reviews/`; [review_copy_hashes.log](review_copy_hashes.log) records matching SHA-256 values.
+- Lifecycle-focused tests: `93 passed` in [review_fix_lifecycle_tests.log](review_fix_lifecycle_tests.log). The post-review full suite: `3258 passed, 340 skipped, 166 warnings in 283.24s` in [review_fix_full_pytest.log](review_fix_full_pytest.log).
+- Changed production/test files passed pre-commit in [review_fix_precommit_code.log](review_fix_precommit_code.log). The exact copied oracle review has no terminal newline; the end-of-file hook would alter that source artifact, so it was excluded from formatter execution to preserve the required byte identity.
+
 ## Residual risks
 
 - The VJP path supports standard differentiable torch decoder execution. Inference mode and unsupported backward paths raise rather than changing method behavior.
