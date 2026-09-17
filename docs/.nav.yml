@@ -50,6 +50,7 @@ nav:
         - DirectionalAblation: "examples/notebooks/algorithms/directional_ablation.ipynb"
         - ITI: "examples/notebooks/algorithms/iti.ipynb"
         - PASTA: "examples/notebooks/algorithms/pasta.ipynb"
+        - VJPDelta: "examples/notebooks/algorithms/vjp_delta.ipynb"
       - Output control:
         - BestOfN: "examples/notebooks/algorithms/best_of_n.ipynb"
         - BudgetForcing: "examples/notebooks/algorithms/budget_forcing.ipynb"
@@ -114,6 +115,7 @@ nav:
             - Directional Ablation: reference/algorithms/state_control/directional_ablation.md
             - ITI: reference/algorithms/state_control/iti.md
             - PASTA: reference/algorithms/state_control/pasta.md
+            - VJPDelta: reference/algorithms/state_control/vjp_delta.md
         - Output control:
             - Base classes: reference/algorithms/output_control/base_output_control.md
             - Common library: reference/algorithms/output_control/common.md
