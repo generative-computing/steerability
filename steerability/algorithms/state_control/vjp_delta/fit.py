@@ -75,11 +75,6 @@ def _valid_token_mask(attention_mask: torch.Tensor, skip_first: int) -> torch.Bo
 class VJPDeltaFit:
     """Fit normalized VJP-delta directions from independent labeled prompt pools.
 
-    The fit reads the final unpadded state at `target_layer` to form the target contrast. It then
-    applies that contrast as a cotangent at every valid target position and averages each prompt's
-    valid source-position gradients before class averaging. The positive-minus-negative class mean
-    is L2-normalized independently for every source layer.
-
     Args:
         data: Independent positive and negative raw prompts. Class sizes may differ.
         target_layer: Target residual layer. None selects `num_layers - 3`.
