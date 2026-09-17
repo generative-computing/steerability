@@ -14,8 +14,8 @@
 
 | command | result | evidence |
 | --- | --- | --- |
-| `pytest tests/controls/test_vjp_delta.py -q` | 9 passed | [test_vjp_delta_final.log](test_vjp_delta_final.log) |
-| `pytest tests/controls/test_vjp_delta.py tests/controls/test_sources.py tests/controls/test_activation_adapter.py tests/controls/test_spipe_freeze_state.py -q` | 91 passed | [focused_tests.log](focused_tests.log) |
+| `pytest tests/controls/test_vjp_delta.py -q` | 10 passed | [release_artifact_vjp_tests.log](release_artifact_vjp_tests.log) |
+| `pytest tests/controls/test_vjp_delta.py tests/controls/test_sources.py tests/controls/test_activation_adapter.py tests/controls/test_spipe_freeze_state.py -q` | 93 passed | [review_fix_lifecycle_tests.log](review_fix_lifecycle_tests.log) |
 | `pre-commit run --files ...` | passed | [precommit_final.log](precommit_final.log) |
 | `mkdocs build` | passed with existing warnings | [docs_build_nonstrict.log](docs_build_nonstrict.log) |
 | `mkdocs build --strict` | failed on 23 existing unrelated warnings | [docs_build.log](docs_build.log) |
@@ -37,9 +37,9 @@ The first full-suite run completed with `3256 passed, 340 skipped, 166 warnings 
 
 - `VJPDeltaFit.resolve(None, tokenizer)` can no longer match a dead weakref cache entry; it runs the live-model guard and raises.
 - Model-forward failures now propagate unchanged. `torch.autograd.grad` failures retain their original message in the `VJP-delta autograd.grad failed: ...` headline.
-- Both parent review outputs are copied byte-for-byte to `slop/reviews/`; [review_copy_hashes.log](review_copy_hashes.log) records matching SHA-256 values.
-- Lifecycle-focused tests: `93 passed` in [review_fix_lifecycle_tests.log](review_fix_lifecycle_tests.log). The post-review full suite: `3258 passed, 340 skipped, 166 warnings in 283.24s` in [review_fix_full_pytest.log](review_fix_full_pytest.log).
-- Changed production/test files passed pre-commit in [review_fix_precommit_code.log](review_fix_precommit_code.log). The exact copied oracle review has no terminal newline; the end-of-file hook would alter that source artifact, so it was excluded from formatter execution to preserve the required byte identity.
+- Both parent review outputs are copied to `slop/reviews/`. The raw quick-oracle source lacks a terminal newline; the committed copy adds only that newline. [review_copy_hashes.log](review_copy_hashes.log) records both raw and normalized-copy SHA-256 values.
+- VJP-delta regressions: `10 passed` in [release_artifact_vjp_tests.log](release_artifact_vjp_tests.log). Lifecycle-focused tests: `93 passed` in [review_fix_lifecycle_tests.log](review_fix_lifecycle_tests.log). The post-review full suite: `3258 passed, 340 skipped, 166 warnings in 283.24s` in [review_fix_full_pytest.log](review_fix_full_pytest.log).
+- Changed production/test files passed pre-commit in [review_fix_precommit_code.log](review_fix_precommit_code.log). The normalized review copy is included in the release-artifact pre-commit run.
 
 ## Residual risks
 

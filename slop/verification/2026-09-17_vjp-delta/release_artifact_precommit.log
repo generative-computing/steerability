@@ -1,0 +1,29 @@
+# Changed-artifact pre-commit
+
+Command:
+
+```sh
+/home/code/dev/steerability/.venv/bin/pre-commit run --files \
+  slop/pr_drafts/2026-09-17_vjp_delta.md \
+  slop/reviews/2026-09-17_vjp_delta_quick_oracle.md \
+  slop/verification/2026-09-17_vjp-delta/release_artifact_vjp_tests.log \
+  slop/verification/2026-09-17_vjp-delta/review_copy_hashes.log \
+  slop/verification/2026-09-17_vjp-delta/run.md
+```
+
+Result:
+
+```text
+Detect secrets...........................................................Passed
+trim trailing whitespace.................................................Passed
+fix end of files.........................................................Passed
+check for added large files..............................................Passed
+check yaml...........................................(no files to check)Skipped
+check toml...........................................(no files to check)Skipped
+check for merge conflicts................................................Passed
+check for case conflicts................................................Passed
+debug statements (python)............................(no files to check)Skipped
+isort (python).......................................(no files to check)Skipped
+```
+
+<!-- PI[gpt-5.6-terra]: saved command output. -->
