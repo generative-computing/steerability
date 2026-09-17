@@ -98,17 +98,6 @@ class VJPDeltaFit:
     _model_ref: weakref.ref | None = field(default=None, init=False, repr=False, compare=False)
     _master: SteeringVector | None = field(default=None, init=False, repr=False, compare=False)
 
-    def fit_ingredients(self) -> dict:
-        """Return fit inputs without memoized runtime state."""
-        return {
-            "data": self.data,
-            "target_layer": self.target_layer,
-            "source_layer_ids": self.source_layer_ids,
-            "skip_first": self.skip_first,
-            "max_length": self.max_length,
-            "batch_size": self.batch_size,
-        }
-
     def __post_init__(self) -> None:
         if not isinstance(self.data, LabeledExamples):
             self.data = as_labeled_examples(self.data)
