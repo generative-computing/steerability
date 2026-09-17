@@ -1,0 +1,10 @@
+Detect secrets...........................................................Passed
+trim trailing whitespace.................................................Passed
+fix end of files.........................................................Passed
+check for added large files..............................................Passed
+check yaml...............................................................Passed
+check toml...........................................(no files to check)Skipped
+check for merge conflicts................................................Passed
+check for case conflicts.................................................Passed
+debug statements (python)................................................Passed
+isort (python)...........................................................Passed

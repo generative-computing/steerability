@@ -1,0 +1,9 @@
+## Available-device check
+2026-09-17T18:23:18+08:00
+NVIDIA GeForce RTX 3090, 580.173.02, 24576 MiB
+
+Pueue groups:
+Group "api" (4 parallel): running
+Group "default" (1 parallel): running
+Group "local_gpu" (1 parallel): running
+Group "modal" (1 parallel): running

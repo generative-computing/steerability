@@ -1,0 +1,4 @@
+[pq] task 1649: last 3 of 3 clean lines -- /home/code/.local/share/pueue/task_logs/1649.log
+/home/code/dev/steerability/.venv/lib/python3.13/site-packages/torch/autograd/graph.py:1072: UserWarning: Attempting to run cuBLAS, but there was no current CUDA context! Attempting to set the primary context... (Triggered internally at /__w/pytorch/pytorch/aten/src/ATen/cuda/CublasHandlePool.cpp:410.)
+  return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+{'module': '/home/code/dev/steerability-vjp/steerability/__init__.py', 'master_device': 'cpu', 'bound_device': 'cuda', 'reply': 'the', 'layers': [0, 1]}

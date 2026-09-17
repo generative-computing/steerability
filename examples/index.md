@@ -59,6 +59,8 @@ Algorithm notebooks demonstrate how each method (i.e., control) operates. The me
 
     :octicons-arrow-right-24: [PASTA](./notebooks/algorithms/pasta.ipynb)
 
+    :octicons-arrow-right-24: [VJPDelta](./notebooks/algorithms/vjp_delta.ipynb)
+
 -   __Output control__
 
     ---

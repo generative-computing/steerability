@@ -1,0 +1,129 @@
+
+[31m │  ⚠  Warning from the Material for MkDocs team[0m
+[31m │[0m
+[31m │[0m  MkDocs 2.0, the underlying framework of Material for MkDocs,
+[31m │[0m  will introduce backward-incompatible changes, including:
+[31m │[0m
+[31m │  × [0mAll plugins will stop working – the plugin system has been removed
+[31m │  × [0mAll theme overrides will break – the theming system has been rewritten
+[31m │  × [0mNo migration path exists – existing projects cannot be upgraded
+[31m │  × [0mClosed contribution model – community members can't report bugs
+[31m │  × [0mCurrently unlicensed – unsuitable for production use
+[31m │[0m
+[31m │[0m  Our full analysis:
+[31m │[0m
+[31m │[0m  [4mhttps://squidfunk.github.io/mkdocs-material/blog/2026/02/18/mkdocs-2.0/[0m
+[0m
+INFO    -  Loading data from bib files: ['/home/code/dev/steerability-vjp/docs/assets/references.bib']
+INFO    -  Cleaning site directory
+INFO    -  Building documentation to directory: /home/code/dev/steerability-vjp/site
+INFO    -  The following pages exist in the docs directory, but are not included in the "nav" configuration:
+  - _hooks/bibtex_warnings.py
+  - examples/notebooks/recipes/vllm_serve.ipynb
+  - examples/notebooks/recipes/routed_decoding/data.py
+  - examples/notebooks/studies/commonsense_mcqa/task.py
+  - examples/notebooks/studies/instruction_following/task.py
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/_hooks/bibtex_warnings.py
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/_hooks/bibtex_warnings.py
+WARNING -  Doc file 'concepts/controls.md' contains a link '../examples/notebooks/algorithms/user_prefix.ipynb', but the target 'examples/notebooks/algorithms/user_prefix.ipynb' is not found among documentation files.
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/act_add.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/act_add.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/angular_steering.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/angular_steering.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/best_of_n.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/best_of_n.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/budget_forcing.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/budget_forcing.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/caa.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/caa.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/cast.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/cast.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/contrastive_decoding.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/contrastive_decoding.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/cpo.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/cpo.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/deal.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/deal.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/dexperts.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/dexperts.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/directional_ablation.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/directional_ablation.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/few_shot.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/few_shot.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/gepa.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/gepa.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/iti.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/iti.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/pasta.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/pasta.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/prewrite.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/prewrite.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/rad.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/rad.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/sasa.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/sasa.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/system_prompt.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/system_prompt.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/vjp_delta.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/vjp_delta.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/generics/activation_adapter.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/generics/activation_adapter.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/generics/contrastive_guidance.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/generics/contrastive_guidance.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/generics/phased_decoding.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/generics/phased_decoding.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/generics/search_decoding.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/generics/search_decoding.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/generics/stopping_rules.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/generics/stopping_rules.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/generics/value_guidance.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/generics/value_guidance.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/wrappers/mergekit.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/wrappers/mergekit.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/wrappers/trl.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/algorithms/wrappers/trl.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/recipes/honest_persona_prompting.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/recipes/honest_persona_prompting.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/recipes/vllm_serve.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/recipes/vllm_serve.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/recipes/working_with_spipes.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/recipes/working_with_spipes.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/recipes/routed_decoding/data.py
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/recipes/routed_decoding/data.py
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/recipes/routed_decoding/routed_decoding.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/recipes/routed_decoding/routed_decoding.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/studies/routing_vs_prompting.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/studies/routing_vs_prompting.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/studies/commonsense_mcqa/commonsense_mcqa.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/studies/commonsense_mcqa/commonsense_mcqa.ipynb
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/studies/commonsense_mcqa/task.py
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/studies/commonsense_mcqa/task.py
+WARNING -  Inline reference to unknown key instruction_following
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/studies/instruction_following/instruction_following.ipynb
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/studies/instruction_following/instruction_following.ipynb
+WARNING -  Inline reference to unknown key scorer
+INFO    -  Converting notebook (execute=False): /home/code/dev/steerability-vjp/docs/examples/notebooks/studies/instruction_following/task.py
+INFO    -  Cache miss, writing: /home/code/dev/steerability-vjp/docs/examples/notebooks/studies/instruction_following/task.py
+INFO    -  mkdocstrings_handlers: Formatting signatures requires either Black or Ruff to be installed.
+WARNING -  griffe: steerability/algorithms/core/internals/probes/fitting.py:583: No type or annotation for parameter 'session'
+WARNING -  griffe: steerability/algorithms/input_control/system_prompt/control.py:31: No type or annotation for parameter 'text'
+WARNING -  griffe: steerability/algorithms/input_control/system_prompt/control.py:31: Parameter 'text' does not appear in the function signature
+WARNING -  griffe: steerability/algorithms/input_control/system_prompt/control.py:32: No type or annotation for parameter 'mode'
+WARNING -  griffe: steerability/algorithms/input_control/system_prompt/control.py:32: Parameter 'mode' does not appear in the function signature
+WARNING -  griffe: steerability/algorithms/input_control/system_prompt/control.py:34: No type or annotation for parameter 'separator'
+WARNING -  griffe: steerability/algorithms/input_control/system_prompt/control.py:34: Parameter 'separator' does not appear in the function signature
+WARNING -  griffe: steerability/algorithms/input_control/user_prefix/control.py:27: No type or annotation for parameter 'text'
+WARNING -  griffe: steerability/algorithms/input_control/user_prefix/control.py:27: Parameter 'text' does not appear in the function signature
+WARNING -  griffe: steerability/algorithms/input_control/user_prefix/control.py:28: No type or annotation for parameter 'separator'
+WARNING -  griffe: steerability/algorithms/input_control/user_prefix/control.py:28: Parameter 'separator' does not appear in the function signature
+WARNING -  griffe: steerability/algorithms/input_control/user_prefix/control.py:29: No type or annotation for parameter 'placement'
+WARNING -  griffe: steerability/algorithms/input_control/user_prefix/control.py:29: Parameter 'placement' does not appear in the function signature
+WARNING -  griffe: steerability/algorithms/output_control/common/granite_heads.py:57: No type or annotation for parameter '**from_pretrained_kwargs'
+WARNING -  griffe: steerability/algorithms/output_control/rad/utils/reward_training.py:106: No type or annotation for parameter 'model'
+WARNING -  griffe: steerability/algorithms/state_control/pasta/control.py:267: No type or annotation for parameter 'substrings'
+WARNING -  griffe: steerability/algorithms/state_control/pasta/control.py:155: No type or annotation for parameter 'session'
+WARNING -  griffe: steerability/algorithms/state_control/pasta/profiling.py:273: No type or annotation for parameter 'model'
+WARNING -  griffe: steerability/algorithms/state_control/pasta/profiling.py:274: No type or annotation for parameter 'tokenizer'
+WARNING -  Inline reference to unknown key instruction_following
+
+Aborted with 23 warnings in strict mode!

@@ -1,0 +1,8 @@
+[pq] task 1648: last 7 of 7 clean lines -- /home/code/.local/share/pueue/task_logs/1648.log
+/home/code/dev/steerability/.venv/lib/python3.13/site-packages/torch/autograd/graph.py:1072: UserWarning: Attempting to run cuBLAS, but there was no current CUDA context! Attempting to set the primary context... (Triggered internally at /__w/pytorch/pytorch/aten/src/ATen/cuda/CublasHandlePool.cpp:410.)
+  return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+Traceback (most recent call last):
+  File "/home/code/dev/steerability-vjp/slop/verification/2026-09-17_vjp-delta/gpu_smoke.py", line 31, in <module>
+    "layers": control._layer_ids,
+              ^^^^^^^^^^^^^^^^^^
+AttributeError: 'VJPDelta' object has no attribute '_layer_ids'

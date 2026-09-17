@@ -152,6 +152,9 @@ patching. The toolkit implements:
 - `PASTA` ([API reference](../reference/algorithms/state_control/pasta.md), [notebook](../examples/notebooks/algorithms/pasta.ipynb))
     - *Description*: post-hoc attention steering[@zhang2024tell], rescaling attention to targeted prompt substrings at selected layers and heads. The `head_config` argument takes a dict or list of layers and heads, or a `HeadProfile` recipe that runs the paper's head-profiling stage as a steer-time fit on the loaded model (scoring each candidate head by its paired lift over an unsteered baseline) and freezes the resolved head map.
     - *Backends*: HF with `attn_implementation` `"eager"` or `"sdpa"` (attention-map writes have no engine form).
+- `VJPDelta` ([API reference](../reference/algorithms/state_control/vjp_delta.md), [notebook](../examples/notebooks/algorithms/vjp_delta.ipynb))
+    - *Description*: fits a target-state contrast and uses vector-Jacobian products to derive one normalized additive direction per earlier residual layer. `VJPDeltaFit` uses raw prompts, excludes `skip_first` positions and each row's final real token from the VJP spans, and averages each class independently before subtraction.
+    - *Backends*: HF for fitting (a differentiable staged model is required); HF and vLLM-Hook for the resulting additive intervention.
 
 Reusable building blocks shared across the residual-stream methods (estimators, gating, selectors, transforms,
 steering vectors, hook utilities) are located in
