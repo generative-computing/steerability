@@ -1,6 +1,7 @@
 # VJP-delta verification log
 
-- base: f1d8b5fd6d9ed15d506f9445a93d55cb5c5b07df
+- base: 92e3098086a1bb70db078343b459831dd12040e5 (`generative-computing/steerability` main; PR #31)
+- original fork base: f1d8b5fd6d9ed15d506f9445a93d55cb5c5b07df
 - branch: feat/vjp-delta
 - assignment: exact parent `01a09cdb-9985-75d5-9f07-68b80024a10b`
 
@@ -40,6 +41,18 @@ The first full-suite run completed with `3256 passed, 340 skipped, 166 warnings 
 - Both parent review outputs are copied to `slop/reviews/`. The raw quick-oracle source lacks a terminal newline; the committed copy adds only that newline. [review_copy_hashes.log](review_copy_hashes.log) records both raw and normalized-copy SHA-256 values.
 - VJP-delta regressions: `10 passed` in [release_artifact_vjp_tests.log](release_artifact_vjp_tests.log). Lifecycle-focused tests: `93 passed` in [review_fix_lifecycle_tests.log](review_fix_lifecycle_tests.log). The post-review full suite: `3258 passed, 340 skipped, 166 warnings in 283.24s` in [review_fix_full_pytest.log](review_fix_full_pytest.log).
 - Changed production/test files passed pre-commit in [review_fix_precommit_code.log](review_fix_precommit_code.log). The normalized review copy is included in the release-artifact pre-commit run.
+
+## Rebase verification
+
+The five VJP commits were rebased from `f1d8b5f` onto `92e3098`; `git merge-base HEAD 92e3098` returned `92e3098`. The rebased implementation head before this evidence-only update was `89eaaaf`.
+
+| command | result | evidence |
+| --- | --- | --- |
+| `pytest tests/controls/test_vjp_delta.py -q` | 10 passed | [rebase_vjp_tests.log](rebase_vjp_tests.log) |
+| `pytest tests/controls/test_vjp_delta.py tests/controls/test_sources.py tests/controls/test_activation_adapter.py tests/controls/test_spipe_freeze_state.py -q` | 93 passed | [rebase_lifecycle_tests.log](rebase_lifecycle_tests.log) |
+| `pytest -q` | 3418 passed, 397 skipped, 173 warnings | [rebase_full_pytest.log](rebase_full_pytest.log) |
+| `mkdocs build` | passed with existing warnings | [rebase_docs_build_nonstrict.log](rebase_docs_build_nonstrict.log) |
+| `pre-commit run --files <rebased changed diff>` | passed | [rebase_precommit.log](rebase_precommit.log) |
 
 ## Residual risks
 
