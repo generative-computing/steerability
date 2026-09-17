@@ -16,7 +16,7 @@ class VJPDeltaArgs(BaseArgs):
     """Arguments for `VJPDelta`.
 
     Args:
-        steering_vector: A precomputed vector or artifact source. It skips gradient extraction.
+        steering_vector: A precomputed `SteeringVector` skips VJP fitting. An `ArtifactSource` resolves its own artifact.
         data: Independent positive and negative raw prompt pools for `VJPDeltaFit`.
         target_layer: Target layer for the contrast. None selects `num_layers - 3`.
         source_layer_ids: Source layers for VJPs. None selects every layer before the target.

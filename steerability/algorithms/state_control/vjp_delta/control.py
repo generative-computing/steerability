@@ -20,8 +20,9 @@ class VJPDelta(InterventionControl):
     per prompt before separately averaging the positive and negative classes. At generation it
     uses the standard additive intervention and token scopes.
 
-    A precomputed `SteeringVector` or `ArtifactSource` avoids gradient extraction. The frozen form
-    is `ActivationAdapter`, so a reloaded `.spipe` resolves the stored vectors without a VJP fit.
+    A precomputed `SteeringVector` skips VJP fitting. A supplied `ArtifactSource` resolves its own
+    artifact. The frozen form is `ActivationAdapter`, so a reloaded `.spipe` resolves the stored
+    vectors without a VJP fit.
 
     Reference:
 
