@@ -25,9 +25,10 @@ class VJPDelta(InterventionControl):
 
     Reference:
 
-    - VJP-delta method implementation provenance: `wassname/vjp-steering` at
-      `cb03382ebd0cc9cad615d169f42e68e8ae3e12a7`
+    - Clark, Michael J. (2026). "vjp-steering: contrastive steering vectors from
+      vector-Jacobian products."
       [https://github.com/wassname/vjp-steering](https://github.com/wassname/vjp-steering)
+      Adapts the [Jacobian lens](https://transformer-circuits.pub/2026/workspace/).
     """
 
     Args = VJPDeltaArgs

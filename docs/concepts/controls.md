@@ -154,7 +154,7 @@ patching. The toolkit implements:
     - *Backends*: HF with `attn_implementation` `"eager"` or `"sdpa"` (attention-map writes have no engine form).
 - `VJPDelta` ([API reference](../reference/algorithms/state_control/vjp_delta.md), [notebook](../examples/notebooks/algorithms/vjp_delta.ipynb))
     - *Description*: fits a target-state contrast and uses vector-Jacobian products to derive one normalized additive direction per earlier residual layer. `VJPDeltaFit` uses raw prompts, excludes `skip_first` positions and each row's final real token from the VJP spans, and averages each class independently before subtraction.
-    - *Backends*: HF for fitting (a differentiable staged model is required); HF and vLLM-Hook for the resulting additive intervention.
+    - *Backends*: HF for fitting. The frozen form uses the existing `ActivationAdapter` additive intervention.
 
 Reusable building blocks shared across the residual-stream methods (estimators, gating, selectors, transforms,
 steering vectors, hook utilities) are located in

@@ -18,5 +18,3 @@
           - "!.*Args$"
           - "!^registry"
           - "!^STEERING_METHOD"
-
-<!-- PI[gpt-5.6-terra]: added method reference. -->

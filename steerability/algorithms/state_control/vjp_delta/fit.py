@@ -250,20 +250,22 @@ class VJPDeltaFit:
         layout = resolve_model_layout(model)
         target_module = model.get_submodule(layout.layer_names[target_layer])
         source_modules = {layer_id: model.get_submodule(layout.layer_names[layer_id]) for layer_id in source_ids}
-        try:
-            device = next(model.parameters()).device
-        except StopIteration as error:
-            raise ValueError("VJP-delta fitting requires a model with parameters.") from error
+        parameters = tuple(model.parameters())
+        if not parameters:
+            raise ValueError("VJP-delta fitting requires a model with parameters.")
+        devices = {tensor.device for tensor in (*parameters, *model.buffers())}
+        if len(devices) != 1:
+            raise ValueError("VJP-delta fitting requires a single-device model; sharded or offloaded models are unsupported.")
+        device = devices.pop()
         if device.type == "meta":
             raise ValueError("VJP-delta fitting requires materialized model parameters, not meta tensors.")
 
-        parameters = tuple(model.parameters())
         requires_grad = [parameter.requires_grad for parameter in parameters]
         parameter_grads = [
             None if parameter.grad is None else parameter.grad.detach().clone()
             for parameter in parameters
         ]
-        was_training = model.training
+        training_flags = {module: module.training for module in model.modules()}
         try:
             model.eval()
             for parameter in parameters:
@@ -289,7 +291,8 @@ class VJPDeltaFit:
                     source_modules=source_modules, cotangent=cotangent, device=device,
                 )
         finally:
-            model.train(was_training)
+            for module, training in training_flags.items():
+                module.training = training
             for parameter, flag, grad in zip(parameters, requires_grad, parameter_grads, strict=True):
                 parameter.requires_grad_(flag)
                 parameter.grad = grad
