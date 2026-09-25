@@ -234,7 +234,9 @@ class PipelineFactory:
             uses the in-process Hugging Face backend.
         fit: Fit venue policy forwarded to each pipeline.
         hf_model_kwargs: Extra kwargs forwarded to `AutoModelForCausalLM.from_pretrained` on
-            in-process loads (the shared base and each engine arm's staged steer model).
+            in-process loads (the shared base and each engine arm's staged steer model). A
+            `revision` key also pins the shared-base tokenizer, which loads from
+            `base_model_name_or_path`.
         device_map: Device placement strategy for in-process loads.
         trust_remote_code: Trust remote code when loading tokenizers; forwarded to each pipeline.
     """
@@ -282,7 +284,8 @@ class PipelineFactory:
             **self.hf_model_kwargs,
         )
         self._base_tokenizer = ensure_pad_token(AutoTokenizer.from_pretrained(
-            self.base_model_name_or_path, trust_remote_code=self.trust_remote_code,
+            self.base_model_name_or_path, revision=self.hf_model_kwargs.get("revision"),
+            trust_remote_code=self.trust_remote_code,
         ))
         self._base_fingerprint = self._fingerprint_or_none(self._base_model)
 

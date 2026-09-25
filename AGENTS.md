@@ -250,6 +250,7 @@ Behaviors that differ from bare Hugging Face usage:
 - Construction never loads the model. `steer()` acquires it from `model_name_or_path`, reuses preloaded
   `model=`/`tokenizer=` objects passed at construction, or receives it from a structural control that produces the
   final weights itself (e.g. `mergekit`). `lazy_init` is accepted and inert.
+- A `revision` key in `hf_model_kwargs` also pins the tokenizer when it is loaded from `model_name_or_path`.
 - `pipeline.supports_batching` is `True` only when every enabled control declares batch safety; the Inspect model
   provider batches concurrent requests when it is `True` and serializes them otherwise.
 - `pipeline.compute_logprobs(input_ids, ref_output_ids=...)` scores reference tokens teacher-forced with the full

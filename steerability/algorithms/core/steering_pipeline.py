@@ -116,7 +116,8 @@ class SteeringPipeline:
         device (torch.device, str, optional): Device (passed to model's `.to()` method).
             When specified, `device_map` must remain at its default value of `"auto"`.
         hf_model_kwargs (dict, optional): Extra keyword arguments passed to
-            `transformers.AutoModelForCausalLM.from_pretrained`.
+            `transformers.AutoModelForCausalLM.from_pretrained`. A `revision` key also pins
+            the tokenizer when it is loaded from `model_name_or_path`.
         trust_remote_code (bool, optional): Trust remote code when loading the tokenizer. Defaults to
             `False`. To trust remote code for the model, pass `trust_remote_code=True` via `hf_model_kwargs`.
         lazy_init (bool, optional): Deprecated and inert: construction never loads the model;
@@ -235,6 +236,21 @@ class SteeringPipeline:
             self.tokenizer = ensure_pad_token(self.tokenizer)
         self._inject_tokenizer()
 
+    def _tokenizer_revision_for(self, source: str | Path | None) -> str | None:
+        """The Hub revision to load the tokenizer at when its source is `source`.
+
+        Returns `hf_model_kwargs["revision"]` when `source` is the pipeline's own model
+        reference (`model_name_or_path`), so a `revision` pin on the weights also pins the
+        tokenizer. Returns `None` for any other source (a distinct tokenizer repository, or a
+        local structural-output path), which loads at the repository head.
+        """
+        if source is None:
+            return None
+        model_ref = str(self.model_name_or_path) if self.model_name_or_path is not None else None
+        if model_ref is not None and str(source) == model_ref:
+            return self.hf_model_kwargs.get("revision")
+        return None
+
     def _resolve_client_tokenizer(self, spec: BackendSpec) -> None:
         """Resolve the client-side tokenizer for an engine backend, if not already set.
 
@@ -256,7 +272,8 @@ class SteeringPipeline:
             return
         try:
             self.tokenizer = ensure_pad_token(AutoTokenizer.from_pretrained(
-                source, trust_remote_code=self.trust_remote_code,
+                source, revision=self._tokenizer_revision_for(source),
+                trust_remote_code=self.trust_remote_code,
             ))
         except Exception:
             logger.debug("Client tokenizer resolution from %r failed.", source, exc_info=True)
@@ -571,6 +588,7 @@ class SteeringPipeline:
                 try:
                     self.tokenizer = AutoTokenizer.from_pretrained(
                         source,
+                        revision=self._tokenizer_revision_for(source),
                         trust_remote_code=self.trust_remote_code,
                     )
                     self.tokenizer = ensure_pad_token(self.tokenizer)
@@ -667,7 +685,8 @@ class SteeringPipeline:
             source = self.tokenizer_name_or_path or self.model_name_or_path
             if source is not None:
                 self.tokenizer = ensure_pad_token(AutoTokenizer.from_pretrained(
-                    source, trust_remote_code=self.trust_remote_code,
+                    source, revision=self._tokenizer_revision_for(source),
+                    trust_remote_code=self.trust_remote_code,
                 ))
                 self._inject_tokenizer()
         backend = self._backend_for(spec)

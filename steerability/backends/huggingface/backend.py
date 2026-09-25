@@ -44,7 +44,9 @@ class HFBackend(Backend):
         and `trust_remote_code`. Option values must be plain data, since spec canonicalization
         renders live objects (e.g. a quantization config instance) as strings that
         `from_pretrained` cannot consume. A `device_map` key inside `hf_model_kwargs` is used
-        when the spec carries no top-level `device_map` option.
+        when the spec carries no top-level `device_map` option. A `revision` key inside
+        `hf_model_kwargs` also pins the tokenizer when it loads from `spec.model`, but not
+        when a `tokenizer_name_or_path` option names a distinct repository.
 
         Args:
             spec: The backend spec.
@@ -79,8 +81,13 @@ class HFBackend(Backend):
             device_map=device_map,
             **hf_model_kwargs,
         )
+        # the tokenizer follows the model's revision only when it loads from the model reference;
+        # a distinct tokenizer_name_or_path loads at the repository head
+        tokenizer_source = spec.get_option("tokenizer_name_or_path")
+        revision = hf_model_kwargs.get("revision") if tokenizer_source is None else None
         tokenizer = AutoTokenizer.from_pretrained(
-            spec.get_option("tokenizer_name_or_path") or spec.model,
+            tokenizer_source or spec.model,
+            revision=revision,
             trust_remote_code=bool(spec.get_option("trust_remote_code", default=False)),
         )
         tokenizer = ensure_pad_token(tokenizer)

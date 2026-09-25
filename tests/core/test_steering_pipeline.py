@@ -89,7 +89,7 @@ class TestPipelineInitialization:
         assert model_loader.from_pretrained.call_args.args == ("test-model",)
         assert model_loader.from_pretrained.call_args.kwargs["device_map"] == "auto"
         tokenizer_loader.from_pretrained.assert_called_once_with(
-            "test-model", trust_remote_code=False
+            "test-model", revision=None, trust_remote_code=False
         )
         assert pipeline.model is model
         assert pipeline.tokenizer is tokenizer
@@ -185,6 +185,79 @@ class TestPipelineInitialization:
         SteeringPipeline(model_name_or_path="test-model", controls=[control]).steer()
 
         assert control.tokenizer is tokenizer
+
+
+class TestTokenizerRevision:
+    """The tokenizer follows `hf_model_kwargs["revision"]` only when its source is the model reference."""
+
+    def test_in_process_pins_tokenizer_to_model_revision(self, monkeypatch):
+        _, tokenizer_loader, _, _ = _patch_hf_loaders(monkeypatch)
+
+        SteeringPipeline(
+            model_name_or_path="test-model", hf_model_kwargs={"revision": "abc"},
+        ).steer()
+
+        assert tokenizer_loader.from_pretrained.call_args.args == ("test-model",)
+        assert tokenizer_loader.from_pretrained.call_args.kwargs["revision"] == "abc"
+
+    def test_no_revision_loads_at_head(self, monkeypatch):
+        _, tokenizer_loader, _, _ = _patch_hf_loaders(monkeypatch)
+
+        SteeringPipeline(model_name_or_path="test-model").steer()
+
+        assert tokenizer_loader.from_pretrained.call_args.kwargs["revision"] is None
+
+    def test_distinct_tokenizer_repo_ignores_model_revision(self, monkeypatch):
+        _, tokenizer_loader, _, _ = _patch_hf_loaders(monkeypatch)
+
+        SteeringPipeline(
+            model_name_or_path="test-model",
+            tokenizer_name_or_path="other/repo",
+            hf_model_kwargs={"revision": "abc"},
+        ).steer()
+
+        assert tokenizer_loader.from_pretrained.call_args.args == ("other/repo",)
+        assert tokenizer_loader.from_pretrained.call_args.kwargs["revision"] is None
+
+    def test_post_steer_fallback_pins_only_the_model_reference(self, monkeypatch):
+        _, tokenizer_loader, _, _ = _patch_hf_loaders(monkeypatch)
+        pipeline = SteeringPipeline(model_name_or_path="test-model", hf_model_kwargs={"revision": "abc"})
+
+        # structural output path: not the model reference, so no revision
+        assert pipeline._tokenizer_revision_for("/tmp/structural-out") is None
+        # the model reference: pinned
+        assert pipeline._tokenizer_revision_for("test-model") == "abc"
+
+    def test_client_tokenizer_applies_the_rule_on_engine_backend(self, monkeypatch):
+        from steerability.algorithms.core.execution.spec import BackendSpec
+
+        _, tokenizer_loader, _, tokenizer = _patch_hf_loaders(monkeypatch)
+
+        spec = BackendSpec(kind="vllm-serve", model="test-model")
+        pipeline = SteeringPipeline(
+            model_name_or_path="test-model", hf_model_kwargs={"revision": "abc"}, backend=spec,
+        )
+        pipeline._resolve_client_tokenizer(spec)
+
+        assert pipeline.tokenizer is tokenizer
+        assert tokenizer_loader.from_pretrained.call_args.args == ("test-model",)
+        assert tokenizer_loader.from_pretrained.call_args.kwargs["revision"] == "abc"
+
+    def test_client_tokenizer_ignores_revision_for_distinct_tokenizer_option(self, monkeypatch):
+        from steerability.algorithms.core.execution.spec import BackendSpec
+
+        _, tokenizer_loader, _, _ = _patch_hf_loaders(monkeypatch)
+
+        spec = BackendSpec(
+            kind="vllm-serve", model="test-model", options={"tokenizer_name_or_path": "other/repo"},
+        )
+        pipeline = SteeringPipeline(
+            model_name_or_path="test-model", hf_model_kwargs={"revision": "abc"}, backend=spec,
+        )
+        pipeline._resolve_client_tokenizer(spec)
+
+        assert tokenizer_loader.from_pretrained.call_args.args == ("other/repo",)
+        assert tokenizer_loader.from_pretrained.call_args.kwargs["revision"] is None
 
 
 # Pipeline Steer Tests

@@ -52,6 +52,45 @@ class TestBackendConstruction:
         with pytest.raises(ValueError, match="model reference"):
             HFBackend(HF_SPEC)
 
+    def test_spec_path_pins_tokenizer_to_revision(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        model = MagicMock()
+        tokenizer = MagicMock()
+        tokenizer.pad_token_id = 0
+        model_loader = MagicMock()
+        model_loader.from_pretrained.return_value = model
+        tokenizer_loader = MagicMock()
+        tokenizer_loader.from_pretrained.return_value = tokenizer
+        monkeypatch.setattr("steerability.backends.huggingface.backend.AutoModelForCausalLM", model_loader)
+        monkeypatch.setattr("steerability.backends.huggingface.backend.AutoTokenizer", tokenizer_loader)
+
+        HFBackend(BackendSpec(kind="huggingface", model="m", options={"hf_model_kwargs": {"revision": "abc"}}))
+
+        assert tokenizer_loader.from_pretrained.call_args.args == ("m",)
+        assert tokenizer_loader.from_pretrained.call_args.kwargs["revision"] == "abc"
+
+    def test_spec_path_ignores_revision_for_distinct_tokenizer_option(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        model = MagicMock()
+        tokenizer = MagicMock()
+        tokenizer.pad_token_id = 0
+        model_loader = MagicMock()
+        model_loader.from_pretrained.return_value = model
+        tokenizer_loader = MagicMock()
+        tokenizer_loader.from_pretrained.return_value = tokenizer
+        monkeypatch.setattr("steerability.backends.huggingface.backend.AutoModelForCausalLM", model_loader)
+        monkeypatch.setattr("steerability.backends.huggingface.backend.AutoTokenizer", tokenizer_loader)
+
+        HFBackend(BackendSpec(
+            kind="huggingface", model="m",
+            options={"hf_model_kwargs": {"revision": "abc"}, "tokenizer_name_or_path": "other/repo"},
+        ))
+
+        assert tokenizer_loader.from_pretrained.call_args.args == ("other/repo",)
+        assert tokenizer_loader.from_pretrained.call_args.kwargs["revision"] is None
+
 
 class TestSessionLifecycle:
 

@@ -262,3 +262,36 @@ class TestPipelineFactory:
     def test_backend_kind_default(self):
         assert PipelineFactory(BASE).backend_kind == "huggingface"
         assert PipelineFactory(BASE, backend="vllm").backend_kind == "vllm"
+
+    def test_ensure_base_model_pins_tokenizer_to_revision(self, monkeypatch):
+        model = create_mock_model()
+        tokenizer = create_mock_tokenizer()
+        model_loader = MagicMock()
+        model_loader.from_pretrained.return_value = model
+        tokenizer_loader = MagicMock()
+        tokenizer_loader.from_pretrained.return_value = tokenizer
+        monkeypatch.setattr("steerability.algorithms.core.sweeps.AutoModelForCausalLM", model_loader)
+        monkeypatch.setattr("steerability.algorithms.core.sweeps.AutoTokenizer", tokenizer_loader)
+        monkeypatch.setattr("steerability.algorithms.core.sweeps.model_fingerprint", lambda _model: "fp")
+
+        factory = PipelineFactory(BASE, hf_model_kwargs={"revision": "abc"})
+        factory._ensure_base_model()
+
+        assert tokenizer_loader.from_pretrained.call_args.args == (BASE,)
+        assert tokenizer_loader.from_pretrained.call_args.kwargs["revision"] == "abc"
+
+    def test_ensure_base_model_loads_at_head_without_revision(self, monkeypatch):
+        model = create_mock_model()
+        tokenizer = create_mock_tokenizer()
+        model_loader = MagicMock()
+        model_loader.from_pretrained.return_value = model
+        tokenizer_loader = MagicMock()
+        tokenizer_loader.from_pretrained.return_value = tokenizer
+        monkeypatch.setattr("steerability.algorithms.core.sweeps.AutoModelForCausalLM", model_loader)
+        monkeypatch.setattr("steerability.algorithms.core.sweeps.AutoTokenizer", tokenizer_loader)
+        monkeypatch.setattr("steerability.algorithms.core.sweeps.model_fingerprint", lambda _model: "fp")
+
+        factory = PipelineFactory(BASE)
+        factory._ensure_base_model()
+
+        assert tokenizer_loader.from_pretrained.call_args.kwargs["revision"] is None
