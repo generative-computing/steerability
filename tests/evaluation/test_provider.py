@@ -88,6 +88,27 @@ class TestRegistrationAndConstruction:
         with pytest.raises(ValueError, match="as_inspect_model"):
             SteeringPipelineModelAPI("stub")
 
+    def test_provider_symbol_is_a_subclassable_class(self):
+        from inspect_ai.model import ModelAPI
+
+        assert isinstance(SteeringPipelineModelAPI, type)
+        assert issubclass(SteeringPipelineModelAPI, ModelAPI)
+
+    def test_subclass_constructs_and_is_recognized(self):
+        class Sub(SteeringPipelineModelAPI):
+            pass
+
+        api = Sub("stub", pipeline=StubSteeringPipeline())
+        assert isinstance(api, SteeringPipelineModelAPI)
+
+    def test_registry_route_reaches_the_class(self):
+        from inspect_ai.model import get_model
+
+        # the string route resolves the registered provider but cannot supply a pipeline, so
+        # the class raises its own error naming as_inspect_model; this pins the factory is live
+        with pytest.raises(ValueError, match="as_inspect_model"):
+            get_model("steerability/anything")
+
     def test_unsteered_pipeline_refused(self):
         pipeline = StubSteeringPipeline()
         pipeline._is_steered = False

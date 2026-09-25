@@ -1,6 +1,6 @@
 [project]
 name            = "steerability"
-version         = "0.5.1"
+version         = "0.5.2"
 description     = "Steerability Toolkit"
 readme          = "README.md"
 license         = { text = "Apache-2.0" }

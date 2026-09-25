@@ -154,7 +154,6 @@ class ProviderOptions:
             raise ValueError(f"seed_scope must be 'item' or 'dispatch'; got {self.seed_scope!r}.")
 
 
-@modelapi(name="steerability")
 class SteeringPipelineModelAPI(ModelAPI):
     """Generation-only Inspect `ModelAPI` over an in-process steered `SteeringPipeline`.
 
@@ -547,6 +546,12 @@ class SteeringPipelineModelAPI(ModelAPI):
         self._collator.close()
 
 
+@modelapi(name="steerability")
+def steerability_provider() -> type[SteeringPipelineModelAPI]:
+    """The registered provider behind `steerability/<model_name>`."""
+    return SteeringPipelineModelAPI
+
+
 def _count_non_pad(ids: torch.Tensor | None, pad_token_id: int | None) -> int:
     """Count non-pad positions in a token-id tensor (best effort where pad equals EOS)."""
     if ids is None:
@@ -565,8 +570,10 @@ def as_inspect_model(
 ) -> Model:
     """Wrap a steered `SteeringPipeline` as an Inspect `Model`.
 
-    The pipeline is an in-process object; the model is constructed directly rather than through
-    the string registry, and renders as `steerability/<model_name>`.
+    The pipeline is an in-process object, so the provider is built with the pipeline in hand
+    rather than resolved from a model-name string. Construction goes through the registered
+    `steerability` provider factory, which attaches the registry info the `Model` reads to
+    render `steerability/<model_name>`.
 
     Args:
         pipeline: The steered pipeline to serve.
@@ -586,7 +593,7 @@ def as_inspect_model(
         UserWarning: If the tokenizer has no chat template, so prompts render to plain text and
             `adapt_messages` does not fire.
     """
-    api = SteeringPipelineModelAPI(
+    api = steerability_provider(
         model_name, pipeline=pipeline, options=options, base_seed=base_seed,
     )
     return Model(api, GenerateConfig())
