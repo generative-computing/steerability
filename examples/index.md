@@ -53,6 +53,12 @@ Algorithm notebooks demonstrate how each method (i.e., control) operates. The me
 
     :octicons-arrow-right-24: [CAST](./notebooks/algorithms/cast.ipynb)
 
+    :octicons-arrow-right-24: [CorDA-derived PCA](./notebooks/algorithms/corda_pca.ipynb)
+
+    :octicons-arrow-right-24: [S-space](./notebooks/algorithms/sspace.ipynb)
+
+    :octicons-arrow-right-24: [Linear-AcT](./notebooks/algorithms/linear_act.ipynb)
+
     :octicons-arrow-right-24: [DirectionalAblation](./notebooks/algorithms/directional_ablation.ipynb)
 
     :octicons-arrow-right-24: [ITI](./notebooks/algorithms/iti.ipynb)

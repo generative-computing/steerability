@@ -20,6 +20,7 @@ from transformers import PreTrainedModel, PreTrainedTokenizerBase
 from steerability.algorithms.core.execution.access import ModelAccess
 from steerability.algorithms.core.internals.capture import HiddenStateLocation
 from steerability.algorithms.core.internals.data import ContrastivePairs, as_contrastive_pairs
+from steerability.algorithms.core.internals.fingerprint import verify_model_fingerprint
 from steerability.algorithms.state_control.common.estimators import (
     ContrastiveDirectionEstimator,
     MeanDifferenceEstimator,
@@ -290,17 +291,10 @@ class VerifiedPrecomputed:
                     hard=True,
                 )
 
-        recorded = self.provenance.get("model_fingerprint")
-        live = getattr(layout, "model_fingerprint", None)
-        if recorded and live and recorded != live:
-            self._report(
-                f"Precomputed {self.artifact_class} artifact was produced on a different "
-                f"model (fingerprint {recorded!r} vs {live!r})."
-                + ("" if self.artifact_class == "calibrated"
-                   else " Direction artifacts may transfer across fine-tunes of one "
-                        "architecture; verify the behavior."),
-                hard=(self.artifact_class == "calibrated"),
-            )
+        verify_model_fingerprint(
+            self.provenance.get("model_fingerprint"), getattr(layout, "model_fingerprint", None),
+            artifact_class=self.artifact_class, policy=self.policy,
+        )
 
     def resolve(
         self, model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase, *, session: "SteeringSession | None" = None
