@@ -74,7 +74,7 @@ class TestOfflineEngine:
         output = results[0].output
         assert output.output_ids.shape[0] == 1
         assert output.output_ids.shape[1] > 0
-        assert output.finish_reason in ("stop", "eos", "length")
+        assert output.finish_reasons[0] in ("stop", "eos", "length")
 
     def test_greedy_parity_with_hf(self, engine_backend):
         tokenizer = _tokenizer()
@@ -101,7 +101,7 @@ class TestOfflineEngine:
             )
         output = results[0].output
         decoded = engine_backend.tokenizer.decode(output.output_ids[0], skip_special_tokens=True)
-        if output.finish_reason == "stop":
+        if output.finish_reasons[0] == "stop":
             assert "b" in decoded  # ids returned as generated, stop text included
 
     def test_prompt_logprob_scoring(self, engine_backend):

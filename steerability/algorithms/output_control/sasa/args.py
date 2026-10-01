@@ -11,8 +11,9 @@ class SASAArgs(BaseArgs):
     """Arguments for `SASA` (subspace-margin guided sampling)."""
 
     beta: float = field(
-        default=0.0,
-        metadata={"help": "Scaling coefficient for value redistribution."},
+        default=500.0,
+        metadata={"help": "Scale of the softmax-normalized margins added to the candidate logits (the paper's beta). "
+                          "The default is the value of the paper's main results; 0 reproduces the base decoding."},
     )
     wv_path: str | None = field(
         default=None,
@@ -54,15 +55,18 @@ class SASAArgs(BaseArgs):
         metadata={"help": "Candidate count for candidate_policy='top_k' (top_k >= 1)."},
     )
     max_candidates: int | None = field(
-        default=None,
-        metadata={"help": "Optional clamp on the candidate set (top-N by score) to bound the per-step model "
-                          "forward. None (default) leaves the policy's candidate set unclamped."}
+        default=20,
+        metadata={"help": "Clamp on the candidate set (top-N by score) that bounds the per-step model forward. "
+                          "None leaves the policy's candidate set unclamped, which under 'surviving' can be the "
+                          "whole vocabulary."}
     )
 
     # validation
     def __post_init__(self):
         if self.beta < 0:
             raise ValueError("'beta' must be non-negative.")
+        if self.max_candidates is not None and (not isinstance(self.max_candidates, int) or self.max_candidates < 1):
+            raise ValueError(f"'max_candidates' must be a positive integer or None, got {self.max_candidates!r}.")
         if self.wv_path is not None and not (
             os.path.isdir(self.wv_path) or self.wv_path.endswith((".pt", ".probe"))
         ):

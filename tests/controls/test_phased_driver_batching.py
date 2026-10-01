@@ -157,7 +157,7 @@ class TestCeiling:
             messages=SHORT_CONVERSATION, return_output=True, max_new_tokens=4, do_sample=False, **FIXED_LENGTH,
         )
         assert output.output_ids.size(1) == 4
-        assert output.finish_reason == "length"
+        assert output.finish_reasons[0] == "length"
         assert len(calls) == 1  # the second generated phase issued no session call
 
     def test_ceiling_bounds_the_total_continuation(self):
@@ -168,7 +168,7 @@ class TestCeiling:
             messages=SHORT_CONVERSATION, return_output=True, max_new_tokens=6, do_sample=False, **FIXED_LENGTH,
         )
         assert output.output_ids.size(1) == 6  # 3 generated, 1 fixed, 2 generated under the ceiling
-        assert output.finish_reason == "length"
+        assert output.finish_reasons[0] == "length"
 
     def test_plan_completing_under_the_ceiling(self):
         pipeline, _ = _pipeline([
@@ -178,7 +178,7 @@ class TestCeiling:
             messages=SHORT_CONVERSATION, return_output=True, max_new_tokens=10, do_sample=False, **FIXED_LENGTH,
         )
         assert output.output_ids.size(1) == 5
-        assert output.finish_reason != "length"
+        assert output.finish_reasons[0] != "length"
 
     def test_fixed_phase_crossing_the_ceiling_is_appended_whole(self, monkeypatch):
         pipeline, tokenizer = _pipeline([
@@ -189,7 +189,7 @@ class TestCeiling:
             messages=SHORT_CONVERSATION, return_output=True, max_new_tokens=2, do_sample=False, **FIXED_LENGTH,
         )
         assert output.output_ids[0].tolist() == _ids(tokenizer, "the cat sat on")
-        assert output.finish_reason == "length"
+        assert output.finish_reasons[0] == "length"
         assert calls == []  # the ceiling is reached, so the generated phase is skipped
 
     def test_row_at_the_ceiling_is_length_when_pad_equals_eos(self):
@@ -212,8 +212,8 @@ class TestCeiling:
         )
         assert long_row.output_ids.size(1) > 4
         assert len(_strip_pads(short_row.output_ids[0], tokenizer.pad_token_id)) == 4
-        assert long_row.finish_reason == "length"
-        assert short_row.finish_reason == "length"
+        assert long_row.finish_reasons[0] == "length"
+        assert short_row.finish_reasons[0] == "length"
 
     def test_beam_search_with_several_candidates_raises(self):
         pipeline, _ = _pipeline([PhasedDecoding(plan=[{"generate": {"budget": 2}}])])
@@ -427,7 +427,7 @@ class TestRoutedDecoding:
         for output in outputs:
             assert output.output_ids.size(1) == 3
             assert output.output_ids[0, 0].item() == the_id
-            assert output.finish_reason == "length"
+            assert output.finish_reasons[0] == "length"
 
     def test_canned_response_longer_than_the_ceiling_is_returned_whole(self, monkeypatch):
         text = "the cat sat on the mat and the dog ran fast"
@@ -441,7 +441,7 @@ class TestRoutedDecoding:
             messages=SHORT_CONVERSATION, return_output=True, max_new_tokens=4, **FIXED_LENGTH,
         )
         assert output.output_ids[0].tolist() == _ids(tokenizer, text)
-        assert output.finish_reason == "length"
+        assert output.finish_reasons[0] == "length"
         assert calls == []
 
     def test_max_rollouts_counts_the_longest_plan(self):
@@ -476,7 +476,7 @@ class _PaddingSession:
             row = torch.tensor([ids + [pad] * (width - len(ids))])
             results.append(ItemResult(index=index, output=Output(
                 output_ids=row, adapted_input_ids=items[index].prompt.token_ids,
-                finish_reason=reason, finish_reasons=(reason,),
+                finish_reasons=(reason,),
             )))
         return results
 

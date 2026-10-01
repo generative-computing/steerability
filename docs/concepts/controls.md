@@ -46,13 +46,13 @@ self-consistency), automatic prompting methods, and prompt routing. The toolkit 
       makes the examples a query receives independent of call order (not accepted with a selector instance).
     - *Backends*: HF, vLLM.
 - `PRewrite` ([API reference](../reference/algorithms/input_control/prewrite.md), [notebook](../examples/notebooks/algorithms/prewrite.ipynb))
-    - *Description*: RL-trained instruction rewriter ([Kong et al. 2024](https://arxiv.org/abs/2401.08189)) supporting a greedy "inference" strategy and a best-of-K "search" strategy. The rewriter can optionally be trained with GRPO using a scorer-in-the-loop reward (apply the rewrite with the frozen task model over a dev set and score each response with a per-row `SampleScorer`, the paper's reward).
+    - *Description*: RL-trained instruction rewriter ([Kong et al. 2024](https://arxiv.org/abs/2401.08189)) supporting a greedy "inference" strategy and a best-of-K "search" strategy. The rewriter can optionally be trained with GRPO using a scorer-in-the-loop reward (apply the rewrite with the frozen task model over a dev set and score each response with a per-row `SampleScorer`, the paper's reward). The optimized instruction is placed before the content of the leading system message (separated by a blank line), and a chat without one receives it as its system message.
     - *Backends*: HF, vLLM.
 - `CPO` ([API reference](../reference/algorithms/input_control/cpo.md), [notebook](../examples/notebooks/algorithms/cpo.ipynb))
-    - *Description*: causal prompt optimization ([Chen et al. 2026](https://arxiv.org/abs/2602.01711)), i.e., offline causal reward training (Double ML over PCA-reduced embeddings) plus per-query tree search.
-    - *Backends*: HF, vLLM (requires `prompt_lm`). Without `prompt_lm` the pipeline's loaded model is bound as the proposer, which is HF-only.
+    - *Description*: causal prompt optimization ([Chen et al. 2026](https://arxiv.org/abs/2602.01711)), i.e., offline causal reward training (Double ML over PCA-reduced embeddings) plus per-query tree search. The chosen prompt is placed before the content of the leading system message (separated by a blank line), and a chat without one receives it as its system message.
+    - *Backends*: HF, vLLM (requires `prompt_lm` with its `prompt_tokenizer`). Without `prompt_lm` the pipeline's loaded model is bound as the proposer, which is HF-only.
 - `GEPA` ([API reference](../reference/algorithms/input_control/gepa.md), [notebook](../examples/notebooks/algorithms/gepa.ipynb))
-    - *Description*: reflective genetic prompt evolution ([Agrawal et al. 2025](https://arxiv.org/abs/2507.19457)), single-module variant.
+    - *Description*: reflective genetic prompt evolution ([Agrawal et al. 2025](https://arxiv.org/abs/2507.19457)), single-module variant. The optimized instruction is placed before the content of the leading system message (separated by a blank line), and a chat without one receives it as its system message.
     - *Backends*: HF, vLLM.
 - `SystemPrompt` ([API reference](../reference/algorithms/input_control/system_prompt.md), [notebook](../examples/notebooks/algorithms/system_prompt.ipynb))
     - *Description*: sets or merges the leading system message of a chat, prepending to, appending to, or replacing it (the default is to prepend ahead of an existing system prompt), always producing exactly one system message.
@@ -134,7 +134,7 @@ patching. The toolkit implements:
     - *Description*: activation addition[@turner2023activation], adding a positional steering vector from a single contrast pair to the residual stream at one layer.
     - *Backends*: HF (positional injection has no intervention-spec form).
 - `ActivationAdapter` ([API reference](../reference/algorithms/state_control/activation_adapter.md), [notebook](../examples/notebooks/algorithms/generics/activation_adapter.ipynb))
-    - *Description*: the composable activation-steering atom, wiring together the shared `common` components (a transform that contains its own artifact, a selector, a gate, and a token scope) so that a recipe is assembled without writing a new control class.
+    - *Description*: the composable activation-steering atom, wiring together the shared `common` components (a transform that contains its own artifact, a selector, a gate, and a token scope) so that a recipe is assembled without writing a new control class. With `require_coverage=False`, a behavior layer that the transform has no direction for is hooked and passes its hidden states through unchanged (the default raises `ValueError` at `steer()`).
     - *Backends*: HF, vLLM (kind-conditional, i.e., the configured transform, modifier chain, and gate readout/rule must all have wire forms, and a `CallableReadout` gate is HF-only).
 - `AngularSteering` ([API reference](../reference/algorithms/state_control/angular_steering.md), [notebook](../examples/notebooks/algorithms/angular_steering.ipynb))
     - *Description*: angular steering[@vu2025angular], rotating the hidden state within a per-layer 2D plane (feature axis + companion axis) to a target angle while leaving the orthogonal complement untouched. It is norm-preserving by construction, and vector addition and directional ablation are special cases.
@@ -243,7 +243,7 @@ The toolkit implements the following step-level controls:
     - *Description*: the config-first generic over the distribution shape (mix weighted log-prob sources). DExperts, contrastive decoding, and proxy-tuning are assignments of its config.
     - *Backends*: HF (model-backed per-step logit math is in-process only).
 - `StoppingRules` ([API reference](../reference/algorithms/output_control/stopping_rules.md), [notebook](../examples/notebooks/algorithms/generics/stopping_rules.ipynb))
-    - *Description*: the config-first generic for stop rules, i.e., substring / token / budget stops as pipeline configuration rather than a class. Since its stops merge into the call's generation parameters, rows halted by them report `finish_reason="stop"` and the pipeline truncates decoded text at the stop string.
+    - *Description*: the config-first generic for stop rules, i.e., substring / token / budget stops as pipeline configuration rather than a class. Since its stops merge into the call's generation parameters, rows halted by them report `"stop"` in `Output.finish_reasons` and the pipeline truncates decoded text at the stop string.
     - *Backends*: HF, vLLM (stops lower to sampling parameters).
 
 and the following decoding drivers:
@@ -255,7 +255,7 @@ and the following decoding drivers:
     - *Description*: best-of-N sampling / re-ranking[@nakano2021webgpt], sampling N full continuations and returning the highest-scoring one under a sequence scorer (pairing with a majority-vote scorer recovers self-consistency). Note that the control's `n` sets the number of samples in one search, while the call's `n` (`num_return_sequences`) sets the number of searches per prompt.
     - *Backends*: HF, vLLM.
 - `BudgetForcing` ([API reference](../reference/algorithms/output_control/budget_forcing.md), [notebook](../examples/notebooks/algorithms/budget_forcing.ipynb))
-    - *Description*: test-time thinking-length control[@muennighoff2025s1], capping each thinking segment, optionally appending extensions ("Wait") to prolong reasoning, then forcing the closing think tag before answering. `end_think_token_ids` sets the thinking-phase boundary by token id, for a closing-think delimiter that is a special token. Since the thinking phases count against the call's `max_new_tokens`, a candidate whose thinking reaches the ceiling ends without the forced tag or an answer.
+    - *Description*: test-time thinking-length control[@muennighoff2025s1], capping each thinking segment, optionally appending extensions ("Wait") to prolong reasoning, then forcing the closing think tag before answering. An extension applies only when the previous thinking segment was cut off at its budget. The closing tag is never doubled, since it is appended only when the model did not close its thinking itself. `end_think_token_ids` sets the thinking-phase boundary by token id, for a closing-think delimiter that is a special token. Since the thinking phases count against the call's `max_new_tokens`, a candidate whose thinking reaches the ceiling ends without the forced tag or an answer.
     - *Backends*: HF, vLLM.
 - `RoutedDecoding` ([API reference](../reference/algorithms/output_control/routed_decoding.md), [notebook](../examples/notebooks/recipes/routed_decoding/routed_decoding.ipynb))
     - *Description*: a decoding driver that routes each row to a response plan via a `Router` over a [`ProbeSet`](probes.md)'s readings, and executes the matched plan (canned response, disclaimer prefix, or plain generation). It sits beside `PhasedDecoding` and `SearchDecoding`.

@@ -714,7 +714,8 @@ class PASTA(HookControl):
                 to the prompt.
             scale_constant: A tensor containing `log(alpha)`, bound into the hook when it is built. Each
                 hook set therefore uses its own strength, and a profiling strength does not affect the
-                control's own `alpha`.
+                control's own `alpha`. The hook moves it to the device of the attention mask, which can
+                differ from the device of the model's first parameter under a multi-GPU `device_map`.
             layer_idx: Decoder layer index of the hooked attention module. It is used to read this
                 layer's cached key length when the call passes no `cache_position` (transformers v5).
 
@@ -770,6 +771,7 @@ class PASTA(HookControl):
                 hidden_states.new_full((), torch.finfo(hidden_states.dtype).min),
             )
         attention_mask = attention_mask.to(hidden_states.dtype).contiguous().clone()
+        scale_constant = scale_constant.to(attention_mask.device)
         if attention_mask.size(1) == 1:
             num_heads = self._num_heads_by_layer[layer_idx]
             attention_mask = attention_mask.expand(-1, num_heads, -1, -1).contiguous()

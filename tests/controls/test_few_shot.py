@@ -556,6 +556,9 @@ def test_render_path_parity():
     captured: dict[str, str] = {}
 
     class _StubTokenizer:
+        pad_token_id = None
+        bos_token_id = None
+
         def encode(self, text: str, add_special_tokens: bool = False):
             captured["text"] = text
             # return a dummy non-empty token sequence; values don't matter for this test
@@ -803,3 +806,21 @@ def test_system_mode_changes_config_identity():
         return pipeline.to_spipe(freeze=False).config_id
 
     assert config_id("append") != config_id("insert")
+
+
+def test_no_template_adapt_inserts_after_leading_pads_and_bos():
+    from tests.utils.tiny_models import wordlevel_tokenizer
+
+    tokenizer = wordlevel_tokenizer()
+    pad = tokenizer.pad_token_id
+    long_ids = tokenizer("the cat sat on the mat")["input_ids"]
+    short_ids = tokenizer("dog ran")["input_ids"]
+    batch = torch.tensor([long_ids, [pad] * (len(long_ids) - len(short_ids)) + short_ids])
+
+    few_shot = FewShot(directive="attention")
+    few_shot.steer(tokenizer=tokenizer)
+    adapted = [tokenizer.convert_ids_to_tokens(row) for row in few_shot.adapt(batch).tolist()]
+    assert adapted == [
+        ["<s>", "attention", "the", "cat", "sat", "on", "the", "mat"],
+        ["<pad>"] * 4 + ["<s>", "attention", "dog", "ran"],
+    ]

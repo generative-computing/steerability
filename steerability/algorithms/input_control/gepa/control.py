@@ -56,7 +56,11 @@ class GEPA(InputControl):
     and feedback internally; there is no separate Evaluator object.
 
     `adapt_messages()` / `adapt()` inject the optimized instruction as the system prompt at
-    inference time. Memory: `TextMemory(slots={"instruction": best_instruction})`.
+    inference time. On chat input, the instruction is placed before the content of the leading
+    system message, separated by a blank line, and a chat without a leading system message
+    receives the instruction as its system message. On token input, the prompt is re-templated
+    with the instruction as its system message. Memory:
+    `TextMemory(slots={"instruction": best_instruction})`.
 
     `reflection_lm` is optional and defaults to the task model. A separate, stronger reflection
     LM can help when the task model is small, but is not required.
@@ -136,7 +140,7 @@ class GEPA(InputControl):
         self.tokenizer = tokenizer
         if self.args.memory is not None:
             self.memory = self.args.memory
-            self._formatter = SystemPromptFormatter()
+            self._formatter = SystemPromptFormatter(mode="prepend")
             return
 
         rng = random.Random(self.seed) if self.seed is not None else random.Random()
@@ -228,7 +232,7 @@ class GEPA(InputControl):
 
         best = pool.candidates[pool.best_index()]
         self.memory = TextMemory(slots={"instruction": best})
-        self._formatter = SystemPromptFormatter()
+        self._formatter = SystemPromptFormatter(mode="prepend")
 
     def _run(
         self,

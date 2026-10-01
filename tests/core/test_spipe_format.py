@@ -116,6 +116,19 @@ def test_zip_determinism(tmp_path):
     assert (tmp_path / "a.spipe").read_bytes() == (tmp_path / "b.spipe").read_bytes()
 
 
+def test_pack_enforces_the_size_cap_before_writing(tmp_path, monkeypatch):
+    import steerability.spipe.format as format_module
+
+    src = tmp_path / "bundle"
+    src.mkdir()
+    (src / "spipe.json").write_text("{}")
+    (src / "payload.bin").write_bytes(b"x" * 64)
+    monkeypatch.setattr(format_module, "SIZE_CAP_BYTES", 32)
+    with pytest.raises(SpipeFormatError, match="over the 32-byte cap"):
+        pack_zip(src, tmp_path / "too_big.spipe")
+    assert not (tmp_path / "too_big.spipe").exists()
+
+
 def test_zip_slip_rejected(tmp_path):
     evil = tmp_path / "evil.spipe"
     with zipfile.ZipFile(evil, "w") as archive:

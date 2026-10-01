@@ -45,13 +45,16 @@ class RoutedDecoding(PhasedDriver):
     `ProbeSet` records a model that differs from the pipeline's. With
     `allow_model_mismatch=True`, only the model type must match.
 
-    The probe pass runs inside `auxiliary_pass(aligned=True)`, and its capture hooks are
-    removed before decoding begins. Behavior transforms from other state controls in the
-    pipeline apply to the pass when their scope includes prompt positions, and probe scores
-    are measured under that steering. The condition scorers, gates, and position counters of
-    those controls ignore the pass. A row routed to `Respond` requires one forward pass over
-    the prompt and no decode steps. Any other row requires one forward pass over the prompt
-    more than the default driver.
+    Behavior transforms from other state controls in the pipeline apply to the probe pass when
+    their scope includes prompt positions, and probe scores are measured under that steering.
+    On the Hugging Face backend the pass runs on the loaded model inside
+    `auxiliary_pass(aligned=True)`, under the generation's hooks, and its capture hooks are
+    removed before decoding begins. The condition scorers, gates, and position counters of the
+    other controls ignore the pass. On the offline vLLM engine the pass is a capture request
+    that carries the generation's intervention spec, i.e., the spec the driver's rollouts carry,
+    which contains no conditional gates. A row routed to `Respond` requires one forward pass
+    over the prompt and no decode steps. Any other row requires one forward pass over the
+    prompt more than the default driver.
 
     The following `runtime_kwargs` are accepted:
 

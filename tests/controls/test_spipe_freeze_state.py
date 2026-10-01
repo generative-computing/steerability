@@ -11,6 +11,7 @@ from steerability.algorithms.core.steering_pipeline import SteeringPipeline
 from steerability.algorithms.state_control.caa.control import CAA
 from steerability.algorithms.state_control.cast.control import CAST
 from steerability.algorithms.state_control.common.fit_specs import ConditionSearchSpec
+from steerability.algorithms.state_control.common.steering_vector import SteeringVector
 from steerability.spipe import SPipe
 
 LLAMA = "hf-internal-testing/tiny-random-LlamaForCausalLM"
@@ -99,6 +100,27 @@ def test_cast_lowers_to_activation_adapter(tmp_path, llama):
     rebuilt.model, rebuilt.tokenizer = model, tokenizer
     steer_quietly(rebuilt)
     assert rebuilt.generate(text="math question one please", max_new_tokens=6, do_sample=False) == reference
+
+
+def test_cast_with_partial_behavior_coverage_reloads(tmp_path, llama):
+    model, tokenizer = llama
+    hidden = model.config.hidden_size
+    generator = torch.Generator().manual_seed(4)
+    vector = SteeringVector(model_type="llama", directions={1: torch.randn(1, hidden, generator=generator)})
+    cast = CAST(behavior_vector=vector, behavior_layer_ids=[0, 1], behavior_vector_strength=4.0)
+    pipeline = SteeringPipeline(model=model, tokenizer=tokenizer, controls=[cast], model_name_or_path=LLAMA)
+    steer_quietly(pipeline)
+    reference = pipeline.generate(text="Hello there", max_new_tokens=6, do_sample=False)
+
+    spipe = pipeline.to_spipe()
+    resolved_args = spipe.manifest["controls"][0]["resolved"]["args"]
+    assert resolved_args["layer_ids"] == [0, 1]
+    assert resolved_args["require_coverage"] is False
+
+    rebuilt = SPipe.load(spipe.save(tmp_path / "cast_partial.spipe")).pipeline()
+    rebuilt.model, rebuilt.tokenizer = model, tokenizer
+    steer_quietly(rebuilt)
+    assert rebuilt.generate(text="Hello there", max_new_tokens=6, do_sample=False) == reference
 
 
 def test_iti_and_act_add_same_class(tmp_path, llama):

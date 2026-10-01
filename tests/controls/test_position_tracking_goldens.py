@@ -1,8 +1,9 @@
 """Golden token-id sequences for the `TransformHookRuntime`-backed state controls.
 
-Pins the greedy generations of `ITI`, `AngularSteering`, and `ActAdd` on the hub-free tiny
+Pins the greedy generations of `ITI`, `AngularSteering`, `ActAdd`, and `CAA` on the hub-free tiny
 fixtures, in both position-tracking modes, so any change to position tracking is caught as a
-token-level difference rather than a merely approximate one.
+token-level difference rather than a merely approximate one. A left-padded batch of the two prompt
+lengths, decoded one row at a time under `seed_scope="item"`, reproduces the same goldens.
 
 The literals are produced by the controls themselves; regenerate with
 `STEERABILITY_CAPTURE_GOLDENS=1 pytest tests/controls/test_position_tracking_goldens.py -s` and paste
@@ -18,6 +19,7 @@ import torch
 from steerability.algorithms.core.steering_pipeline import SteeringPipeline
 from steerability.algorithms.state_control.act_add.control import ActAdd
 from steerability.algorithms.state_control.angular_steering.control import AngularSteering
+from steerability.algorithms.state_control.caa.control import CAA
 from steerability.algorithms.state_control.common.steering_vector import SteeringVector
 from steerability.algorithms.state_control.iti.control import ITI
 from tests.utils.runtime_helpers import strip_clock
@@ -69,10 +71,17 @@ def _make_act_add():
     return ActAdd(steering_vector=sv, layer_id=1, multiplier=1.0, alignment=1)
 
 
+def _make_caa():
+    g = torch.Generator().manual_seed(11)
+    sv = SteeringVector(model_type="llama", directions={2: 4 * torch.randn(1, HIDDEN, generator=g)})
+    return CAA(steering_vector=sv, layer_id=2, multiplier=1.0, token_scope="after_prompt")
+
+
 CONTROL_FACTORIES = {
     "iti": _make_iti,
     "angular": _make_angular,
     "act_add": _make_act_add,
+    "caa": _make_caa,
 }
 
 # recorded token-id sequences (control_name, prompt_len) -> list[int]
@@ -83,6 +92,8 @@ GOLDENS: dict[tuple[str, int], list[int]] = {
     ("angular", 4): [29, 66, 70, 14, 66, 70, 14, 66],
     ("act_add", 1): [29, 45, 27, 33, 29, 66, 97, 38],
     ("act_add", 4): [29, 66, 70, 91, 10, 82, 10, 95],
+    ("caa", 1): [29, 22, 22, 22, 22, 22, 22, 22],
+    ("caa", 4): [29, 22, 22, 22, 22, 22, 22, 22],
 }
 
 
@@ -138,3 +149,33 @@ def test_position_tracking_goldens(control_name, prompt_len, strip):
         f"  expected: {expected}\n"
         f"  produced: {produced}"
     )
+
+
+@pytest.mark.parametrize("strip", [False, True], ids=["clock", "fallback"])
+@pytest.mark.parametrize("control_name", list(CONTROL_FACTORIES))
+def test_padded_rows_under_item_seeds_match_their_goldens(control_name, strip):
+    """Each row of a left-padded batch decoded on its own reproduces the golden of its unpadded prompt."""
+    torch.manual_seed(0)
+    model = tiny_llama(num_layers=LAYERS, hidden=HIDDEN, heads=HEADS)
+    tokenizer = wordlevel_tokenizer()
+
+    control = CONTROL_FACTORIES[control_name]()
+    if strip:
+        _strip_clock_from_hooks(control)
+    pipeline = SteeringPipeline(controls=[control], model=model, tokenizer=tokenizer)
+    pipeline.steer()
+
+    pad = tokenizer.pad_token_id
+    input_ids = torch.tensor([[pad, pad, pad, 3], [3, 4, 5, 6]])
+    attention_mask = torch.tensor([[0, 0, 0, 1], [1, 1, 1, 1]])
+    out = pipeline.generate(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        max_new_tokens=MAX_NEW_TOKENS,
+        do_sample=False,
+        eos_token_id=None,
+        seed=1,
+        seed_scope="item",
+    )
+    assert out[0].tolist() == GOLDENS[(control_name, 1)]
+    assert out[1].tolist() == GOLDENS[(control_name, 4)]

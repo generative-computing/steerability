@@ -26,7 +26,7 @@ from steerability.algorithms.core.utils.generate_call import generate_call
 from steerability.algorithms.output_control.base import stack_generate_kwargs
 from steerability.algorithms.output_control.common.criteria import StopOnSubstring, StopOnTokens
 from steerability.algorithms.state_control.common.hook_utils import get_model_layer_list
-from steerability.utils.tokenization import infer_attention_mask_from_ids, to_left_pad
+from steerability.utils.tokenization import infer_attention_mask_from_ids, strip_leading_pads, to_left_pad
 
 if TYPE_CHECKING:
     from steerability.backends.huggingface.backend import HFBackend
@@ -183,8 +183,19 @@ class ExclusiveSession:
             model_ref=getattr(model, "name_or_path", None),
         )
 
-    def _resolve_prompt_tensors(self, prompt: PreparedPrompt) -> tuple[torch.Tensor, torch.Tensor]:
-        """Token ids and attention mask for one prompt, on the model device."""
+    def _resolve_prompt_tensors(
+        self, prompt: PreparedPrompt, *, drop_leading_pads: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return the token ids and attention mask of one prompt, on the model device.
+
+        Args:
+            prompt: The prompt to resolve.
+            drop_leading_pads: Whether to remove the leading positions that the attention mask
+                leaves out, so the prompt starts at its first real token.
+
+        Returns:
+            The `[1, seq_len]` token ids and the attention mask of the same shape.
+        """
         resolved = prompt.resolve_token_ids(self.tokenizer)
         device = self.model.device
         input_ids = resolved.token_ids.to(device)
@@ -196,6 +207,8 @@ class ExclusiveSession:
             else:
                 attention_mask = torch.ones_like(input_ids, dtype=torch.long)
         attention_mask = attention_mask.to(dtype=input_ids.dtype, device=device)
+        if drop_leading_pads:
+            input_ids, attention_mask = strip_leading_pads(input_ids, attention_mask)
         return input_ids, attention_mask
 
     def _compose_entry_stacks(
@@ -387,7 +400,9 @@ class ExclusiveSession:
         When all items have the same state and output entry objects and the same effective seed
         (or no seed), they run in one batched `model.generate` call. Their prompts are
         right-padded to a common length and then left-packed together. Otherwise, the items
-        decode one at a time. Caller-supplied `logits_processor` and `stopping_criteria` entries
+        decode one at a time. Each item of a multi-item call then decodes without the leading pad
+        positions that its attention mask leaves out, since those positions only align the item
+        with the other rows of the call. Caller-supplied `logits_processor` and `stopping_criteria` entries
         in `params.extra` are appended after the items' own contributions. The normalized stop
         fields become stop criteria that apply to the tokens after the prompt.
 
@@ -453,7 +468,7 @@ class ExclusiveSession:
 
         results: list[ItemResult] = []
         for index, item in enumerate(items):
-            input_ids, attention_mask = self._resolve_prompt_tensors(item.prompt)
+            input_ids, attention_mask = self._resolve_prompt_tensors(item.prompt, drop_leading_pads=len(items) > 1)
             processors, criteria = self._compose_entry_stacks(
                 item.output_entries, extra_processors=user_processors, extra_criteria=user_criteria,
             )
@@ -482,7 +497,6 @@ class ExclusiveSession:
                 output=Output(
                     output_ids=new_tokens,
                     adapted_input_ids=input_ids,
-                    finish_reason=reasons[0],
                     finish_reasons=tuple(reasons),
                 ),
             ))
@@ -538,7 +552,6 @@ class ExclusiveSession:
                 output=Output(
                     output_ids=item_rows,
                     adapted_input_ids=input_ids[index:index + 1],
-                    finish_reason=reasons[0],
                     finish_reasons=tuple(reasons),
                 ),
             ))

@@ -4,7 +4,7 @@ from __future__ import annotations
 import torch
 from transformers import PreTrainedTokenizerBase
 
-from steerability.algorithms.input_control.common.formatters.base import BaseFormatter
+from steerability.algorithms.input_control.common.formatters.base import BaseFormatter, insert_prefix_ids
 from steerability.algorithms.input_control.common.memory.base import Memory
 
 _TARGETS = frozenset({"first_user", "last_user", "all_user"})
@@ -22,8 +22,8 @@ class PrependTextFormatter(BaseFormatter):
 
     When a chat contains no user-role message, all targets append a new `{"role": "user", "content": text}`
     turn. Message dicts are copied, so the caller's structures are not mutated. When operating on token ids,
-    the encoded text is prefixed to each sequence in the batch; token streams carry no turn structure, so
-    `target` does not apply on the `apply_to_ids` path.
+    the encoded text is inserted into each sequence of the batch after its leading pad tokens and its BOS
+    token; token streams carry no turn structure, so `target` does not apply on the `apply_to_ids` path.
 
     Args:
         separator: String inserted between the prepended text and the existing message content.
@@ -92,6 +92,4 @@ class PrependTextFormatter(BaseFormatter):
         prefix_ids = tokenizer.encode(text + self.separator, add_special_tokens=False)
         if input_ids.ndim == 1:
             input_ids = input_ids.unsqueeze(0)
-        prefix = torch.tensor(prefix_ids, dtype=input_ids.dtype, device=input_ids.device)
-        prefix = prefix.unsqueeze(0).expand(input_ids.size(0), -1)
-        return torch.cat([prefix, input_ids], dim=1)
+        return insert_prefix_ids(input_ids, prefix_ids, tokenizer)

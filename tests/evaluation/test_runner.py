@@ -183,6 +183,34 @@ class TestResume:
         _runner({"baseline": []}, save_dir=tmp_path).run()
         _runner({"baseline": []}, save_dir=tmp_path).run()  # no refusal
 
+    def test_first_run_records_the_protocol(self, tiny_base, tmp_path):
+        import json
+
+        _runner({"baseline": []}, seed=7, save_dir=tmp_path, generate_defaults={"temperature": 0}).run()
+        protocol = json.loads((tmp_path / "protocol.json").read_text())
+        assert protocol["seed"] == 7
+        assert protocol["generate_defaults"] == {"temperature": 0}
+        assert set(protocol) == {
+            "toolkit_version", "provider_options", "seed_scope", "generate_defaults", "hf_model_kwargs", "seed",
+            "fit", "backend",
+        }
+
+    def test_changed_protocol_is_refused(self, tiny_base, tmp_path):
+        import torch
+
+        _runner({"baseline": []}, save_dir=tmp_path, hf_model_kwargs={"torch_dtype": torch.float16}).run()
+        second = _runner({"baseline": []}, save_dir=tmp_path, hf_model_kwargs={"torch_dtype": torch.bfloat16})
+        with pytest.raises(ValueError, match=r"different protocol \(hf_model_kwargs differ"):
+            second.run()
+
+    def test_logs_without_a_protocol_are_refused(self, tiny_base, tmp_path):
+        log_dir = tmp_path / "inspect_logs" / "baseline" / "trial_0" / "capability"
+        log_dir.mkdir(parents=True)
+        (log_dir / "one.eval").write_bytes(b"")
+        with pytest.raises(ValueError, match="no protocol.json"):
+            _runner({"baseline": []}, save_dir=tmp_path).run()
+        assert SUITE_CALLS == []
+
     def test_raised_num_trials_resumes(self, tiny_base, tmp_path):
         _runner({"baseline": []}, num_trials=1, save_dir=tmp_path).run()
         _runner({"baseline": []}, num_trials=2, save_dir=tmp_path).run()  # completes only the missing trial

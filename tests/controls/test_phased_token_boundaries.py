@@ -3,16 +3,19 @@
 A special-token delimiter is stripped by `skip_special_tokens=True`, so a stop string holding one
 never fires on vLLM; `until_token_ids` is the portable form that lowers to `stop_token_ids` on
 every backend. These tests cover the Hugging Face stop, the session-path lowering to
-`stop_token_ids` (rendered into vLLM sampling args), the both-boundaries case, plan validation, and
-`BudgetForcing.end_think_token_ids`.
+`stop_token_ids` (rendered into vLLM sampling args), the both-boundaries case, plan validation,
+`BudgetForcing.end_think_token_ids`, and the stop cause each `Generated` phase records.
 """
 import pytest
 import torch
+from transformers import LogitsProcessorList, StoppingCriteriaList
 
+from steerability.algorithms.core.execution.payloads import ItemResult
+from steerability.algorithms.core.output import Output
 from steerability.algorithms.core.steering_pipeline import SteeringPipeline
 from steerability.algorithms.output_control.base import OutputControl
 from steerability.algorithms.output_control.budget_forcing.control import BudgetForcing
-from steerability.algorithms.output_control.common.drivers.phased import Generated
+from steerability.algorithms.output_control.common.drivers.phased import Fixed, Generated, PhasedDriver
 from steerability.algorithms.output_control.phased_decoding.control import PhasedDecoding, _parse_phase
 from steerability.backends.vllm import render_vllm_sampling_args
 from tests.utils.runtime_helpers import script_session_generate
@@ -169,3 +172,120 @@ class TestBudgetForcingTokenBoundary:
     def test_args_reject_string_token_ids(self):
         with pytest.raises(ValueError, match="end_think_token_ids"):
             BudgetForcing(max_thinking_tokens=8, end_think_token_ids="42")
+
+
+class _ScriptedReasonSession:
+    """A session double that returns one scripted continuation and finish reason per item."""
+
+    def __init__(self, tokenizer, continuation: list[int], reason: str | None):
+        self.tokenizer = tokenizer
+        self._continuation = continuation
+        self._reason = reason
+
+    def generate(self, items, params):
+        return [
+            ItemResult(index=index, output=Output(
+                output_ids=torch.tensor([self._continuation]), adapted_input_ids=item.prompt.token_ids,
+                finish_reasons=(self._reason,),
+            ))
+            for index, item in enumerate(items)
+        ]
+
+
+class _StopRecordingDriver(PhasedDriver):
+    """A driver whose plan runs one `Generated` phase and records each sequence's final stop cause.
+
+    The causes are read when the output is assembled, since a sequence that reaches
+    `max_new_tokens` applies no later plan entry that could observe `"length"`.
+    """
+
+    def __init__(self, phase: Generated):
+        super().__init__()
+        self._phase = phase
+        self.last_stops: list = []
+
+    def plan(self, prompt_text, params):
+        return [self._phase]
+
+    def _assemble(self, input_ids, rows, sequences):
+        self.last_stops = [sequence.last_stop for sequence in sequences]
+        return super()._assemble(input_ids, rows, sequences)
+
+
+class TestStopCause:
+    @pytest.fixture
+    def tokenizer(self):
+        return reasoning_tag_tokenizer(special_tags=("<end>",), ordinary_tags=("</think>",))
+
+    @pytest.mark.parametrize(
+        "phase,words,reason,max_new_tokens,expected",
+        [
+            (Generated(until="</think>", budget=8), ["thought", "</think>"], "stop", 16, "until"),
+            (Generated(until_token_ids=(-1,), budget=8), ["thought", "<end>"], "stop", 16, "until_token"),
+            (Generated(budget=3), ["thought"] * 3, "length", 16, "budget"),
+            (Generated(budget=8), ["thought"] * 4, "length", 4, "length"),
+            (Generated(budget=4), ["thought"] * 4, "length", 4, "length"),
+            (Generated(), ["thought"] * 4, None, 4, "length"),
+            (Generated(budget=8), ["thought", "<eos>"], "eos", 16, "eos"),
+            (Generated(budget=8), ["thought"], None, 16, "eos"),
+            (Generated(budget=2), ["thought", "<eos>"], "eos", 16, "eos"),
+        ],
+        ids=[
+            "until", "until-token", "budget", "length-below-budget", "length-at-budget", "length-no-budget",
+            "eos", "short-without-reason", "eos-at-budget",
+        ],
+    )
+    def test_last_stop_values(self, tokenizer, phase, words, reason, max_new_tokens, expected):
+        end_id = tokenizer.convert_tokens_to_ids("<end>")
+        if phase.until_token_ids == (-1,):
+            phase = Generated(until_token_ids=(end_id,), budget=phase.budget)
+        continuation = [tokenizer.convert_tokens_to_ids(word) for word in words]
+        driver = _StopRecordingDriver(phase)
+        driver.tokenizer = tokenizer
+        session = _ScriptedReasonSession(tokenizer, continuation, reason)
+        prompt = torch.tensor([[tokenizer.convert_tokens_to_ids("x")]])
+        driver.decode(
+            prompt, None, None, LogitsProcessorList(), StoppingCriteriaList(), {}, session=session,
+            max_new_tokens=max_new_tokens,
+        )
+        assert driver.last_stops == [expected]
+
+    def test_callable_entries_see_the_stream_and_the_appended_count(self, tokenizer):
+        seen = []
+
+        class _Driver(PhasedDriver):
+            def plan(self, prompt_text, params):
+                def record(state):
+                    seen.append((state.last_stop, state.appended, state.text.split()))
+                    return Fixed("plan") if state.last_stop == "budget" else None
+
+                return [record, Generated(budget=2), record, record]
+
+        driver = _Driver()
+        driver.tokenizer = tokenizer
+        thought = tokenizer.convert_tokens_to_ids("thought")
+        session = _ScriptedReasonSession(tokenizer, [thought, thought], "length")
+        out = driver.decode(
+            torch.tensor([[tokenizer.convert_tokens_to_ids("x")]]), None, None, LogitsProcessorList(),
+            StoppingCriteriaList(), {}, session=session, max_new_tokens=16,
+        )
+        assert seen == [
+            (None, 0, []),
+            ("budget", 2, ["thought", "thought"]),
+            ("budget", 3, ["thought", "thought", "plan"]),
+        ]
+        assert tokenizer.decode(out[0, 1:]).split() == ["thought", "thought", "plan", "plan"]
+
+    def test_a_callable_entry_returning_another_type_raises(self, tokenizer):
+        class _Driver(PhasedDriver):
+            def plan(self, prompt_text, params):
+                return [lambda state: "text"]
+
+        driver = _Driver()
+        driver.tokenizer = tokenizer
+        session = _ScriptedReasonSession(tokenizer, [], None)
+        with pytest.raises(TypeError, match="callable plan entry returned str"):
+            driver.decode(
+                torch.tensor([[2]]), None, None, LogitsProcessorList(), StoppingCriteriaList(), {},
+                session=session, max_new_tokens=4,
+            )

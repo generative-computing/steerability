@@ -2,13 +2,15 @@
 
 The canonical form of a `.spipe` is a directory holding `spipe.json` and an optional
 `artifacts/` store; a `.spipe` file is a zip of that directory. Zips are written
-deterministically (sorted member names, stored uncompressed, fixed timestamps) and unpacked
-with a zip-slip guard, symlink rejection, and a decompressed-size cap.
+deterministically (sorted member names, stored uncompressed, fixed timestamps) under a size
+cap, and unpacked with a zip-slip guard, symlink rejection, and the same cap on the
+decompressed size.
 """
 from __future__ import annotations
 
 import json
 import logging
+import shutil
 import zipfile
 from pathlib import Path
 from typing import Any, Mapping
@@ -166,25 +168,36 @@ def pack_zip(directory: str | Path, target: str | Path) -> None:
 
     Members are written in sorted arcname order, stored uncompressed, with a fixed
     `(1980, 1, 1, 0, 0, 0)` timestamp and no extra fields. Equal directories therefore
-    produce byte-equal files.
+    produce byte-equal files. Each member is copied in chunks, so packing holds no whole file
+    in memory. The size check runs before anything is written.
 
     Raises:
-        SpipeFormatError: If `directory` contains a symlink.
+        SpipeFormatError: If `directory` contains a symlink, or its files total more than the
+            20 GB cap that unpacking enforces.
     """
     directory = Path(directory)
     members = sorted(
         (path for path in directory.rglob("*") if path.is_file() or path.is_symlink()),
         key=lambda path: path.relative_to(directory).as_posix(),
     )
+    for path in members:
+        if path.is_symlink():
+            raise SpipeFormatError(f"Refusing to pack symlink {path} into a spipe archive.")
+    total = sum(path.stat().st_size for path in members)
+    if total > SIZE_CAP_BYTES:
+        raise SpipeFormatError(
+            f"{directory} holds {total} bytes, over the {SIZE_CAP_BYTES}-byte cap of a spipe archive; "
+            "save the bundle as a directory, or with artifacts='thin'."
+        )
     with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_STORED) as archive:
         for path in members:
-            if path.is_symlink():
-                raise SpipeFormatError(f"Refusing to pack symlink {path} into a spipe archive.")
             arcname = path.relative_to(directory).as_posix()
             info = zipfile.ZipInfo(arcname, date_time=(1980, 1, 1, 0, 0, 0))
             info.compress_type = zipfile.ZIP_STORED
             info.external_attr = 0o644 << 16
-            archive.writestr(info, path.read_bytes())
+            info.file_size = path.stat().st_size
+            with open(path, "rb") as source, archive.open(info, "w") as sink:
+                shutil.copyfileobj(source, sink, 1 << 20)
 
 
 def unpack_zip(archive_path: str | Path, dest: str | Path) -> None:

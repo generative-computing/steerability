@@ -215,7 +215,9 @@ class ValueGuidedProcessor(PrefixKeyedProcessor):
         ):
             warnings.warn(
                 f"ValueGuidedProcessor is evaluating {num_candidates} candidates with a model-forward "
-                "value; pass top_k/top_p in gen_kwargs or set max_candidates to bound the per-step cost.",
+                "value; select a top_k or top_p candidate policy on the control, or set its max_candidates, "
+                "to bound the per-step cost. The top_k and top_p generation kwargs do not bound it, since "
+                "they apply after the logits processors.",
                 UserWarning,
             )
             self._warned_large_set = True

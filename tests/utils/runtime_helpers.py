@@ -127,8 +127,7 @@ class ScriptedSession:
             results.append(ItemResult(index=index, output=Output(
                 output_ids=full[:, ids.size(1):],
                 adapted_input_ids=ids,
-                finish_reason=None,
-                finish_reasons=None,
+                finish_reasons=(None,) * full.size(0),
             )))
         return results
 

@@ -139,8 +139,15 @@ class SteeredSession:
         return self.inner.score([self._inject(item) for item in items], params)
 
     def capture(self, prompts, layers, mode, location="layer_output"):
-        """Capture through the wrapped session, unsteered."""
-        return self.inner.capture(prompts, layers, mode, location=location)
+        """Capture through the wrapped session under the wrapper's entries.
+
+        Without injected entries (the in-process backend, where the generation's hooks stay
+        registered for the decode), the wrapped session captures as it is. Otherwise the wrapped
+        session receives the entries as `state_entries` and steers the forward passes it captures.
+        """
+        if not self.state_entries:
+            return self.inner.capture(prompts, layers, mode, location=location)
+        return self.inner.capture(prompts, layers, mode, location=location, state_entries=self.state_entries)
 
 
 class Backend(ABC):
@@ -160,32 +167,44 @@ class Backend(ABC):
     @abstractmethod
     def capabilities_for_spec(cls, spec: BackendSpec) -> BackendCapabilities:
         """The capability advertisement implied by `spec`, computable without constructing the
-        backend. Constructed backends advertise the same sets, verified against the live
-        resource where a discovery surface exists."""
+        backend. `check()` reads only this advertisement, so its verdicts do not depend on any
+        constructed backend."""
 
     @abstractmethod
     def open_session(self) -> SteeringSession:
         """Open a session for one logical operation."""
 
+    def negotiated_capabilities(self) -> BackendCapabilities:
+        """The capability advertisement of this constructed backend.
+
+        The default is `capabilities_for_spec(self.spec)`. A backend with a discovery surface
+        narrows it to what its engine or server confirms.
+
+        Returns:
+            The advertisement that this backend's sessions and the pipeline's generate and score
+            paths consult.
+        """
+        return self.capabilities_for_spec(self.spec)
+
     @property
     def capabilities(self) -> frozenset[Capability]:
-        """The advertised capability atoms."""
-        return self.capabilities_for_spec(self.spec).atoms
+        """The negotiated capability atoms."""
+        return self.negotiated_capabilities().atoms
 
     @property
     def intervention_kinds(self) -> InterventionKinds | None:
-        """The advertised intervention kinds, when `Capability.INTERVENTION_SPECS` is present."""
-        return self.capabilities_for_spec(self.spec).intervention_kinds
+        """The negotiated intervention kinds, when `Capability.INTERVENTION_SPECS` is present."""
+        return self.negotiated_capabilities().intervention_kinds
 
     @property
     def processor_kinds(self) -> ProcessorKinds | None:
-        """The advertised processor kinds, when `Capability.PER_STEP_LOGIT_SPECS` is present."""
-        return self.capabilities_for_spec(self.spec).processor_kinds
+        """The negotiated processor kinds, when `Capability.PER_STEP_LOGIT_SPECS` is present."""
+        return self.negotiated_capabilities().processor_kinds
 
     @property
     def capture_kinds(self) -> CaptureKinds | None:
-        """The advertised capture kinds, when `Capability.HIDDEN_CAPTURE` is present."""
-        return self.capabilities_for_spec(self.spec).capture_kinds
+        """The negotiated capture kinds, when `Capability.HIDDEN_CAPTURE` is present."""
+        return self.negotiated_capabilities().capture_kinds
 
     def stage_artifacts(self, payloads: dict[str, dict[str, torch.Tensor]]) -> None:
         """Make each content-addressed artifact available to the execution side.

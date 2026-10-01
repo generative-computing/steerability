@@ -115,6 +115,9 @@ class FakeEngineBackend:
         backend_cls = VLLMServeBackend if spec.kind == "vllm-serve" else VLLMBackend
         return backend_cls.capabilities_for_spec(spec)
 
+    def negotiated_capabilities(self):
+        return self.capabilities_for_spec(self.spec)
+
     def open_session(self):
         return FakeEngineSession(self)
 
@@ -353,6 +356,50 @@ class TestPhasePartition:
         assert artifact.provenance.model_fingerprint is not None
 
 
+class TestArtifactLoaderHandoff:
+
+    def test_loader_alone_boots_the_engine_with_its_artifact_and_no_stage(self, fake_engine, model_dir, monkeypatch):
+        import steerability.algorithms.core.steering_pipeline as pipeline_module
+        from steerability.algorithms.structural_control.load_checkpoint import LoadCheckpoint
+
+        def no_in_process_load(*args, **kwargs):
+            raise AssertionError("the loader handoff must not load a model in process")
+
+        monkeypatch.setattr(pipeline_module.SteeringPipeline, "_load_in_process_model", no_in_process_load)
+        pipeline = SteeringPipeline(controls=[LoadCheckpoint(path="/tmp/ckpt")], backend=_engine_spec(model_dir))
+        assert pipeline.check().plan.stages is False
+        pipeline.steer()
+
+        (engine,) = fake_engine.instances
+        assert [type(artifact).__name__ for artifact in engine.artifacts] == ["CheckpointArtifact"]
+        assert engine.artifacts[0].path == "/tmp/ckpt"
+        assert pipeline.model is None
+
+    def test_loader_joins_a_stage_that_a_later_step_needs(self, fake_engine, model_dir, tmp_path):
+        from peft import LoraConfig, get_peft_model
+
+        from steerability.algorithms.structural_control.load_lora import LoadLoRA
+
+        adapter_dir = tmp_path / "adapter"
+        get_peft_model(
+            AutoModelForCausalLM.from_pretrained(model_dir), LoraConfig(r=2, target_modules=["q_proj"]),
+        ).save_pretrained(adapter_dir)
+        CALLS.clear()
+        pipeline = SteeringPipeline(
+            controls=[LoadLoRA(path=str(adapter_dir), base_model=model_dir), _ModuleOutput()],
+            backend=_engine_spec(model_dir),
+        )
+        plan = pipeline.check().plan
+        assert [(step.control, step.access, step.venue) for step in plan.steps] == [
+            ("LoadLoRA", ModelAccess.FACTS, "stage"), ("_ModuleOutput", ModelAccess.MODULE, "stage"),
+        ]
+        pipeline.steer()
+
+        assert CALLS == [("module_output", True)]
+        (engine,) = fake_engine.instances
+        assert [type(artifact).__name__ for artifact in engine.artifacts] == ["LoRAArtifact"]
+
+
 class TestFreeProtocol:
 
     def test_retaining_control_raises_naming_itself(self, fake_engine, model_dir):
@@ -532,6 +579,21 @@ class TestSmokeTestDegradation:
         # the first stage loads the base and the degraded stage loads the checkpoint, both placed by device_map
         assert loads == [(model_dir, {"": "cpu"}), (checkpoint_dir, {"": "cpu"})]
         assert pipeline.device is None
+
+    def test_negotiated_capture_gap_degrades_to_the_stage(self, fake_engine, model_dir, monkeypatch):
+        import dataclasses
+
+        def narrowed(self):
+            static = self.capabilities_for_spec(self.spec)
+            return dataclasses.replace(static, atoms=static.atoms - {Capability.HIDDEN_CAPTURE})
+
+        monkeypatch.setattr(fake_engine, "negotiated_capabilities", narrowed)
+        fitter = _CaptureFitter("fitter")
+        pipeline = SteeringPipeline(controls=[fitter], backend=_engine_spec(model_dir))
+        with pytest.warns(UserWarning, match="does not confirm every capture kind, location, and mode"):
+            pipeline.steer()
+        assert fitter.saw_in_process is True
+        assert "engine-capture" not in fake_engine.events
 
     def test_passing_smoke_test_keeps_fits_on_the_session(self, fake_engine, model_dir):
         CALLS.clear()

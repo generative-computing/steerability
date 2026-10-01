@@ -63,7 +63,13 @@ class CPO(InputControl):
 
     Stage 2 (`adapt_messages`): per-query, run a B-wide K-retained R-round tree search using the prompt
     proposer to expand parents and the causal scorer to retain survivors. Returns the best survivor as
-    the system prompt.
+    the system prompt. The survivor is placed before the content of the leading system message,
+    separated by a blank line, and a chat without a leading system message receives the survivor as
+    its system message. On token input (`adapt`), the prompt is re-templated with the survivor as
+    its system message.
+
+    The proposer is `prompt_lm` with `prompt_tokenizer` when `prompt_lm` is set, and the pipeline's
+    model with the pipeline tokenizer otherwise.
 
     The query cache keys on a sha256 hash of the query text. By default the raw query is hashed, so
     whitespace, casing, and punctuation differences yield distinct cache entries. Supply
@@ -90,6 +96,7 @@ class CPO(InputControl):
     pca_query_dim: int = 40
     pca_prompt_dim: int = 15
     prompt_lm: Any = None
+    prompt_tokenizer: Any = None
     rounds: int = 3
     candidates_per_parent: int = 5
     retained_per_round: int = 3
@@ -168,9 +175,11 @@ class CPO(InputControl):
 
         if self.prompt_lm is not None:
             proposer_lm = self.prompt_lm
+            proposer_tokenizer = self.prompt_tokenizer
             encoder_device = None
         else:
             proposer_lm = model
+            proposer_tokenizer = tokenizer
             encoder_device = next(model.parameters()).device if model is not None else None
         self._encoder = TextEncoder(
             self.embedding_model,
@@ -180,7 +189,7 @@ class CPO(InputControl):
 
         self._proposer = LLMMetaPromptProposer(
             llm=proposer_lm,
-            tokenizer=tokenizer,
+            tokenizer=proposer_tokenizer,
             meta_prompt_template=self.refinement_meta_prompt or refinement_meta_prompt.CPO_DEFAULT,
             gen_kwargs=self.proposer_gen_kwargs,
             parse_fn=parse_concise_instruction,
@@ -191,7 +200,7 @@ class CPO(InputControl):
             if isinstance(memory, (str, Path)):
                 memory = CPOMemory.load(Path(memory), encoder=self._encoder)
             self.memory = memory
-            self._formatter = SystemPromptFormatter()
+            self._formatter = SystemPromptFormatter(mode="prepend")
             return
 
         task_lm = model if model is not None else (SessionLM(session) if session is not None else None)
@@ -208,7 +217,7 @@ class CPO(InputControl):
         )
 
         self.memory = CPOMemory(causal_scorer=scorer)
-        self._formatter = SystemPromptFormatter()
+        self._formatter = SystemPromptFormatter(mode="prepend")
 
     def _generate_offline_data(self, task_lm, tokenizer) -> list[dict]:
         """Build ⟨query, prompt, score⟩ rows from `train_dataset` × proposer × row scorer.

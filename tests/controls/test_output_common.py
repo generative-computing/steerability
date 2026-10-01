@@ -502,7 +502,7 @@ class TestSearchDriver:
         # an eos past the budget is never generated, and an eos at the budget's last position is reported as eos
         assert len(continuation) == 4
         assert (continuation[-1] == eos) == (expected_reason == "eos")
-        assert output.finish_reason == expected_reason
+        assert output.finish_reasons[0] == expected_reason
 
 
 class TestFrontier:
@@ -1097,7 +1097,7 @@ class TestAuxSourceMaskCorrectness:
         tokenizer = wordlevel_tokenizer()
         src = self._aux(tokenizer, tokenizer.pad_token_id)
         src.prompt_transform = lambda t: f"the {t}"
-        assert src.tokenizer.padding_side == "left"  # set by set_model
+        assert src.tokenizer.padding_side == "right"  # the tokenizer is not modified; each call pads on the left
 
         prompts = torch.tensor([[3, 4, 5], [tokenizer.pad_token_id, 6, 7]])
         batched = src.logprobs(prompts)
@@ -1121,7 +1121,7 @@ class TestPromptVariantSourceMask:
         tokenizer = wordlevel_tokenizer()
         src = PromptVariantSource(prompt_transform=lambda t: f"the {t}", base_tokenizer=tokenizer)
         src.prepare(model=model, tokenizer=tokenizer)
-        assert tokenizer.padding_side == "left"
+        assert tokenizer.padding_side == "right"  # the shared tokenizer is not modified; each call pads on the left
 
         prompts = torch.tensor([[3, 4, 5], [tokenizer.pad_token_id, 6, 7]])
         batched = src.logprobs(prompts)

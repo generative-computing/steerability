@@ -117,10 +117,13 @@ The above fits `caa` through the engine's hidden-state capture and generates thr
 
 ### Scoring
 
-Scoring through `compute_logprobs` with intervention controls runs in process only. Remote prompt-logprob scoring
-anchors token scopes at the end of the prompt-plus-reference concatenation rather than at the end of the prompt, which
-would misplace prompt-relative interventions. Likewise, an enabled output control with `include_in_scoring=True` makes
-the score phase unsupported on backends without in-process torch, and encoder-decoder scoring is in-process only.
+Scoring through `compute_logprobs` with intervention controls runs on a backend that serves intervention specs when
+every intervention's token scope has an exact prompt-logprob form and no intervention is gated. The session rewrites an
+`after_prompt` scope to `from_position` at the end of the prompt, and `all` and `from_position` select the same
+positions in process and remotely. A `last_k` scope and a gate's evidence are anchored at the end of the submitted
+prompt-plus-reference instead, so configurations with either score in process only. Likewise, an enabled output control
+with `include_in_scoring=True` makes the score phase unsupported on backends without in-process torch, and
+encoder-decoder scoring is in-process only.
 
 ### Model access during steering
 

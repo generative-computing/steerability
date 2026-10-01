@@ -43,6 +43,7 @@ class TestDeclarations:
             seed_prompt="s",
             offline_data=[{"query": "q", "prompt": "p", "score": 1.0}],
             prompt_lm=object(),
+            prompt_tokenizer=object(),
         )
         assert aux.steer_access() is ModelAccess.ROLLOUTS
 

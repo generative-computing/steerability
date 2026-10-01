@@ -32,7 +32,10 @@ class EPRSelector(DenseRetrievalSelector):
       2. Use the scoring LM to label `k_pos` positives and `k_neg` negatives in the candidate set.
       3. Train a single-tower BERT-base encoder via contrastive loss with in-batch and hard negatives.
 
-    The trained encoder is then used at inference time to embed the query and rank pool items.
+    The trained encoder is then used at inference time to embed the query and rank pool items. The
+    embeddings of the prepared pool are stored on the selector by each item's position in the pool, and the
+    pool items themselves are not modified. An item passed to `select()` that is not one of the prepared
+    items is encoded when it is ranked.
 
     Args:
         scoring_lm: Causal LM used to score (anchor, candidate) pairs during offline labeling.
@@ -68,7 +71,9 @@ class EPRSelector(DenseRetrievalSelector):
         self.encoder = None  # filled in prepare()
         self.similarity = "cosine"
         self.item_to_text = self._format_item
-        self.embedding_key = "_epr_embedding"
+        self._items: list = []
+        self._embeddings: list[np.ndarray] = []
+        self._index_by_identity: dict[int, int] = {}
 
         self.scoring_lm = scoring_lm
         self.scoring_tokenizer = scoring_tokenizer
@@ -82,6 +87,13 @@ class EPRSelector(DenseRetrievalSelector):
         self.input_field = input_field
         self.output_field = output_field
         self.device = device
+
+    def _embed_item(self, item: Any) -> np.ndarray:
+        """Return the stored embedding of a prepared pool item, or encode an item outside the pool."""
+        index = self._index_by_identity.get(id(item))
+        if index is not None and self._items[index] is item:
+            return self._embeddings[index]
+        return np.asarray(self.encoder.encode(self._format_item(item)))
 
     def _format_item(self, item: Any) -> str:
         if isinstance(item, dict):
@@ -148,17 +160,10 @@ class EPRSelector(DenseRetrievalSelector):
             device=self.device,
         )
 
-        # pre-compute pool embeddings into PoolMemory metadata for inference-time lookup.
-        embeddings = [self.encoder.encode(self._format_item(item)) for item in items]
-        if isinstance(data, PoolMemory):
-            data.metadata[self.embedding_key] = embeddings
-            for item, emb in zip(data.items, embeddings):
-                if isinstance(item, dict):
-                    item[self.embedding_key] = emb
-        else:
-            for item, emb in zip(items, embeddings):
-                if isinstance(item, dict):
-                    item[self.embedding_key] = emb
+        # embed the pool once, keyed by each item's position in the pool
+        self._items = items
+        self._embeddings = [np.asarray(self.encoder.encode(self._format_item(item))) for item in items]
+        self._index_by_identity = {id(item): index for index, item in enumerate(items)}
 
     def select(
         self,

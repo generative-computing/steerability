@@ -34,6 +34,11 @@ class PRewrite(InputControl):
     """Train (or load) an LLM rewriter that rewrites a seed instruction; optionally select the best
     rewrite by dev-set evaluation, then apply it as the system prompt at inference time.
 
+    On chat input (`adapt_messages`), the instruction is placed before the content of the leading
+    system message, separated by a blank line, and a chat without a leading system message receives
+    the instruction as its system message. On token input (`adapt`), the prompt is re-templated
+    with the instruction as its system message.
+
     When `train_rewriter=True`, the rewriter is trained with GRPO (group-relative policy optimization).
     The reward is downstream task performance, computed by applying each rewrite with the frozen task
     model over a dev set and scoring with a per-row `SampleScorer`, or a user-supplied `reward_fn`.
@@ -118,7 +123,7 @@ class PRewrite(InputControl):
 
         if self.args.memory is not None:
             self.memory = self.args.memory
-            self._formatter = SystemPromptFormatter()
+            self._formatter = SystemPromptFormatter(mode="prepend")
             return
 
         task_lm = SessionLM(session) if session is not None else model
@@ -168,7 +173,7 @@ class PRewrite(InputControl):
             best = stripped
 
         self.memory = TextMemory(slots={"instruction": best})
-        self._formatter = SystemPromptFormatter()
+        self._formatter = SystemPromptFormatter(mode="prepend")
 
     def _resolve_rewriter(self, task_lm, tokenizer) -> tuple[Any, Any]:
         """Pick the rewriter LLM.

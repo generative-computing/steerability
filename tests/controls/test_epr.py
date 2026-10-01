@@ -1,8 +1,11 @@
 """Tests for EPR — learned dense retriever for few-shot example selection."""
 from __future__ import annotations
 
+import copy
+import hashlib
 from typing import Any
 
+import numpy as np
 import pytest
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -55,6 +58,47 @@ class TestBM25Index:
         result = bm25_index.build_and_query(items, query_field="output", candidate_set_size=2)
         for anchor_idx, candidate_indices in result.items():
             assert anchor_idx not in candidate_indices
+
+
+class _HashEncoder:
+    """An encoder double that maps each text to a fixed vector and counts its calls."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def encode(self, text: str) -> np.ndarray:
+        self.calls += 1
+        seed = int(hashlib.sha256(text.encode("utf-8")).hexdigest()[:8], 16)
+        return np.random.default_rng(seed).standard_normal(8)
+
+
+class TestEPRPoolOwnership:
+    def test_steer_leaves_the_pool_and_the_identity_unchanged(self, monkeypatch):
+        from steerability.algorithms.core.identity import config_descriptor_from_controls
+        from steerability.algorithms.input_control.few_shot.selectors.epr import selector as epr_selector
+        from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
+
+        encoder = _HashEncoder()
+        monkeypatch.setattr(epr_selector.lm_labeling, "label_pairs", lambda **kwargs: [])
+        monkeypatch.setattr(epr_selector.train_encoder, "train", lambda **kwargs: encoder)
+        pool = [{"input": f"q{i}", "output": f"a{i}"} for i in range(4)]
+        snapshot = copy.deepcopy(pool)
+        epr = EPRSelector(scoring_lm=None, scoring_tokenizer=None, candidate_set_size=2)
+        few_shot = FewShot(positive_example_pool=pool, k_positive=1, selector=epr)
+        before = config_descriptor_from_controls([few_shot])
+
+        pipeline = SteeringPipeline(
+            controls=[few_shot], model=tiny_llama(num_layers=2, hidden=16, heads=2), tokenizer=wordlevel_tokenizer(),
+        )
+        pipeline.steer()
+        assert pool == snapshot
+        assert config_descriptor_from_controls([few_shot]) == before
+        assert not hasattr(epr, "embedding_key")
+        assert encoder.calls == len(pool)
+
+        encoder.calls = 0
+        assert len(epr.select(few_shot.pool.items, query="q1", k=2)) == 2
+        assert encoder.calls == 1  # the stored pool embeddings are reused; only the query is encoded
 
 
 class TestEPRSelector:

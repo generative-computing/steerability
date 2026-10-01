@@ -381,7 +381,8 @@ class TestValueGuidanceBehavior:
     def test_step_attention_mask_spans_the_prefix(self, layout_kwargs, seed):
         """Under candidate and beam rows the value's mask matches the prefix rows it scores.
 
-        A seed decodes each prompt on its own, so every step there has two rows of one prompt.
+        A seed decodes each prompt on its own and without its leading pads, so every step there has
+        two unpadded rows of one prompt.
         """
         steps = []
 
@@ -397,17 +398,19 @@ class TestValueGuidanceBehavior:
         )
 
         prompt_ids = [tokenizer(prompt).input_ids for prompt in prompts]
-        width = max(len(ids) for ids in prompt_ids)
-        padded = [[tokenizer.pad_token_id] * (width - len(ids)) + ids for ids in prompt_ids]
+        pad = tokenizer.pad_token_id
         assert steps
         for prefix_ids, attention_mask in steps:
             assert attention_mask is not None
             assert attention_mask.shape == prefix_ids.shape
             for row in range(prefix_ids.size(0)):
-                prompt = padded.index(prefix_ids[row, :width].tolist())
-                pad_count = width - len(prompt_ids[prompt])
+                values = prefix_ids[row].tolist()
+                pad_count = next(index for index, token in enumerate(values) if token != pad)
+                assert any(values[pad_count:pad_count + len(ids)] == ids for ids in prompt_ids)
                 assert int(attention_mask[row, :pad_count].sum()) == 0
                 assert bool(attention_mask[row, pad_count:].all())
+        if seed is not None:
+            assert all(prefix_ids[:, 0].ne(pad).all() for prefix_ids, _ in steps)
 
     def test_prompt_mask_applies_to_rows_that_begin_with_a_prompt_row(self):
         """A row that begins with a prompt row takes that row's mask; other rows mask their leading pads."""

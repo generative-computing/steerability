@@ -17,6 +17,18 @@ def has_chat_template(tokenizer: PreTrainedTokenizerBase) -> bool:
     return getattr(tokenizer, "chat_template", None) is not None
 
 
+def join_message_contents(messages: list[dict[str, str]]) -> str:
+    """Join the contents of chat messages with blank lines, the rendering used without a chat template.
+
+    Args:
+        messages: Chat messages as `{"role": ..., "content": ...}` dicts.
+
+    Returns:
+        The message contents in order, separated by blank lines.
+    """
+    return "\n\n".join(message["content"] for message in messages)
+
+
 def render_messages(
     tokenizer: PreTrainedTokenizerBase,
     messages: list[dict[str, str]],
@@ -43,7 +55,7 @@ def render_messages(
     """
     if not has_chat_template(tokenizer):
         logger.warning("render_messages: tokenizer has no chat_template; concatenating contents.")
-        return "\n\n".join(m["content"] for m in messages)
+        return join_message_contents(messages)
     return tokenizer.apply_chat_template(
         messages,
         tokenize=False,

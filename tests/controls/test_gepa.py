@@ -415,6 +415,13 @@ class TestGEPAAdapt:
         assert adapted[0][0]["role"] == "system"
         assert adapted[0][0]["content"] == gepa.memory["instruction"]
 
+    def test_adapt_messages_prepends_to_an_existing_system_message(self, tiny_lm):
+        gepa = self._make_steered(tiny_lm)
+        chat = [{"role": "system", "content": "Be kind."}, {"role": "user", "content": "?"}]
+        adapted = gepa.adapt_messages([chat])
+        assert adapted[0][0] == {"role": "system", "content": gepa.memory["instruction"] + "\n\nBe kind."}
+        assert chat[0]["content"] == "Be kind."
+
     def test_adapt_messages_no_runtime_kwargs_needed(self, tiny_lm):
         gepa = self._make_steered(tiny_lm)
         adapted = gepa.adapt_messages([[{"role": "user", "content": "?"}]], runtime_kwargs=None)

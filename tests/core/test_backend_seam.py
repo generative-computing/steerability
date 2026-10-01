@@ -335,6 +335,78 @@ class TestCheck:
             pipeline.check(backend=3.14)
 
 
+class TestStructuralArtifactVerdicts:
+
+    def test_second_lora_adapter_fails_on_engines(self):
+        from steerability.algorithms.structural_control.load_lora import LoadLoRA
+
+        controls = [LoadLoRA(path="/tmp/a", base_model="m"), LoadLoRA(path="/tmp/b", base_model="m")]
+        pipeline = SteeringPipeline(model_name_or_path="m", controls=controls)
+        report = pipeline.check(backend=BackendSpec(kind="vllm", model="m"))
+        (failure,) = report.failures
+        assert failure.phase == "generate"
+        assert failure.message == (
+            "LoadLoRA is unsupported at generate on backend kind 'vllm': LoadLoRA already serves a LoRA adapter, and "
+            "the engine serves one adapter per pipeline; merge one of the adapters into the model weights, or run "
+            "this pipeline on the huggingface backend."
+        )
+        assert pipeline.check().ok
+
+    def test_chained_checkpoints_are_supported_and_the_last_is_served(self):
+        from steerability.algorithms.core.execution import CheckpointArtifact, LoRAArtifact
+        from steerability.algorithms.core.execution.staging import split_artifacts
+        from steerability.algorithms.structural_control.load_checkpoint import LoadCheckpoint
+
+        controls = [LoadCheckpoint(path="/tmp/first"), LoadCheckpoint(path="/tmp/second")]
+        pipeline = SteeringPipeline(model_name_or_path="m", controls=controls)
+        assert pipeline.check(backend=BackendSpec(kind="vllm", model="m")).ok
+
+        checkpoint, lora = split_artifacts([
+            CheckpointArtifact(path="/tmp/first"), LoRAArtifact(path="/tmp/a", base_model="m"),
+            CheckpointArtifact(path="/tmp/second"),
+        ])
+        assert checkpoint.path == "/tmp/second"
+        assert lora.path == "/tmp/a"
+        with pytest.raises(ValueError, match="serves one LoRA adapter"):
+            split_artifacts([LoRAArtifact(path="/tmp/a", base_model="m"), LoRAArtifact(path="/tmp/b", base_model="m")])
+
+    def test_serve_checkpoint_must_be_the_served_model(self):
+        from steerability.algorithms.structural_control.load_checkpoint import LoadCheckpoint
+
+        pipeline = SteeringPipeline(model_name_or_path="m", controls=[LoadCheckpoint(path="/ckpt")])
+        options = {"base_url": "http://server:8000"}
+        (failure,) = pipeline.check(backend=BackendSpec(kind="vllm-serve", model="m", options=options)).failures
+        assert failure.message.startswith(
+            "LoadCheckpoint is unsupported at generate on backend kind 'vllm-serve': the server serves 'm' (the "
+            "spec's model), not the checkpoint at '/ckpt'"
+        )
+        assert pipeline.check(backend=BackendSpec(kind="vllm-serve", model="/ckpt", options=options)).ok
+        assert pipeline.check(backend=BackendSpec(kind="vllm", model="m")).ok
+
+
+class TestHuggingFaceSpecModel:
+
+    def test_spec_model_differing_from_model_name_or_path_rejected(self):
+        with pytest.raises(ValueError, match="names model 'spec-model', but model_name_or_path is 'ctor-model'"):
+            SteeringPipeline(
+                model_name_or_path="ctor-model", backend=BackendSpec(kind="huggingface", model="spec-model"),
+            )
+
+    def test_spec_model_is_loaded_when_the_constructor_names_none(self):
+        pipeline = SteeringPipeline(backend=BackendSpec(kind="huggingface", model="spec-model"))
+        assert pipeline.model_name_or_path == "spec-model"
+
+    def test_matching_references_are_accepted(self):
+        pipeline = SteeringPipeline(
+            model_name_or_path=Path("models/m"), backend=BackendSpec(kind="huggingface", model="models/m"),
+        )
+        assert str(pipeline.model_name_or_path) == "models/m"
+
+    def test_spec_without_a_model_keeps_the_constructor_reference(self):
+        pipeline = SteeringPipeline(model_name_or_path="ctor-model", backend=BackendSpec(kind="huggingface"))
+        assert pipeline.model_name_or_path == "ctor-model"
+
+
 class TestPastaSpecConstraint:
 
     def _pasta_pipeline(self, attn_implementation):
@@ -486,7 +558,7 @@ def _cpo_with_prompt_lm():
     from steerability.algorithms.input_control.cpo.control import CPO
     return CPO(
         seed_prompt="be helpful", train_dataset=[{"query": "hi"}],
-        row_scorer=lambda out, row: 0.5, prompt_lm="some/model",
+        row_scorer=lambda out, row: 0.5, prompt_lm="some/model", prompt_tokenizer="some/model",
     )
 
 

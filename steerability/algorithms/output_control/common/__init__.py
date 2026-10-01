@@ -10,7 +10,7 @@ from steerability.algorithms.core.internals.data import LabeledExamples, as_labe
 from .candidate_forward import CandidateForward
 from .candidates import CandidatePolicy, select_candidates
 from .criteria import BudgetTokens, StopOnSubstring, StopOnTokens
-from .drivers import Fixed, Frontier, Generated, PhasedDriver, SearchDriver, SegmentProposer
+from .drivers import Fixed, Frontier, Generated, PhasedDriver, PlanState, SearchDriver, SegmentProposer
 from .logit_sources import AuxModelSource, BaseLogitSource, CallableSource, PromptVariantSource
 from .processors import (
     ConstraintProcessor,

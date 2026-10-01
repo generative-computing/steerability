@@ -240,10 +240,11 @@ Behaviors that differ from bare Hugging Face usage:
 - Token ids are returned as generated on every backend (stop text and any token-boundary overrun stay in the ids);
   decoded continuation text is truncated at the first stop-string occurrence by one client-side rule.
 - `generate(..., return_output=True)` returns an `Output` object (or list of them) with fields `output_ids`,
-  `adapted_input_ids` (the prompt after input controls, useful for inspecting the steered prompt), a per-item
-  `finish_reason` (`"stop"`, `"eos"`, `"length"`, or `None`, with that precedence, except that an eos inferred only from
-  stripped trailing pads ranks below `"length"`), and `finish_reasons` (one reason per candidate for `n > 1`). Import it
-  via `from steerability.algorithms.core import Output`.
+  `adapted_input_ids` (the prompt after input controls, useful for inspecting the steered prompt), and
+  `finish_reasons`, one reason per row of `output_ids` (one per candidate for `n > 1`; a single row reads
+  `finish_reasons[0]`). Each reason is `"stop"`, `"eos"`, `"length"`, or `None`, with that precedence, except that an
+  eos inferred only from stripped trailing pads ranks below `"length"`. Import it via
+  `from steerability.algorithms.core import Output`.
 - A seeded `generate()` call maps its `seed` onto the items of a multi-item dispatch according to `seed_scope`
   (default `"item"`). Under `"item"`, one seed is derived per row, and on the Hugging Face backend the dispatch then
   decodes one row at a time. Under `"dispatch"`, one seed is derived for the whole dispatch, which is batched in one
@@ -304,7 +305,9 @@ pipeline = SteeringPipeline(
   forcing `VLLM_HOOK_WORKER=unified` for `hook_plugin` boots. `serve_environment` returns the same policy as a fresh
   mapping for a `vllm serve` process. The model-runner constraint is owned by the vLLM-Hook plugin (which pins the
   legacy runner or supports V2), not the toolkit.
-- Structural controls train on the staged model and serve their artifacts (checkpoint or LoRA) on vLLM backends.
+- Structural controls train on the staged model and serve their artifacts (checkpoint or LoRA) on vLLM backends. An
+  engine serves the last checkpoint and one LoRA adapter, and `check()` fails a second adapter; on `vllm-serve`, a
+  checkpoint is served only when its path is the spec's `model`.
 - Declarative constrained decoding lowers to vLLM's native structured outputs on the default decode path. Under an
   enabled `DecodingDriver` a constraint or processor spec does not lower (the driver receives the in-process
   processor), and `check()` fails that combination on the engine kinds. Hidden-state capture (probe fitting and
@@ -333,11 +336,14 @@ pipeline = SteeringPipeline(
   row-major, candidate-minor order. The phased drivers (`phased_decoding`, `budget_forcing`, `routed_decoding`) run each
   candidate through its row's plan under one `max_new_tokens` ceiling across all phases. Fixed text (including routed
   prefixes and canned responses) counts against the ceiling and is appended whole; a candidate that reaches the ceiling
-  skips the rest of its plan (finish reason `"length"`). The phased drivers raise `ValueError` for `num_beams > 1` with
-  `n > 1`. The search drivers (`deal`, `best_of_n`, `search_decoding`) run `n` independent searches per row, with the
-  preset's own candidate count as the proposals per iteration from each kept beam. They clamp segments so that no
-  continuation exceeds `max_new_tokens`, and beam proposals without sampling run one search and return it as every
-  candidate.
+  skips the rest of its plan (finish reason `"length"`). After each `Generated` phase a candidate records what ended it
+  (`last_stop`: `"until"`, `"until_token"`, `"budget"`, `"length"`, or `"eos"`). A plan entry may be a callable that
+  receives the candidate's `PlanState` (`last_stop`, `appended`, `text`) and returns a phase, or None to skip the entry;
+  `budget_forcing` uses this to extend only a segment cut off at its budget and to never double the closing tag. The
+  phased drivers raise `ValueError` for `num_beams > 1` with `n > 1`. The search drivers (`deal`, `best_of_n`,
+  `search_decoding`) run `n` independent searches per row, with the preset's own candidate count as the proposals per
+  iteration from each kept beam. They clamp segments so that no continuation exceeds `max_new_tokens`, and beam
+  proposals without sampling run one search and return it as every candidate.
 - In-process state hooks restart their pass count at every `model.generate` call the Hugging Face session issues,
   which places each call's prefill at position 0. Hook points that receive no position ids (e.g., `iti` on `o_proj`)
   therefore steer every phase and candidate of a driver.
@@ -482,8 +488,10 @@ the `steerability/evaluation/batching.py` module docstring for the full contract
 
 There is no results checkpoint: the `.eval` logs under `save_dir/inspect_logs/` are the store, and `eval_set`
 resumes each (config, trial, suite) cell from them at sample granularity. Because `eval_set` matches task identity
-only, a changed protocol (seed, generate defaults, provider options, suites, fit, backend, toolkit version) needs
-a new `save_dir`. `check()` runs over every sweep point before any model or engine work
+only, the runner records the rest of the protocol (toolkit version, provider options and `seed_scope`, generate
+defaults, `hf_model_kwargs`, seed, fit, backend) in `save_dir/protocol.json` on a directory's first run, and refuses
+a directory whose recorded protocol differs or whose `.eval` logs have no `protocol.json`; a changed protocol needs a
+new `save_dir`. `check()` runs over every sweep point before any model or engine work
 (`on_unsupported="raise"` or `"skip"`).
 
 Per-sample steering inputs travel on `Sample.metadata` and are delivered by the shipped `runtime_kwargs_solver` (used
@@ -587,17 +595,21 @@ Declare the class attributes the pipeline reads:
 Backend support is declared through `requirements()`. The default (`IN_PROCESS_TORCH` at generate) is honest for a
 new control and keeps it Hugging Face-only; do not widen it speculatively. An `InterventionControl` derives its
 requirements from the template: generate offers the intervention-spec alternative exactly when every component has
-a wire form (`Intervention.wire_kinds()` reads component and source declarations before `steer()`), and score is
-in-process. Components describe their own wire form (`wire_kind` class attribute, `export()` per configuration), and
-the equivalence of hooks and specs is pinned by `tests/core/test_spec_hook_equivalence.py`. An output control whose
-behavior is sampling-expressible lowers via `export_generation_params()`, a declarative constraint via
-`export_constraint()`, and an engine-hosted per-step processor via `export_processor_spec()`.
+a wire form (`Intervention.wire_kinds()` reads component and source declarations before `steer()`), and score offers
+it when, in addition, every token scope has an exact prompt-logprob form (`all`, `from_position`, `after_prompt`) and
+no intervention is gated. Components describe their own wire form (`wire_kind` class attribute, `export()` per
+configuration), and the equivalence of hooks and specs is pinned by `tests/core/test_spec_hook_equivalence.py`. An
+output control whose behavior is sampling-expressible lowers via `export_generation_params()`, a declarative
+constraint via `export_constraint()`, and an engine-hosted per-step processor via `export_processor_spec()`.
 
 A control's steer step declares one of four access levels via `steer_access()`: `facts` (layout and tokenizer),
 `rollouts` (generate and score through the session), `capture` (hidden states), or `module` (the model as a live
 `torch.nn.Module`). Declare the highest rung your steer touches; intervention templates derive it from their
-sources, and structural controls are `module` by definition. The pipeline hands your `steer()` a session scoped to
-that rung (and the model itself only at `module`) and arranges residency: on an engine backend, module-level steps
+sources, and structural controls that train or merge are `module`. The artifact loaders (`load_checkpoint`,
+`load_lora`) declare `facts`, since their artifact is part of the configuration: on an engine backend they hand it to
+the engine without a stage, and join a stage only when a later staged step needs their weights. The pipeline hands
+your `steer()` a session scoped to that rung (and the model itself only at `module`, or to any structural control,
+since structural controls thread the model) and arranges residency: on an engine backend, module-level steps
 run on a temporary in-process model that is freed before the engine starts, with exported artifacts as the handoff.
 Do not hold the model past `steer()` unless your generate phase requires `IN_PROCESS_TORCH`. Generate- and
 score-phase requirements are unchanged.
@@ -714,6 +726,9 @@ model in its `PRESET_KWARGS`, and the suite fails for a preset without one.
 - Comments describe current functionality only, in lowercase, with two spaces before inline comments
   (`a = 1  # some comment`) and no decorative formatting. Do not narrate edits or prior designs.
 - Use a module logger (`logger = logging.getLogger(__name__)`) instead of `print` in library code.
+- No compatibility shims or aliases. A changed behavior, name, or field replaces the previous one outright: no
+  deprecated path, no re-export of an old name, no fallback that accepts the previous form, and no branch that keeps
+  the old behavior when a new field is absent.
 - Keep imports simple; use the optional-dependency guard rather than broad try/except import fallbacks. Import order
   is enforced by isort (black profile) via pre-commit.
 - Read structural facts (`hidden_size`, `num_attention_heads`, `head_dim`, `num_hidden_layers`) through
@@ -825,6 +840,10 @@ Rules that hold regardless of task:
 15. A control's freezable state is exactly `export_state()`; the frozen form returned by `frozen_form()` is
     constructor-valid for its declared method; and the recipe is never discarded (a frozen `.spipe` entry keeps the
     original args for provenance and `thaw()`).
+16. Configuration identity reads a dataclass's `init=True` fields only, so state that a control or source sets
+    during `steer()` never changes a `config_id` or a `.spipe` fit digest.
+17. `Output.finish_reasons` has one entry per row of `output_ids`, enforced at construction together with the
+    `[batch, seq]` shape of `output_ids`.
 
 ## Pointers
 

@@ -32,7 +32,7 @@ from steerability.algorithms.core.execution.spec import BackendSpec
 from steerability.algorithms.core.execution.staging import split_artifacts
 from steerability.algorithms.core.internals.fingerprint import is_absent_chat_template_fingerprint
 from steerability.algorithms.core.internals.model_layout import text_config
-from steerability.backends.vllm.capabilities import _DISCOVERY_CACHE, _reconcile_discovery, _vllm_capabilities
+from steerability.backends.vllm.capabilities import _intersect_with_discovery, _reconcile_discovery, _vllm_capabilities
 from steerability.backends.vllm.environment import engine_boot_environment, engine_environment
 from steerability.backends.vllm.rendering import raise_for_spec_rejection
 from steerability.backends.vllm.session import VLLMOfflineSession, VLLMServeSession
@@ -138,15 +138,30 @@ def _client_tokenizer(source: str, trust_remote_code: bool = False):
     return ensure_pad_token(tokenizer)
 
 
-class VLLMBackend(Backend):
+class _DiscoveryNegotiation:
+    """The negotiated capabilities of a vLLM backend that may hold a discovery payload."""
+
+    _discovery: dict | None
+
+    def negotiated_capabilities(self) -> BackendCapabilities:
+        """The spec's advertisement, narrowed to this backend's discovery payload when it fetched one."""
+        static = self.capabilities_for_spec(self.spec)
+        if self._discovery is None:
+            return static
+        return _intersect_with_discovery(static, self._discovery)
+
+
+class VLLMBackend(_DiscoveryNegotiation, Backend):
     """The offline vLLM engine backend.
 
     Boots one engine per backend instance from the spec (`engine_kwargs` option forwarded to
-    `vllm.LLM`); requires the `vllm` optional dependency. A `CheckpointArtifact` overrides the
-    served model reference and a `LoRAArtifact` attaches as a LoRA request on every generation.
+    `vllm.LLM`); requires the `vllm` optional dependency. The last `CheckpointArtifact` overrides
+    the served model reference, and the `LoRAArtifact` attaches as a LoRA request on every
+    generation.
     When the spec declares `hook_plugin`, the unified worker is selected via
-    `VLLM_HOOK_WORKER=unified` and the discovery payload is fetched once and cached by spec
-    hash. Capability advertisement is available through `capabilities_for_spec` without
+    `VLLM_HOOK_WORKER=unified`, and the discovery payload is fetched from the engine at
+    construction and kept on the backend. `negotiated_capabilities()` narrows the spec's
+    advertisement to it, while `capabilities_for_spec` gives the spec's advertisement without
     constructing the backend.
     """
 
@@ -218,9 +233,6 @@ class VLLMBackend(Backend):
         self._artifact_uploader.upload_payloads(payloads)
 
     def _fetch_discovery(self) -> dict | None:
-        cached = _DISCOVERY_CACHE.get(self.spec.spec_hash)
-        if cached is not None:
-            return cached
         payload = None
         for target in (self._llm, getattr(self._llm, "llm_engine", None)):
             rpc = getattr(target, "collective_rpc", None)
@@ -237,7 +249,6 @@ class VLLMBackend(Backend):
                 "vLLM-Hook discovery returned no payload; is VLLM_HOOK_WORKER=unified active?"
             )
             return None
-        _DISCOVERY_CACHE[self.spec.spec_hash] = payload
         _reconcile_discovery(self.spec, self.capabilities_for_spec(self.spec), payload)
         return payload
 
@@ -309,12 +320,13 @@ class VLLMBackend(Backend):
             torch.cuda.empty_cache()
 
 
-class VLLMServeBackend(Backend):
+class VLLMServeBackend(_DiscoveryNegotiation, Backend):
     """The vLLM OpenAI-compatible server backend.
 
     Targets a vLLM server rather than an arbitrary OpenAI-compatible endpoint: construction
     verifies the server's version surface (`GET /version`), fetches the plugin discovery payload
-    (`GET /v1/hook/capabilities`) when the spec declares `hook_plugin`, and checks the served
+    (`GET /v1/hook/capabilities`) when the spec declares `hook_plugin` and keeps it on the backend
+    (`negotiated_capabilities()` narrows the spec's advertisement to it), and checks the served
     model id against the spec (or serves the pipeline's structural artifacts). Prompts submit as
     token ids on the completions endpoint with the token-id return option; the chat endpoint is
     not used. Requires no local vLLM installation.
@@ -348,17 +360,14 @@ class VLLMServeBackend(Backend):
 
         self._discovery: dict | None = None
         if spec.get_option("hook_plugin"):
-            self._discovery = _DISCOVERY_CACHE.get(spec.spec_hash)
-            if self._discovery is None:
-                try:
-                    self._discovery = self._get_json("/v1/hook/capabilities")
-                except (TransportError, ValueError) as error:
-                    raise ValueError(
-                        f"The spec declares hook_plugin but {self._base_url} serves no "
-                        f"/v1/hook/capabilities discovery surface: {error}"
-                    ) from error
-                _DISCOVERY_CACHE[spec.spec_hash] = self._discovery
-                _reconcile_discovery(spec, self.capabilities_for_spec(spec), self._discovery)
+            try:
+                self._discovery = self._get_json("/v1/hook/capabilities")
+            except (TransportError, ValueError) as error:
+                raise ValueError(
+                    f"The spec declares hook_plugin but {self._base_url} serves no "
+                    f"/v1/hook/capabilities discovery surface: {error}"
+                ) from error
+            _reconcile_discovery(spec, self.capabilities_for_spec(spec), self._discovery)
 
         checkpoint, lora = split_artifacts(artifacts)
         expected_model = checkpoint.path if checkpoint is not None else spec.model

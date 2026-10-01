@@ -62,7 +62,6 @@ def _output(row_ids):
     return Output(
         output_ids=torch.tensor([row_ids], dtype=torch.long),
         adapted_input_ids=torch.tensor([[1, 2]], dtype=torch.long),
-        finish_reason="eos",
         finish_reasons=("eos",),
     )
 
@@ -508,6 +507,18 @@ class TestDispatchShapes:
         (call,) = pipeline.calls
         assert call["messages"] is None
         assert call["text"] == ["be brief\n\nhello"]
+
+    def test_text_path_warns_once_per_provider(self, caplog):
+        pipeline = StubSteeringPipeline(tokenizer=StubTokenizer(chat_template=None))
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            api = _api(pipeline)
+            with caplog.at_level("WARNING", logger="steerability"):
+                _generate(api, [ChatMessageUser(content="hello")])
+                _generate(api, [ChatMessageUser(content="again")])
+        assert len([warning for warning in caught if "no chat template" in str(warning.message)]) == 1
+        assert not [record for record in caplog.records if "chat_template" in record.getMessage()]
+        assert [call["text"] for call in pipeline.calls] == [["hello"], ["again"]]
 
     def test_static_runtime_kwargs_pass_through_unmutated(self):
         control = StubControl([{"name": "canned_responses", "scope": "call"}])

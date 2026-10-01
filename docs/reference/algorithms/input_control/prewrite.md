@@ -1,5 +1,7 @@
 # PRewrite
 
+On chat input, `adapt_messages` places the chosen rewrite before the content of the leading system message, separated by a blank line, and a chat without a leading system message receives it as its system message. A caller that needs the instruction to replace an existing system message composes `SystemPromptFormatter(mode="replace")` directly.
+
 ::: steerability.algorithms.input_control.prewrite
     handler: python
     options:

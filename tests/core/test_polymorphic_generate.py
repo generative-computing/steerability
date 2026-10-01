@@ -266,7 +266,7 @@ class TestReturnOutputFlag:
 
     def test_finish_reason(self, pipeline):
         out = pipeline.generate(text="hi", max_new_tokens=3, return_output=True)
-        assert out.finish_reason in ("eos", "length", None)
+        assert out.finish_reasons[0] in ("eos", "length", None)
 
 
 class _BothEntryPointsControl(InputControl):

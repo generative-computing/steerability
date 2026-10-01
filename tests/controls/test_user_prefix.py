@@ -162,7 +162,7 @@ def test_pipeline_composes_with_few_shot(model_and_tokenizer, device: torch.devi
 
 # token path (no chat structure)
 
-def test_token_path_prefixes_marker(model_and_tokenizer, device: torch.device):
+def test_token_path_inserts_marker_after_bos(model_and_tokenizer, device: torch.device):
     base_model, tokenizer = model_and_tokenizer
     model = base_model.to(device)
 
@@ -176,9 +176,11 @@ def test_token_path_prefixes_marker(model_and_tokenizer, device: torch.device):
         do_sample=False,
         return_output=True,
     )
-    prefix_ids = tokenizer.encode(MARKER + SEPARATOR, add_special_tokens=False)
-    head = output.adapted_input_ids[0].tolist()[: len(prefix_ids)]
-    assert head == prefix_ids, f"encoded marker should head the token stream; got {head!r} vs {prefix_ids!r}"
+    plain_ids = tokenizer("the answer is")["input_ids"]
+    bos = plain_ids[:1] if tokenizer.bos_token_id is not None and plain_ids[:1] == [tokenizer.bos_token_id] else []
+    expected = bos + tokenizer.encode(MARKER + SEPARATOR, add_special_tokens=False)
+    head = output.adapted_input_ids[0].tolist()[: len(expected)]
+    assert head == expected, f"the encoded marker should follow the BOS token; got {head!r} vs {expected!r}"
 
 
 def test_adapt_before_steer_raises():
@@ -215,3 +217,21 @@ def test_spipe_roundtrip_recipe_only(tmp_path, model_and_tokenizer):
     assert rebuilt.generate(
         messages=[{"role": "user", "content": "hi"}], max_new_tokens=3, do_sample=False
     ) is not None
+
+
+def test_adapt_inserts_after_leading_pads_and_bos():
+    from tests.utils.tiny_models import wordlevel_tokenizer
+
+    tokenizer = wordlevel_tokenizer()
+    pad = tokenizer.pad_token_id
+    long_ids = tokenizer("the cat sat on the mat")["input_ids"]
+    short_ids = tokenizer("dog ran")["input_ids"]
+    batch = torch.tensor([long_ids, [pad] * (len(long_ids) - len(short_ids)) + short_ids])
+
+    control = UserPrefix(text="span")
+    control.steer(tokenizer=tokenizer)
+    adapted = [tokenizer.convert_ids_to_tokens(row) for row in control.adapt(batch).tolist()]
+    assert adapted == [
+        ["<s>", "span", "the", "cat", "sat", "on", "the", "mat"],
+        ["<pad>"] * 4 + ["<s>", "span", "dog", "ran"],
+    ]

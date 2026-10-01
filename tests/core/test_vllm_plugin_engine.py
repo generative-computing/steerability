@@ -174,9 +174,9 @@ class TestSpecParityOnEngine:
         assert baseline_again[0].output.output_ids.tolist() == baseline_first[0].output.output_ids.tolist()
 
     def test_scored_vs_generated_scope_agreement(self, plugin_backend):
-        """The vLLM engine backend refuses `compute_logprobs` for a scoped intervention, since its
-        prompt-logprob scoring would anchor token scopes at the request's prompt end rather than the
-        control's scope; the huggingface arm scores normally."""
+        """On the vLLM engine, `compute_logprobs` for an `after_prompt` intervention anchors the
+        scope at the first reference token and agrees with the huggingface scores, which differ from
+        the unsteered scores."""
         from steerability.algorithms.state_control.caa.control import CAA
 
         hidden = plugin_backend._layout.hidden_size
@@ -185,11 +185,18 @@ class TestSpecParityOnEngine:
             multiplier=6.0, token_scope="after_prompt",
         )
         tokenizer = _tokenizer()
-        model = AutoModelForCausalLM.from_pretrained(TINY_MODEL)
         prompt_ids = tokenizer("hello world example", return_tensors="pt")["input_ids"]
         ref_ids = tokenizer(" one two", return_tensors="pt", add_special_tokens=False)["input_ids"]
 
-        hf_pipeline = SteeringPipeline(controls=[factory()], model=model, tokenizer=tokenizer)
+        baseline_pipeline = SteeringPipeline(
+            controls=[], model=AutoModelForCausalLM.from_pretrained(TINY_MODEL), tokenizer=tokenizer,
+        )
+        baseline_pipeline.steer()
+        baseline_scores = baseline_pipeline.compute_logprobs(prompt_ids, ref_output_ids=ref_ids)
+
+        hf_pipeline = SteeringPipeline(
+            controls=[factory()], model=AutoModelForCausalLM.from_pretrained(TINY_MODEL), tokenizer=tokenizer,
+        )
         hf_pipeline.steer()
         hf_scores = hf_pipeline.compute_logprobs(prompt_ids, ref_output_ids=ref_ids)
 
@@ -200,12 +207,11 @@ class TestSpecParityOnEngine:
         engine_pipeline.tokenizer = tokenizer
         engine_pipeline._backends[plugin_backend.spec] = plugin_backend
         engine_pipeline.steer()
-        # the backend refuses rather than return silently mis-anchored scores
-        from steerability.algorithms.core.execution.contracts import UnsupportedPipelineError
+        engine_scores = engine_pipeline.compute_logprobs(prompt_ids, ref_output_ids=ref_ids)
 
-        with pytest.raises(UnsupportedPipelineError, match="unsupported at score on backend kind 'vllm'"):
-            engine_pipeline.compute_logprobs(prompt_ids, ref_output_ids=ref_ids)
-        assert hf_scores.shape == (1, ref_ids.shape[-1])
+        assert hf_scores.shape == engine_scores.shape == (1, ref_ids.shape[-1])
+        assert not torch.allclose(hf_scores, baseline_scores, atol=5e-2, rtol=5e-2)
+        assert torch.allclose(engine_scores.float().cpu(), hf_scores.float().cpu(), atol=5e-2, rtol=5e-2)
 
     def test_chunked_prefill_last_k_exactness(self, plugin_backend):
         """`last_k` selects absolute positions, so a long prompt under chunked prefill steers

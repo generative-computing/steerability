@@ -1,5 +1,6 @@
 """Tests for `VLLMServeBackend` and `VLLMServeSession` against a mocked vLLM server, plus the
-encoder-decoder spec rejection. No vLLM installation or live server is required."""
+encoder-decoder spec rejection and the offline session's steered capture over a fake engine. No
+live server or engine is required."""
 import logging
 
 import pytest
@@ -87,7 +88,6 @@ def fake_server(monkeypatch):
         "steerability.backends.vllm.backend._config_layout",
         lambda source, trust_remote_code=False: None,
     )
-    monkeypatch.setattr("steerability.backends.vllm.capabilities._DISCOVERY_CACHE", {})
     return server
 
 
@@ -124,6 +124,43 @@ class TestServeBackendConstruction:
     def test_hook_plugin_without_discovery_surface_rejected(self, fake_server):
         with pytest.raises(ValueError, match="hook"):
             VLLMServeBackend(_serve_spec(hook_plugin=True))
+
+
+class TestDiscoveryPerBackend:
+    """Each backend negotiates against its own discovery payload, and `check()` stays spec-implied."""
+
+    def test_two_specs_with_different_payloads_negotiate_independently(self, fake_server):
+        from steerability.algorithms.core.execution import Capability, capabilities_for_spec
+
+        full = _discovery_payload()
+        narrow = _discovery_payload()
+        narrow["intervention_kinds"] = {**narrow["intervention_kinds"], "transforms": ["additive"]}
+        narrow["capture_kinds"] = {**narrow["capture_kinds"], "locations": ["layer_output"]}
+
+        first_spec = _serve_spec(hook_plugin=True)
+        second_spec = _serve_spec(hook_plugin=True, request_timeout=30.0)
+        static = capabilities_for_spec(first_spec)
+        fake_server.discovery = full
+        first = VLLMServeBackend(first_spec)
+        fake_server.discovery = narrow
+        second = VLLMServeBackend(second_spec)
+
+        assert "rotation" in first.intervention_kinds.transforms
+        assert second.intervention_kinds.transforms == frozenset({"additive"})
+        assert capabilities_for_spec(first_spec) == static
+        assert capabilities_for_spec(second_spec) == static
+        assert Capability.INTERVENTION_SPECS in second.capabilities
+
+    def test_a_new_backend_for_the_same_spec_fetches_discovery_again(self, fake_server):
+        spec = _serve_spec(hook_plugin=True)
+        fake_server.discovery = _discovery_payload()
+        assert "rotation" in VLLMServeBackend(spec).intervention_kinds.transforms
+        narrow = _discovery_payload()
+        narrow["intervention_kinds"] = {**narrow["intervention_kinds"], "transforms": ["additive"]}
+        fake_server.discovery = narrow
+        assert VLLMServeBackend(spec).intervention_kinds.transforms == frozenset({"additive"})
+        discovery_requests = [path for path, _ in fake_server.requests if path == "/v1/hook/capabilities"]
+        assert len(discovery_requests) == 2
 
 
 class TestServeFingerprintVerification:
@@ -184,7 +221,7 @@ class TestServeSessionGenerate:
         output = results[0].output
         assert output.output_ids.tolist() == [[5, 6]]
         assert output.adapted_input_ids.tolist() == [[0, 3, 4]]
-        assert output.finish_reason == "stop"
+        assert output.finish_reasons[0] == "stop"
         body = next(p for path, p in fake_server.requests if path == "/v1/completions")
         assert body["prompt"] == [0, 3, 4]
         assert body["return_token_ids"] is True
@@ -194,7 +231,7 @@ class TestServeSessionGenerate:
         backend = VLLMServeBackend(_serve_spec())
         with backend.open_session() as session:
             results = session.generate([self._item()], GenerationParams())
-        assert results[0].output.finish_reason == "eos"
+        assert results[0].output.finish_reasons[0] == "eos"
 
     def test_multiple_candidates_pack_per_item(self, fake_server):
         fake_server.completions[(0, 3, 4)] = [
@@ -738,3 +775,81 @@ class TestConfigLayout:
         assert facts.num_attention_heads == 4
         assert facts.head_dim == 8
         assert facts.model_type == "gemma3"
+
+
+class _FakeCaptureLLM:
+    """An offline engine double that records each capture request and returns zero hidden states."""
+
+    def __init__(self, hidden: int = 4):
+        self.hidden = hidden
+        self.extra_args: list[dict] = []
+
+    def generate(self, prompts, sampling, use_tqdm=False):
+        import json
+        from types import SimpleNamespace
+
+        import safetensors.torch
+
+        self.extra_args.append(dict(sampling.extra_args))
+        layers = sampling.extra_args["capture"]["layers"]
+        outputs = []
+        for prompt in prompts:
+            length = len(prompt["prompt_token_ids"])
+            tensors = {f"layer_{layer}": torch.zeros(length, self.hidden) for layer in layers}
+            outputs.append(SimpleNamespace(captures=(json.dumps({"positions": {}}), safetensors.torch.save(tensors))))
+        return outputs
+
+
+def _offline_backend(llm, tmp_path):
+    """A `VLLMBackend` over a fake engine, built without booting vLLM."""
+    from steerability.algorithms.core.execution import ModelFacts
+    from steerability.backends.vllm import VLLMBackend
+    from steerability.backends.vllm.backend import _ArtifactUploader
+
+    backend = VLLMBackend.__new__(VLLMBackend)
+    backend.spec = BackendSpec(kind="vllm", model="m", options={"hook_plugin": True, "artifact_dir": str(tmp_path)})
+    backend._released = False
+    backend._llm = llm
+    backend._lora_request = None
+    backend.tokenizer = wordlevel_tokenizer()
+    backend._layout = ModelFacts(
+        num_layers=2, hidden_size=4, num_attention_heads=2, head_dim=2, dtype="float32", model_fingerprint=None,
+    )
+    backend._plain_salt = "plain"
+    backend._artifact_uploader = _ArtifactUploader(str(tmp_path))
+    backend._discovery = _discovery_payload()
+    return backend
+
+
+class TestOfflineSteeredCapture:
+
+    def test_capture_requests_carry_the_entries_spec(self, tmp_path):
+        pytest.importorskip("vllm")
+        pytest.importorskip("vllm_hook_plugins")
+        llm = _FakeCaptureLLM()
+        backend = _offline_backend(llm, tmp_path)
+        spec = _mini_spec()
+        prompts = [PreparedPrompt.from_token_ids([0, 3, 4]), PreparedPrompt.from_token_ids([0, 5])]
+        with backend.open_session() as session:
+            unsteered = session.capture(prompts, [0], "last_token")
+            steered = session.capture(prompts, [0], "last_token", state_entries=(InterventionEntry(spec=spec),))
+
+        assert unsteered.hidden[0].shape == steered.hidden[0].shape == (2, 4)
+        assert "intervention_spec" not in llm.extra_args[0]
+        assert llm.extra_args[1]["intervention_spec"] == spec.to_wire()
+        assert llm.extra_args[1]["capture"] == llm.extra_args[0]["capture"]
+
+    def test_steered_session_forwards_its_entries(self):
+        from steerability.algorithms.core.execution.backend import SteeredSession
+
+        seen = []
+
+        class _Inner:
+            def capture(self, prompts, layers, mode, location="layer_output", **kwargs):
+                seen.append(kwargs)
+                return "captured"
+
+        entry = InterventionEntry(spec=_mini_spec())
+        assert SteeredSession(_Inner(), (entry,)).capture([], [0], "last_token") == "captured"
+        assert SteeredSession(_Inner()).capture([], [0], "last_token") == "captured"
+        assert seen == [{"state_entries": (entry,)}, {}]

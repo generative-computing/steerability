@@ -218,8 +218,8 @@ class TestVerdictStrings:
 class TestDiscoveryIntersection:
 
     def test_negotiated_kinds_narrow_static_tables(self):
-        from steerability.algorithms.core.execution import BackendSpec, capabilities_for_spec
-        from steerability.backends.vllm import capabilities as vllm_capabilities
+        from steerability.algorithms.core.execution import BackendSpec, Capability, capabilities_for_spec
+        from steerability.backends.vllm.capabilities import _intersect_with_discovery
 
         spec = BackendSpec(kind="vllm", model="intersect-test", options={"hook_plugin": True})
         static = capabilities_for_spec(spec)
@@ -237,25 +237,33 @@ class TestDiscoveryIntersection:
             "processor_kinds": {"processors": []},
             "capture_kinds": {"kinds": ["residual"], "locations": ["layer_output"], "modes": ["all_tokens"]},
         }
-        vllm_capabilities._DISCOVERY_CACHE[spec.spec_hash] = payload
-        try:
-            negotiated = capabilities_for_spec(spec)
-            assert "rotation" not in negotiated.intervention_kinds.transforms
-            assert "additive" in negotiated.intervention_kinds.transforms
-            assert negotiated.intervention_kinds.readouts == frozenset({"affine", "cosine"})
-            assert negotiated.intervention_kinds.rules == frozenset({"sum_threshold"})
-            assert negotiated.processor_kinds is None
-            assert negotiated.capture_kinds.locations == frozenset({"layer_output"})
-            assert negotiated.atoms == static.atoms
-        finally:
-            vllm_capabilities._DISCOVERY_CACHE.pop(spec.spec_hash, None)
+        negotiated = _intersect_with_discovery(static, payload)
+        assert "rotation" not in negotiated.intervention_kinds.transforms
+        assert "additive" in negotiated.intervention_kinds.transforms
+        assert negotiated.intervention_kinds.readouts == frozenset({"affine", "cosine"})
+        assert negotiated.intervention_kinds.rules == frozenset({"sum_threshold"})
+        assert negotiated.processor_kinds is None
+        assert negotiated.capture_kinds.locations == frozenset({"layer_output"})
+        # a capture location or mode missing from discovery removes the capture atom
+        assert negotiated.atoms == static.atoms - {Capability.HIDDEN_CAPTURE}
+        assert capabilities_for_spec(spec) == static
+
+    def test_full_capture_surface_keeps_the_capture_atom(self):
+        from steerability.algorithms.core.execution import BackendSpec, Capability, capabilities_for_spec
+        from steerability.backends.vllm.capabilities import _intersect_with_discovery
+
+        static = capabilities_for_spec(BackendSpec(kind="vllm", model="m", options={"hook_plugin": True}))
+        payload = {"capture_kinds": {
+            "kinds": ["residual"], "locations": ["layer_output", "layer_input"], "modes": ["all_tokens", "last_token"],
+        }}
+        assert Capability.HIDDEN_CAPTURE in _intersect_with_discovery(static, payload).atoms
 
     def test_gates_shaped_payload_yields_empty_readout_and_rule_sets(self):
         """A discovery payload from a pre-redesign plugin (a `gates` list, no `readouts`/`rules`
         keys) negotiates empty readout and rule sets, so gated interventions get an honest
         unsupported verdict."""
         from steerability.algorithms.core.execution import BackendSpec, capabilities_for_spec
-        from steerability.backends.vllm import capabilities as vllm_capabilities
+        from steerability.backends.vllm.capabilities import _intersect_with_discovery
 
         spec = BackendSpec(kind="vllm", model="old-plugin-test", options={"hook_plugin": True})
         payload = {
@@ -266,11 +274,7 @@ class TestDiscoveryIntersection:
                 "gates": ["null", "cache_once", "probe_sum"],
             },
         }
-        vllm_capabilities._DISCOVERY_CACHE[spec.spec_hash] = payload
-        try:
-            negotiated = capabilities_for_spec(spec)
-            assert negotiated.intervention_kinds.readouts == frozenset()
-            assert negotiated.intervention_kinds.rules == frozenset()
-            assert "additive" in negotiated.intervention_kinds.transforms
-        finally:
-            vllm_capabilities._DISCOVERY_CACHE.pop(spec.spec_hash, None)
+        negotiated = _intersect_with_discovery(capabilities_for_spec(spec), payload)
+        assert negotiated.intervention_kinds.readouts == frozenset()
+        assert negotiated.intervention_kinds.rules == frozenset()
+        assert "additive" in negotiated.intervention_kinds.transforms

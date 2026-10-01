@@ -1,11 +1,14 @@
 """Tests for canonical configuration identity and trial-seed derivation.
 
 Covers `canonical_value` over primitives, paths, numpy, tensors (content-addressed, device- and
-grad-independent, bfloat16), dataclasses, mappings/sequences/sets, callables, and unhandled
-objects; the descriptor builders for fixed controls and specs; the purity of `config_digest`; and
-the purity and distinctness of `derive_trial_seed`.
+grad-independent, bfloat16), dataclasses (`init=True` fields only), mappings/sequences/sets,
+callables (partials and bound methods included), and unhandled objects; the descriptor builders for
+fixed controls and specs; the stability of a control's identity across `steer()`; the purity of
+`config_digest`; and the purity and distinctness of `derive_trial_seed`.
 """
-from dataclasses import dataclass
+import functools
+import warnings
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -125,6 +128,46 @@ class TestCanonicalValue:
     def test_callable_qualname_form(self):
         assert canonical_value(len).startswith("callable:")
 
+    def test_dataclass_fields_set_after_construction_do_not_participate(self):
+        @dataclass
+        class _Source:
+            label: str
+            cache: list = field(default_factory=list, init=False)
+
+        source = _Source("a")
+        before = canonical_value(source)
+        source.cache.append(torch.ones(2))
+        assert canonical_value(source) == before
+        assert set(before["fields"]) == {"label"}
+
+    def test_partials_with_different_bound_values_differ(self):
+        def scale(value, factor=1.0):
+            return value * factor
+
+        assert canonical_value(functools.partial(scale, factor=2.0)) != canonical_value(
+            functools.partial(scale, factor=3.0)
+        )
+        assert canonical_value(functools.partial(scale, 2.0)) != canonical_value(functools.partial(scale, 3.0))
+        assert canonical_value(functools.partial(scale, factor=2.0)) == canonical_value(
+            functools.partial(scale, factor=2.0)
+        )
+
+    def test_bound_method_includes_the_bound_type(self):
+        class _Base:
+            def score(self, text):
+                return 0.0
+
+            @classmethod
+            def build(cls):
+                return cls()
+
+        class _Derived(_Base):
+            pass
+
+        assert canonical_value(_Base().score) != canonical_value(_Derived().score)
+        assert canonical_value(_Base().score) == canonical_value(_Base().score)
+        assert canonical_value(_Base.build) != canonical_value(_Derived.build)
+
     def test_unknown_object_yields_type_token(self):
         class _Weird:
             pass
@@ -157,6 +200,63 @@ class TestConfigDescriptors:
             qualname(_ArgControl), qualname(_ArgFreeControl),
         ]
         assert controls[0]["params"] == {"alpha": 3.0}
+
+
+class TestIdentityAcrossSteer:
+    """A control's identity is the same before and after `steer()`."""
+
+    def test_caa_descriptor_is_stable_and_the_bundle_loads_without_allow_stale(self, tmp_path):
+        from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+        from steerability.algorithms.state_control.caa.control import CAA
+        from steerability.spipe import SPipe
+        from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
+
+        caa = CAA(
+            data={"positives": ["the cat", "the dog"], "negatives": ["the mat", "the fast"]},
+            train_spec={"method": "mean_diff", "accumulate": "last_token", "prompt_format": "raw"},
+            layer_id=1,
+        )
+        before = config_descriptor_from_controls([caa])
+        pipeline = SteeringPipeline(controls=[caa], model=tiny_llama(num_layers=2, hidden=16, heads=2),
+                                    tokenizer=wordlevel_tokenizer())
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            pipeline.steer()
+        assert config_descriptor_from_controls([caa]) == before
+
+        saved = pipeline.to_spipe(model_ref="tiny").save(tmp_path / "caa.spipe")
+        rebuilt = SPipe.load(saved).pipeline()
+        assert type(rebuilt.state_controls[0]).__name__ == "CAA"
+
+    def test_condition_point_search_gate_keeps_its_config_id(self):
+        from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+        from steerability.algorithms.state_control.activation_adapter import ActivationAdapter
+        from steerability.algorithms.state_control.common.sources import ConditionPointSearch
+        from steerability.algorithms.state_control.common.steering_vector import SteeringVector
+        from steerability.algorithms.state_control.common.transforms import AdditiveTransform
+        from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
+
+        generator = torch.Generator().manual_seed(0)
+        adapter = ActivationAdapter(
+            transform=AdditiveTransform(
+                SteeringVector(model_type="llama", directions={1: torch.randn(1, 16, generator=generator)}),
+            ),
+            layer_ids=[1],
+            hook_point="layer_input",
+            gate=ConditionPointSearch(
+                condition_vector=SteeringVector(
+                    model_type="llama", directions={0: torch.randn(1, 16, generator=generator)},
+                ),
+                layer_ids=[0],
+                threshold=0.0,
+            ),
+        )
+        before = config_digest(config_descriptor_from_controls([adapter]))
+        pipeline = SteeringPipeline(controls=[adapter], model=tiny_llama(num_layers=2, hidden=16, heads=2),
+                                    tokenizer=wordlevel_tokenizer())
+        pipeline.steer()
+        assert adapter.args.gate.resolved_point is not None
+        assert config_digest(config_descriptor_from_controls([adapter])) == before
 
 
 class TestConfigDigest:

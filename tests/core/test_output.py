@@ -4,6 +4,7 @@ Covers `infer_finish_reasons` per-row semantics (including the pad-equals-eos co
 `Output` dataclass fields, `decode` round-tripping, and the module home (importable from `core`
 and `core.output`).
 """
+import pytest
 import torch
 
 from steerability.algorithms.core.output import Output, infer_finish_reasons
@@ -100,15 +101,40 @@ class TestOutputFields:
         out = Output(
             output_ids=torch.tensor([[1, 2]]),
             adapted_input_ids=torch.tensor([[3, 4]]),
-            finish_reason="length",
+            finish_reasons=("length",),
         )
-        assert out.finish_reason == "length"
+        assert out.finish_reasons == ("length",)
         assert out.adapted_input_ids is not None
+
+    def test_one_reason_per_row_is_required(self):
+        with pytest.raises(ValueError, match="finish_reasons has 1 entries for 2 rows"):
+            Output(output_ids=torch.zeros((2, 3), dtype=torch.long), finish_reasons=("eos",))
+
+    def test_output_ids_must_be_two_dimensional(self):
+        with pytest.raises(ValueError, match=r"output_ids must be \[batch, seq\]"):
+            Output(output_ids=torch.zeros((3,), dtype=torch.long), finish_reasons=("eos",))
+
+    def test_reasons_are_known_values_or_none(self):
+        with pytest.raises(ValueError, match="'halt'"):
+            Output(output_ids=torch.zeros((1, 3), dtype=torch.long), finish_reasons=("halt",))
+        Output(output_ids=torch.zeros((2, 3), dtype=torch.long), finish_reasons=(None, "stop"))
+
+    def test_finish_reasons_is_a_required_keyword(self):
+        with pytest.raises(TypeError):
+            Output(output_ids=torch.zeros((1, 3), dtype=torch.long))
+
+    def test_an_output_without_rows_constructs(self):
+        out = Output(output_ids=torch.zeros((0, 0), dtype=torch.long), finish_reasons=())
+        assert out.finish_reasons == ()
+
+    def test_the_singular_field_is_gone(self):
+        out = Output(output_ids=torch.zeros((1, 2), dtype=torch.long), finish_reasons=("eos",))
+        assert not hasattr(out, "finish_reason")
 
     def test_decode_round_trips(self):
         tokenizer = wordlevel_tokenizer()
         ids = tokenizer(["the cat sat"], return_tensors="pt", add_special_tokens=False)["input_ids"]
-        out = Output(output_ids=ids)
+        out = Output(output_ids=ids, finish_reasons=(None,))
         decoded = out.decode(tokenizer)
         assert decoded == ["the cat sat"]
 

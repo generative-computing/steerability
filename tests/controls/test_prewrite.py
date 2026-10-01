@@ -127,7 +127,7 @@ class TestPRewriteSearchStrategy:
 
 
 class TestPRewriteAdaptMessages:
-    """`adapt_messages` should set/replace the system message with the chosen instruction."""
+    """`adapt_messages` sets the system message, or places the chosen instruction before an existing one."""
 
     def test_inserts_system_prompt(self, model_and_tokenizer, device: torch.device):
         base_model, tokenizer = model_and_tokenizer
@@ -146,7 +146,7 @@ class TestPRewriteAdaptMessages:
         assert adapted[0][0]["role"] == "system"
         assert adapted[0][0]["content"] == prewrite.memory["instruction"]
 
-    def test_replaces_existing_system(self, model_and_tokenizer, device: torch.device):
+    def test_prepends_to_existing_system(self, model_and_tokenizer, device: torch.device):
         base_model, tokenizer = model_and_tokenizer
         model = base_model.to(device)
 
@@ -163,8 +163,8 @@ class TestPRewriteAdaptMessages:
             {"role": "user", "content": "?"},
         ]
         adapted = prewrite.adapt_messages([chat])
-        assert adapted[0][0]["content"] != "OLD"
-        assert adapted[0][0]["content"] == prewrite.memory["instruction"]
+        assert adapted[0][0]["content"] == prewrite.memory["instruction"] + "\n\nOLD"
+        assert len([message for message in adapted[0] if message["role"] == "system"]) == 1
 
 
 class TestPRewriteSessionOnlySteer:

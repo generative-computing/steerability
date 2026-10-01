@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import torch
-
 from steerability.algorithms.core.execution.payloads import ModelFacts
 from steerability.algorithms.core.internals.fingerprint import model_fingerprint
 from steerability.algorithms.core.internals.model_layout import text_config
@@ -21,8 +19,6 @@ if TYPE_CHECKING:
     from transformers import PreTrainedModel
 
     from steerability.algorithms.core.execution.backend import SteeringSession
-
-    from .steering_vector import SteeringVector
 
 
 def resolve_layout(model: PreTrainedModel | None = None, session: SteeringSession | None = None) -> ModelFacts:
@@ -62,34 +58,3 @@ def resolve_layout(model: PreTrainedModel | None = None, session: SteeringSessio
         model_type=getattr(model.config, "model_type", None),
         model_ref=getattr(model, "name_or_path", None),
     )
-
-
-def cast_steering_vector(steering_vector: SteeringVector, layout: ModelFacts) -> SteeringVector:
-    """A clone of `steering_vector` with per-layer directions cast to the layout dtype.
-
-    Device placement is untouched; transforms move tensors to the stream device at apply time.
-
-    Args:
-        steering_vector: The `SteeringVector` to clone and cast.
-        layout: The structural layout naming the target dtype.
-
-    Returns:
-        The cast clone.
-    """
-    clone = steering_vector.clone()
-    dtype = layout_torch_dtype(layout)
-    for layer_id, direction in clone.directions.items():
-        clone.directions[layer_id] = direction.to(dtype=dtype)
-    return clone
-
-
-def layout_torch_dtype(layout: ModelFacts) -> torch.dtype:
-    """The torch dtype named by `layout.dtype`.
-
-    Raises:
-        ValueError: If `layout.dtype` does not name a torch dtype.
-    """
-    dtype = getattr(torch, layout.dtype, None)
-    if not isinstance(dtype, torch.dtype):
-        raise ValueError(f"Layout dtype {layout.dtype!r} does not name a torch dtype.")
-    return dtype

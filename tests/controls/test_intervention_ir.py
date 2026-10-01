@@ -10,9 +10,12 @@ import dataclasses
 import pytest
 import torch
 
+from steerability.algorithms.core.execution.access import ModelAccess
 from steerability.algorithms.core.execution.contracts import InterventionKinds
 from steerability.algorithms.core.execution.payloads import ModelFacts
 from steerability.algorithms.core.internals.probes.probe import Probe
+from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+from steerability.algorithms.state_control.activation_adapter import ActivationAdapter
 from steerability.algorithms.state_control.common.gating import (
     AffineReadout,
     CallableReadout,
@@ -26,6 +29,7 @@ from steerability.algorithms.state_control.common.gating import (
 )
 from steerability.algorithms.state_control.common.lowering import lower_interventions
 from steerability.algorithms.state_control.common.selectors import FractionalDepthSelector
+from steerability.algorithms.state_control.common.sources import LayerFilteredFit
 from steerability.algorithms.state_control.common.specs import Intervention, TokenScope, WireForm, combine_kinds
 from steerability.algorithms.state_control.common.steering_vector import SteeringVector
 from steerability.algorithms.state_control.common.transforms import (
@@ -541,3 +545,23 @@ class TestReviewRegressions:
         spec = lower_interventions([intervention], num_layers=8)
         assert spec is not None
         assert spec.ops[0]["layers"] == [0]
+
+
+class _UndeclaredSource:
+    """An artifact source that declares no `access`."""
+
+    def resolve(self, model, tokenizer, *, session=None):
+        return SteeringVector(model_type="llama", directions={1: torch.ones(1, H)})
+
+
+class TestLayerFilteredFitAccess:
+    def test_undeclared_inner_access_counts_as_module(self):
+        assert LayerFilteredFit(inner=_UndeclaredSource(), layer_range=(0, 2)).access is ModelAccess.MODULE
+
+    def test_check_reports_for_a_pipeline_holding_it(self):
+        adapter = ActivationAdapter(
+            transform=AdditiveTransform(LayerFilteredFit(inner=_UndeclaredSource())), layer_ids=[1],
+        )
+        report = SteeringPipeline(model_name_or_path="m", controls=[adapter]).check()
+        (step,) = report.plan.steps
+        assert step.access is ModelAccess.MODULE

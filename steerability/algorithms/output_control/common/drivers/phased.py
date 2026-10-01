@@ -1,15 +1,17 @@
 """Phase plans (`Fixed`, `Generated`) and `PhasedDriver`, the decoding driver that runs them.
 
 A phase plan is a list of `Fixed` phases (append text without generating) and `Generated` phases
-(generate until a boundary). `PhasedDriver` runs the plans of all rows of a batch together, one phase
-at a time. Every `Generated` phase generates through the session with the composed logits processors
-and stopping criteria. When the decoded continuation contains an optional `extract_after` marker
-(e.g., `"</think>"`), only the text after the marker's last occurrence is returned as the continuation.
+(generate until a boundary). A plan entry may also be a callable that receives a `PlanState` and
+returns the phase to apply, or None to skip the entry. `PhasedDriver` runs the plans of all rows of a
+batch together, one phase at a time. Every `Generated` phase generates through the session with the
+composed logits processors and stopping criteria. When the decoded continuation contains an optional
+`extract_after` marker (e.g., `"</think>"`), only the text after the marker's last occurrence is
+returned as the continuation.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Literal
 
 import torch
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
@@ -69,6 +71,36 @@ class Generated:
         object.__setattr__(self, "until_token_ids", tuple(int(i) for i in self.until_token_ids))
 
 
+StopCause = Literal["until", "until_token", "budget", "eos", "length"]
+
+
+@dataclass(frozen=True, slots=True)
+class PlanState:
+    """A read-only view of one candidate sequence, passed to a callable plan entry.
+
+    Attributes:
+        last_stop: What ended the sequence's most recent `Generated` phase, or None before the
+            first one ends. The values are checked in the following order:
+
+                - `"until_token"`: the last generated token is one of the phase's
+                  `until_token_ids`.
+                - `"until"`: the phase's decoded continuation contains the phase's `until` text.
+                - `"budget"`: the phase generated `budget` tokens, and `budget` was smaller than
+                  the tokens that remained under the caller's `max_new_tokens`.
+                - `"length"`: the phase generated the tokens that remained under the caller's
+                  `max_new_tokens`.
+                - `"eos"`: any other end, e.g., an eos token or a stop rule of the caller or of
+                  the pipeline.
+        appended: Number of tokens the plan has appended to the sequence, counted against
+            `max_new_tokens`.
+        text: The decoded stream after the prompt, with special tokens kept.
+    """
+
+    last_stop: StopCause | None
+    appended: int
+    text: str
+
+
 @dataclass(slots=True, eq=False)
 class _Sequence:
     """The state of one candidate sequence while its row's plan runs.
@@ -78,17 +110,25 @@ class _Sequence:
         ids: The unpadded 1-D stream so far, i.e., the prompt (or the text of the last replacing
             `Fixed` phase) followed by every appended and generated token.
         plan: The row's phase plan.
-        cursor: Index of the next phase to apply.
+        prompt_length: The length of the row's unpadded prompt.
+        cursor: Index of the next plan entry to apply.
         appended: Number of tokens the phases have appended, counted against `max_new_tokens`.
         done: Whether the sequence applies no further phases.
+        last_stop: What ended the sequence's most recent `Generated` phase (see `PlanState`), or
+            None before the first one ends.
+        pending: The `Generated` phase at the cursor, once the entry at the cursor has been
+            resolved, or None.
     """
 
     row: int
     ids: torch.Tensor
     plan: list
+    prompt_length: int
     cursor: int = 0
     appended: int = 0
     done: bool = False
+    last_stop: StopCause | None = None
+    pending: Generated | None = None
 
 
 def _phase_ceiling(budget: int | None, max_new_tokens: int | None, appended: int) -> int | None:
@@ -111,11 +151,12 @@ def _phase_ceiling(budget: int | None, max_new_tokens: int | None, appended: int
 class PhasedDriver(DecodingDriver):
     """Decoding driver that runs a plan of fixed and generated phases for each prompt.
 
-    A subclass implements `plan(prompt_text, params)`, which returns the `Fixed` and `Generated`
-    phases for one prompt row. The subclass is constructed with the arguments listed under `Args:`.
-    Alternatively, it sets an `Args` dataclass and overrides `_configure()` to set `extract_after`,
-    and the constructor then validates the subclass's `Args`. `decode()` runs the plans in three
-    steps:
+    A subclass implements `plan(prompt_text, params)`, which returns the plan for one prompt row.
+    A plan is a list of `Fixed` and `Generated` phases, and an entry may also be a callable
+    `(state) -> Fixed | Generated | None`. The subclass is constructed with the arguments listed
+    under `Args:`. Alternatively, it sets an `Args` dataclass and overrides `_configure()` to set
+    `extract_after`, and the constructor then validates the subclass's `Args`. `decode()` runs the
+    plans in three steps:
 
     1. **Preparation**: pad positions are removed from each row (using the attention mask), and
        `plan()` is called once per row with the decoded prompt. Each row is expanded into
@@ -127,6 +168,10 @@ class PhasedDriver(DecodingDriver):
        and its token limit as `max_new_tokens`. Because the boundaries are generation parameters,
        generated phases run on any backend. Sequences whose current phases have the same boundaries
        and token limit, and which have appended the same number of tokens, share one session call.
+       After each `Generated` phase, the sequence records what ended the phase
+       (`PlanState.last_stop`). A callable entry is evaluated when a sequence reaches it, with that
+       sequence's `PlanState`, and returns the phase to apply or None to skip the entry. Each
+       candidate therefore follows its own path through a plan with callable entries.
     3. **Output**: when `extract_after` is set and a candidate's decoded continuation contains the
        marker, the continuation is replaced by the re-tokenized text after the marker's last
        occurrence. A candidate whose continuation does not contain the marker (e.g., one whose
@@ -275,7 +320,9 @@ class PhasedDriver(DecodingDriver):
             ValueError: If no session was provided, if beam search (`num_beams > 1`) is requested
                 with more than one candidate, or if a list or tuple value in the `params` runtime
                 kwarg does not have one entry per row.
-            TypeError: If a plan contains a phase that is neither `Fixed` nor `Generated`.
+            TypeError: If a plan entry is neither a `Fixed` phase, a `Generated` phase, nor a
+                callable, or if a callable entry returns something other than one of these
+                phases or None.
         """
         self._check_ready(session)
         input_ids, attention_mask = self._as_batch(input_ids, attention_mask)
@@ -373,7 +420,9 @@ class PhasedDriver(DecodingDriver):
         Raises:
             ValueError: If beam search (`num_beams > 1`) is requested with more than one
                 candidate.
-            TypeError: If a plan contains a phase that is neither `Fixed` nor `Generated`.
+            TypeError: If a plan entry is neither a `Fixed` phase, a `Generated` phase, nor a
+                callable, or if a callable entry returns something other than one of these
+                phases or None.
         """
         gen_kwargs = dict(gen_kwargs)
         num_candidates = gen_kwargs.pop("num_return_sequences", None) or 1
@@ -385,9 +434,12 @@ class PhasedDriver(DecodingDriver):
                 "or sample the candidates."
             )
         eos_token_ids = self._eos_token_ids(model, gen_kwargs)
+        terminal_eos_ids = set(eos_token_ids)
+        if self.tokenizer.eos_token_id is not None:
+            terminal_eos_ids.add(int(self.tokenizer.eos_token_id))
         stacks = stack_generate_kwargs(logits_processors, stopping_criteria)
         sequences = [
-            _Sequence(row=index, ids=rows[index], plan=plans[index])
+            _Sequence(row=index, ids=rows[index], plan=plans[index], prompt_length=rows[index].numel())
             for index in range(len(rows))
             for _ in range(num_candidates)
         ]
@@ -404,7 +456,7 @@ class PhasedDriver(DecodingDriver):
             # the appended count in the key ends every member's prompt at the same packed position
             groups: dict[tuple, list[_Sequence]] = {}
             for sequence in pending:
-                phase = sequence.plan[sequence.cursor]
+                phase = sequence.pending
                 ceiling = _phase_ceiling(phase.budget, max_new_tokens, sequence.appended)
                 key = (phase.until, phase.until_token_ids, ceiling, sequence.appended)
                 groups.setdefault(key, []).append(sequence)
@@ -414,18 +466,60 @@ class PhasedDriver(DecodingDriver):
                     session, [member.ids for member in members], eos_token_ids=eos_token_ids,
                     **stacks, **phase_kwargs,
                 )
-                for member, (continuation, _) in zip(members, results):
+                for member, (continuation, reason) in zip(members, results):
+                    remaining = None if max_new_tokens is None else max_new_tokens - member.appended
+                    member.last_stop = self._stop_cause(
+                        member.pending, continuation, reason, ceiling, remaining, terminal_eos_ids,
+                    )
                     member.ids = torch.cat([member.ids, continuation.to(member.ids.device)])
                     member.appended += continuation.numel()
                     member.cursor += 1
+                    member.pending = None
 
         return self._assemble(input_ids, rows, sequences)
+
+    def _stop_cause(self, phase: Generated, continuation: torch.Tensor, reason: str | None,
+                    ceiling: int | None, remaining: int | None, eos_ids: set[int]) -> StopCause:
+        """Classify what ended one `Generated` phase of one sequence.
+
+        A stop on the phase's `until_token_ids` or `until` text comes first. The session's
+        `"stop"` and `"eos"` finish reasons, and a last token that is an eos id, then count as
+        `"eos"`. Otherwise a continuation that reached the phase's token limit is classified by
+        the bound that set the limit, and a `budget` equal to the remaining tokens counts as
+        `"length"`.
+
+        Args:
+            phase: The `Generated` phase that ran.
+            continuation: The phase's generated ids as a 1-D tensor.
+            reason: The finish reason the session reported for the phase, or None.
+            ceiling: The phase's token limit, or None for no limit.
+            remaining: The tokens that remained under the caller's `max_new_tokens` before the
+                phase, or None when the caller set no limit.
+            eos_ids: The eos ids that end a phase (the tokenizer's eos and the generation
+                config's eos ids).
+
+        Returns:
+            The stop cause, as described under `PlanState.last_stop`.
+        """
+        last = int(continuation[-1]) if continuation.numel() else None
+        if last is not None and last in phase.until_token_ids:
+            return "until_token"
+        if phase.until is not None and phase.until in self.tokenizer.decode(continuation, skip_special_tokens=False):
+            return "until"
+        ended_on_stop = reason in ("stop", "eos") or (last is not None and last in eos_ids)
+        if not ended_on_stop and ceiling is not None and continuation.numel() >= ceiling:
+            if phase.budget is not None and (remaining is None or phase.budget < remaining):
+                return "budget"
+            return "length"
+        return "eos"
 
     def _advance(self, sequence: _Sequence, max_new_tokens: int | None, prompt_texts: list[str],
                  params_per_example: list[dict], fixed_ids: dict[tuple[str, bool], torch.Tensor]) -> bool:
         """Apply the `Fixed` phases of `sequence` up to its next `Generated` phase.
 
-        The sequence is marked done when its plan is exhausted or when its appended tokens reach
+        A callable entry is evaluated with the sequence's `PlanState` when the cursor reaches it.
+        It is skipped when it returns None, and its returned phase is applied otherwise. The
+        sequence is marked done when its plan is exhausted or when its appended tokens reach
         `max_new_tokens`.
 
         Args:
@@ -437,12 +531,17 @@ class PhasedDriver(DecodingDriver):
                 place with each new text.
 
         Returns:
-            True when the sequence's current phase is a `Generated` phase, otherwise False.
+            True when the sequence's current phase is a `Generated` phase, which is then set as
+            `sequence.pending`, otherwise False.
 
         Raises:
-            TypeError: If the plan contains a phase that is neither `Fixed` nor `Generated`.
+            TypeError: If a plan entry is neither a `Fixed` phase, a `Generated` phase, nor a
+                callable, or if a callable entry returns something other than one of these
+                phases or None.
         """
         while not sequence.done:
+            if sequence.pending is not None:
+                return True
             if sequence.cursor >= len(sequence.plan):
                 sequence.done = True
                 break
@@ -450,7 +549,18 @@ class PhasedDriver(DecodingDriver):
                 sequence.done = True
                 break
             phase = sequence.plan[sequence.cursor]
+            if callable(phase):
+                phase = phase(self._plan_state(sequence))
+                if phase is None:
+                    sequence.cursor += 1
+                    continue
+                if not isinstance(phase, (Fixed, Generated)):
+                    raise TypeError(
+                        f"A callable plan entry returned {type(phase).__name__}; return a Fixed or Generated "
+                        "phase, or None to skip the entry."
+                    )
             if isinstance(phase, Generated):
+                sequence.pending = phase
                 return True
             if not isinstance(phase, Fixed):
                 raise TypeError(f"Unknown phase type: {type(phase).__name__}")
@@ -470,6 +580,11 @@ class PhasedDriver(DecodingDriver):
             sequence.ids = torch.cat([sequence.ids, ids])
             sequence.appended += ids.numel()
         return False
+
+    def _plan_state(self, sequence: _Sequence) -> PlanState:
+        """Return the `PlanState` of `sequence`, decoding its stream after the prompt."""
+        text = self.tokenizer.decode(sequence.ids[sequence.prompt_length:], skip_special_tokens=False)
+        return PlanState(last_stop=sequence.last_stop, appended=sequence.appended, text=text)
 
     @staticmethod
     def _eos_token_ids(model: PreTrainedModel | None, gen_kwargs: dict) -> tuple[int, ...]:

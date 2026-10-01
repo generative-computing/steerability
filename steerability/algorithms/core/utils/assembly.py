@@ -28,6 +28,7 @@ from steerability.algorithms.core.execution.payloads import (
 )
 from steerability.algorithms.output_control.base import DecodingDriver, OutputControl
 from steerability.algorithms.state_control.base import StateControl
+from steerability.utils.tokenization import strip_leading_pads
 
 if TYPE_CHECKING:
     from transformers import PreTrainedModel
@@ -118,9 +119,11 @@ def per_item_state_entries(
     The pipeline uses these entries when distinct per-item seeds make the in-process session
     run a separate forward for each row. Hooks built once for the batch contain position and
     gate state sized for the whole batch. Each row therefore gets hooks that fresh clones build
-    on that row's prompt tensors. The clones for one row share one `copy.deepcopy` memo. A gate
-    shared by several controls (the control that drives it and the controls that follow it) is
-    then copied once per row, and every clone for that row reads the same copy.
+    on that row's prompt without its leading pad positions, which is the prompt the session
+    decodes for the row. Prompt-relative token scopes are then anchored at the row's own prompt
+    length. The clones for one row share one `copy.deepcopy` memo. A gate shared by several
+    controls (the control that drives it and the controls that follow it) is then copied once
+    per row, and every clone for that row reads the same copy.
 
     Args:
         state_controls: The pipeline's state controls, in list order.
@@ -136,6 +139,7 @@ def per_item_state_entries(
     """
     rows: list[tuple[HookEntry, ...]] = []
     for index in range(input_ids.size(0)):
+        row_ids, row_mask = strip_leading_pads(input_ids[index:index + 1], attention_mask[index:index + 1])
         entries: list[HookEntry] = []
         memo: dict = {}
         for state_control in state_controls:
@@ -143,9 +147,9 @@ def per_item_state_entries(
                 continue
             clone = state_control.clone_for_call(memo=memo)
             hooks = clone.get_hooks(
-                input_ids[index:index + 1],
+                row_ids,
                 runtime_kwargs,
-                attention_mask=attention_mask[index:index + 1],
+                attention_mask=row_mask,
                 model=model,
                 **gen_kwargs,
             )

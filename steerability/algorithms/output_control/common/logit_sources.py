@@ -92,7 +92,6 @@ class AuxModelSource(BaseLogitSource):
         self.model.eval()
         self._device = next(self.model.parameters()).device
         self.tokenizer = AutoTokenizer.from_pretrained(self.name_or_path)
-        self.tokenizer.padding_side = "left"
         self._base_pad_id = getattr(self.base_tokenizer, "pad_token_id", None)
 
         if self.shared_vocab:
@@ -118,8 +117,6 @@ class AuxModelSource(BaseLogitSource):
         self.tokenizer = tokenizer or self.tokenizer
         self.model.eval()
         self._device = next(self.model.parameters()).device
-        if self.tokenizer is not None:
-            self.tokenizer.padding_side = "left"
         self._base_pad_id = getattr(self.base_tokenizer, "pad_token_id", None)
 
     @torch.no_grad()
@@ -131,7 +128,7 @@ class AuxModelSource(BaseLogitSource):
         if self.prompt_transform is not None and self.base_tokenizer is not None:
             texts = self.base_tokenizer.decode(prefix_ids, skip_special_tokens=True)
             texts = [self.prompt_transform(t) for t in texts]
-            enc = self.tokenizer(texts, return_tensors="pt", padding=True).to(self._device)
+            enc = self.tokenizer(texts, return_tensors="pt", padding=True, padding_side="left").to(self._device)
             ids = enc["input_ids"]
             mask = enc["attention_mask"]
         else:
@@ -177,8 +174,6 @@ class PromptVariantSource(BaseLogitSource):
         self.model = model
         if self.base_tokenizer is None:
             self.base_tokenizer = tokenizer
-        if self.base_tokenizer is not None:
-            self.base_tokenizer.padding_side = "left"
         self._device = next(model.parameters()).device
 
     @torch.no_grad()
@@ -189,7 +184,7 @@ class PromptVariantSource(BaseLogitSource):
             raise RuntimeError("PromptVariantSource is not prepared; call prepare() from steer().")
         texts = self.base_tokenizer.decode(prefix_ids, skip_special_tokens=True)
         texts = [self.prompt_transform(t) for t in texts]
-        enc = self.base_tokenizer(texts, return_tensors="pt", padding=True).to(self._device)
+        enc = self.base_tokenizer(texts, return_tensors="pt", padding=True, padding_side="left").to(self._device)
         with auxiliary_pass(aligned=False):
             logits = self.model(input_ids=enc["input_ids"], attention_mask=enc["attention_mask"]).logits[:, -1, :]
         return torch.log_softmax(logits, dim=-1)

@@ -4,7 +4,7 @@ from __future__ import annotations
 import torch
 from transformers import PreTrainedTokenizerBase
 
-from steerability.algorithms.input_control.common.formatters.base import BaseFormatter
+from steerability.algorithms.input_control.common.formatters.base import BaseFormatter, insert_prefix_ids
 from steerability.algorithms.input_control.common.memory.base import Memory
 
 _MODES = frozenset({"append", "prepend", "insert"})
@@ -31,8 +31,9 @@ class FewShotBlockFormatter(BaseFormatter):
     yields exactly one leading system message; `"insert"` yields two, which some chat templates (Qwen3)
     reject.
 
-    The token path (`apply_to_ids`) prepends the block text to the token stream. There is no message
-    structure to merge with, so `mode` does not apply there.
+    The token path (`apply_to_ids`) inserts the block text into the token stream after the leading pad
+    tokens and the BOS token of each sequence. There is no message structure to merge with, so `mode`
+    does not apply there.
 
     Args:
         positive_header: Header emitted above each positive example.
@@ -127,5 +128,4 @@ class FewShotBlockFormatter(BaseFormatter):
         if not block:
             return input_ids
         prefix_ids = tokenizer.encode(block + "\n\n", add_special_tokens=False)
-        prefix = torch.tensor(prefix_ids, dtype=input_ids.dtype, device=input_ids.device)
-        return torch.cat([prefix.unsqueeze(0).expand(input_ids.size(0), -1), input_ids], dim=1)
+        return insert_prefix_ids(input_ids, prefix_ids, tokenizer)

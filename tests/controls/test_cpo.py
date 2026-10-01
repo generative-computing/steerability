@@ -4,6 +4,7 @@ from __future__ import annotations
 import warnings
 
 import pytest
+import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from steerability.algorithms.core.steering_pipeline import SteeringPipeline
@@ -57,6 +58,64 @@ class TestCPOArgs:
     def test_neither_offline_nor_train_raises(self):
         with pytest.raises(ValueError, match="offline_data"):
             CPOArgs(seed_prompt="x")
+
+    def test_prompt_lm_requires_its_tokenizer(self, offline_rows):
+        with pytest.raises(ValueError, match="`prompt_tokenizer` is required with `prompt_lm`"):
+            CPOArgs(seed_prompt="x", offline_data=offline_rows, prompt_lm=object())
+
+    def test_prompt_tokenizer_without_prompt_lm_raises(self, offline_rows):
+        with pytest.raises(ValueError, match="`prompt_tokenizer` was given without `prompt_lm`"):
+            CPOArgs(seed_prompt="x", offline_data=offline_rows, prompt_tokenizer=object())
+
+
+class _StubProposerLM:
+    """A proposer LM double that appends fixed token ids to every prompt."""
+
+    device = torch.device("cpu")
+
+    def __init__(self, continuation_ids):
+        self._continuation = torch.tensor([continuation_ids])
+
+    def generate(self, input_ids, attention_mask=None, **kwargs):
+        return torch.cat([input_ids, self._continuation.expand(input_ids.size(0), -1)], dim=1)
+
+
+class _PreferNonSeedScorer:
+    """A causal scorer double that scores the seed prompt below every other candidate."""
+
+    def __init__(self, seed_prompt):
+        self._seed_prompt = seed_prompt
+
+    def score(self, candidates, queries):
+        return [0.0 if candidate == self._seed_prompt else 1.0 for candidate in candidates]
+
+
+class TestProposerTokenizer:
+    def test_the_proposer_decodes_with_prompt_tokenizer_and_prepends_its_survivor(self, monkeypatch):
+        from tests.utils.tiny_models import reasoning_tag_tokenizer, tiny_llama, wordlevel_tokenizer
+
+        monkeypatch.setattr("steerability.algorithms.input_control.cpo.control.TextEncoder", lambda *a, **k: None)
+        prompt_tokenizer = reasoning_tag_tokenizer(words=("plan", "answer", "x"))
+        plan_answer = prompt_tokenizer("plan answer", add_special_tokens=False)["input_ids"]
+        cpo = CPO(
+            seed_prompt="be helpful",
+            offline_data=[{"query": "q", "prompt": "p", "score": 1.0}],
+            prompt_lm=_StubProposerLM(plan_answer),
+            prompt_tokenizer=prompt_tokenizer,
+            memory=CPOMemory(causal_scorer=_PreferNonSeedScorer("be helpful")),
+            rounds=1,
+            candidates_per_parent=1,
+            retained_per_round=1,
+        )
+        pipeline_tokenizer = wordlevel_tokenizer()
+        SteeringPipeline(controls=[cpo], model=tiny_llama(num_layers=2, hidden=16, heads=2),
+                         tokenizer=pipeline_tokenizer).steer()
+        assert cpo._proposer.tokenizer is prompt_tokenizer
+
+        chat = [{"role": "system", "content": "Be kind."}, {"role": "user", "content": "what is 2+2"}]
+        adapted = cpo.adapt_messages([chat])
+        assert adapted[0][0] == {"role": "system", "content": "plan answer\n\nBe kind."}
+        assert chat[0]["content"] == "Be kind."
 
     def test_empty_seed_raises(self, offline_rows):
         with pytest.raises(ValueError, match="seed_prompt"):
@@ -397,12 +456,13 @@ class TestCPOBackendPosture:
     def test_aux_prompt_lm_configuration_is_supported_on_engines(self, tiny_lm):
         from steerability.algorithms.core.execution import BackendSpec, ModelAccess
 
-        model, _ = tiny_lm
+        model, tokenizer = tiny_lm
         cpo = CPO(
             seed_prompt="be helpful",
             offline_data=[{"query": "q", "prompt": "p", "score": 1.0}],
             embedding_model=TINY_BERT,
             prompt_lm=model,
+            prompt_tokenizer=tokenizer,
         )
         assert cpo.steer_access() is ModelAccess.ROLLOUTS
         pipeline = SteeringPipeline(model_name_or_path="m", controls=[cpo])

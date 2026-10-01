@@ -13,11 +13,16 @@ class BudgetForcingArgs(BaseArgs):
     )
     extension_text: str = field(
         default="Wait",
-        metadata={"help": "Text appended to prolong reasoning when the model tries to stop early."},
+        metadata={"help": (
+            "Text appended before another thinking segment when a segment reaches `max_thinking_tokens`."
+        )},
     )
     num_extensions: int = field(
         default=0,
-        metadata={"help": "Number of times to append `extension_text` and continue thinking (0 disables extension)."},
+        metadata={"help": (
+            "Largest number of times to append `extension_text` and continue thinking. A round runs only when the "
+            "previous thinking segment reached `max_thinking_tokens` (0 disables extension)."
+        )},
     )
     end_think: str = field(
         default="</think>",

@@ -102,8 +102,10 @@ control for later use (e.g., the tokenizer). This is illustrated in the tutorial
 A control's steer step also declares what it needs from the model via `steer_access()`. The levels are cumulative:
 `facts` (layout and tokenizer), `rollouts` (generation and scoring through the session), `capture` (hidden states), and
 `module` (the model as a loaded `torch.nn.Module`). Declare the highest level your `steer()` uses. Intervention
-templates derive it from their sources, and structural controls are `module` by definition. The pipeline hands your
-`steer()` a session scoped to that level, and the model itself only at `module`. On an engine backend, module-level
+templates derive it from their sources, and structural controls that train or merge are `module` (the artifact loaders
+`load_checkpoint` and `load_lora` declare `facts`, since their artifact is part of their configuration). The pipeline
+hands your `steer()` a session scoped to that level, and the model itself only at `module` (a structural control
+receives it at any level, since structural controls thread the model). On an engine backend, module-level
 steps run on a temporary in-process model that is freed before the engine starts, with exported artifacts as the
 handoff. Do not keep a reference to the model past `steer()` unless your generate phase requires `IN_PROCESS_TORCH`.
 

@@ -19,9 +19,8 @@ class _Encoder(Protocol):
 class DenseRetrievalSelector(BaseSelector[T]):
     """Encode a query and pick the nearest neighbors from `items` in embedding space.
 
-    By default, items are encoded on the fly via `item_to_text`. Subclasses (e.g. EPR's selector) can
-    precompute embeddings during `prepare()` and store them on the items themselves; pass
-    `embedding_key` to look up a precomputed embedding from a dict-like item instead of re-encoding.
+    By default, items are encoded on the fly via `item_to_text`. Pass `embedding_key` to look up a
+    precomputed embedding from a dict-like item instead of re-encoding.
 
     Args:
         encoder: Object exposing `encode(text) -> embedding`.

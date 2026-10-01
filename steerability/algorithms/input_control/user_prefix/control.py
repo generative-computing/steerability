@@ -16,11 +16,11 @@ class UserPrefix(InputControl):
     The marker is a constant string configured at construction (no runtime kwargs). On chat input the marker is
     concatenated to the content of the user turn(s) selected by `placement`, joined by `separator`; when a chat
     has no user turn a new user turn carrying the marker is appended. On raw text or tensor input the encoded
-    marker is prefixed to the token stream.
+    marker is inserted into the token stream after the leading pad tokens and the BOS token of each row.
 
     The control implements both adaptation phases. The message phase (`adapt_messages`) is the faithful path for
     chat input, applied before chat templating. The token phase (`adapt`) is the fallback for non-chat input and
-    prefixes the encoded marker to the ids. The base-class contract guarantees no double application: a non-`None`
+    inserts the encoded marker into the ids. The base-class contract guarantees no double application: a non-`None`
     return from `adapt_messages` skips this control's `adapt` for that call.
 
     Args:
@@ -77,18 +77,19 @@ class UserPrefix(InputControl):
         input_ids: list[int] | torch.Tensor,
         runtime_kwargs: dict | None = None,
     ) -> list[int] | torch.Tensor:
-        """Prefix the encoded marker to the token ids.
+        """Insert the encoded marker into the token ids after each row's leading pad tokens and BOS token.
 
         Fallback path for raw text or tensor input; the message phase is the faithful path for chat input.
         Handles `list[int]`, `list[list[int]]`, and 1-D or 2-D tensors, preserving the input container, dtype, and
-        device on output. Batched sequences are padded to a uniform length.
+        device on output. A row of a left-padded batch keeps its pad tokens in front of the marker. Batched
+        sequences are padded to a uniform length.
 
         Args:
             input_ids: The user's prompt token ids.
             runtime_kwargs: Unused.
 
         Returns:
-            The token ids with the encoded marker prefixed.
+            The token ids with the encoded marker inserted.
 
         Raises:
             RuntimeError: If the tokenizer is not set (requires calling `steer()` first), or if a batch must be

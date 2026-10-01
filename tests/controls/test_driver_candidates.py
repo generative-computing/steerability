@@ -154,6 +154,7 @@ def test_candidates_are_row_major_right_padded_and_aligned_with_their_prompts(na
         expected_prompt = encode_for_model(tokenizer, messages=CONVERSATIONS[prompt_index])["input_ids"]
         prompt = output.adapted_input_ids[0]
         assert prompt[prompt != PAD_TOKEN_ID].tolist() == expected_prompt
+        assert len(output.finish_reasons) == output.output_ids.size(0)  # one reason per returned row
 
         continuation = output.output_ids[0].tolist()
         length = len(continuation)

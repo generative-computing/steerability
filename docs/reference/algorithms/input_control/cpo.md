@@ -1,5 +1,7 @@
 # CPO
 
+On chat input, `adapt_messages` places the chosen prompt of each query before the content of the leading system message, separated by a blank line, and a chat without a leading system message receives it as its system message. A caller that needs the instruction to replace an existing system message composes `SystemPromptFormatter(mode="replace")` directly. The proposer is `prompt_lm` with its `prompt_tokenizer` when `prompt_lm` is set, and the pipeline's model with the pipeline tokenizer otherwise.
+
 ::: steerability.algorithms.input_control.cpo
     handler: python
     options:

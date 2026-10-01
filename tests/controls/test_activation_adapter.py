@@ -322,6 +322,16 @@ class TestTransformBinding:
         with pytest.raises(ValueError, match="no direction for layer"):
             adapter.steer(model, wordlevel_tokenizer())
 
+    def test_coverage_opt_out_hooks_uncovered_layers(self):
+        model = tiny_llama(num_layers=LAYERS, hidden=HIDDEN, heads=HEADS)
+        sv = SteeringVector(model_type="llama", directions={1: torch.randn(1, HIDDEN)})
+        adapter = ActivationAdapter(
+            transform=AdditiveTransform(sv), layer_ids=[1, 2], token_scope="all", require_coverage=False,
+        )
+        adapter.steer(model, wordlevel_tokenizer())
+        assert adapter._layer_ids == [1, 2]
+        assert adapter.interventions[0].require_coverage is False
+
     def test_coverage_none_opts_out(self):
         """A transform reporting covered_layer_ids=None skips the coverage check."""
         model = tiny_llama(num_layers=LAYERS, hidden=HIDDEN, heads=HEADS)

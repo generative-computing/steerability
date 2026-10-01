@@ -1,7 +1,6 @@
 """Tests for P1 backend execution: strict parameter rendering, the fan-out machinery, the
 pinned stop-string and finish-reason semantics, session-routed pipeline inference, driver
 sessions, portable requirements, and structural artifact derivation."""
-import dataclasses
 
 import pytest
 import torch
@@ -102,6 +101,42 @@ def _count_generate_calls(model, monkeypatch) -> dict:
 
     monkeypatch.setattr(model, "generate", wrapped)
     return counter
+
+
+class TestArtifactLoaderPlan:
+
+    @pytest.mark.parametrize("kind", ["vllm", "vllm-serve"])
+    def test_engine_spec_with_load_lora_plans_no_stage(self, kind):
+        from steerability.algorithms.structural_control.load_lora import LoadLoRA
+
+        pipeline = SteeringPipeline(model_name_or_path="m", controls=[LoadLoRA(path="/tmp/adapter", base_model="m")])
+        plan = pipeline.check(backend=BackendSpec(kind=kind, model="m")).plan
+        (step,) = plan.steps
+        assert (step.access, step.venue) == (ModelAccess.FACTS, "session")
+        assert plan.stages is False
+
+    def test_loader_before_a_staged_fit_joins_the_stage(self):
+        from steerability.algorithms.structural_control.load_checkpoint import LoadCheckpoint
+
+        caa = CAA(data={"prompts": ["q"], "positives": ["a"], "negatives": ["b"]}, layer_id=1)
+        pipeline = SteeringPipeline(model_name_or_path="m", controls=[LoadCheckpoint(path="/tmp/ckpt"), caa])
+        plan = pipeline.check(backend=BackendSpec(kind="vllm", model="m")).plan
+        assert [step.venue for step in plan.steps] == ["stage", "stage"]
+
+    def test_hugging_face_loader_receives_the_live_model(self, tmp_path):
+        from peft import LoraConfig, PeftModel, get_peft_model
+
+        from steerability.algorithms.structural_control.load_lora import LoadLoRA
+
+        base = tiny_llama(num_layers=2, hidden=16, heads=2)
+        get_peft_model(tiny_llama(num_layers=2, hidden=16, heads=2), LoraConfig(r=2, target_modules=["q_proj"])) \
+            .save_pretrained(tmp_path / "adapter")
+        pipeline = SteeringPipeline(
+            controls=[LoadLoRA(path=str(tmp_path / "adapter"), base_model="tiny", allow_base_mismatch=True)],
+            model=base, tokenizer=wordlevel_tokenizer(),
+        )
+        pipeline.steer()
+        assert isinstance(pipeline.model, PeftModel)
 
 
 class TestGenerationParamsStops:
@@ -528,7 +563,6 @@ class TestSessionBatchedFastPath:
             result = session.generate([item], params)[0]
         decoded = tokenizer.decode(result.output.output_ids[0], skip_special_tokens=True)
         assert "sat" in decoded  # ids returned as generated
-        assert result.output.finish_reason == "stop"
         assert result.output.finish_reasons == ("stop",)
 
     def test_score_batched_matches_serial(self, backend, tokenizer):
@@ -690,7 +724,7 @@ class TestPipelineStopRules:
             logits_processor=[_ForceSequence(3, [6, 5, 6, 6])],
         )
         assert "sat" in tokenizer.decode(out.output_ids[0], skip_special_tokens=True)
-        assert out.finish_reason == "stop"
+        assert out.finish_reasons[0] == "stop"
 
     def test_budget_lowers_to_length(self, model, tokenizer):
         pipeline = _pipeline(model, tokenizer, [StoppingRules(budget=2)])
@@ -699,7 +733,7 @@ class TestPipelineStopRules:
             logits_processor=[_ForceSequence(3, [6, 6, 6, 6])],
         )
         assert out.output_ids.size(1) <= 2
-        assert out.finish_reason == "length"
+        assert out.finish_reasons[0] == "length"
 
     def test_caller_stop_strings_flow_without_stopping_rules(self, model, tokenizer):
         pipeline = _pipeline(model, tokenizer)
@@ -715,9 +749,7 @@ class TestPipelineStopRules:
             text="the cat", max_new_tokens=3, do_sample=True, num_return_sequences=3,
             seed=11, return_output=True,
         )
-        assert out.finish_reasons is not None
         assert len(out.finish_reasons) == 3
-        assert out.finish_reason == out.finish_reasons[0]
 
     def test_output_return_exposes_every_candidate(self, model, tokenizer):
         pipeline = _pipeline(model, tokenizer)
@@ -995,18 +1027,12 @@ class TestTRLArtifactDerivation:
 
 class TestOutputRecord:
 
-    def test_finish_reasons_field_defaults_to_none(self):
-        out = Output(output_ids=torch.tensor([[1, 2]]))
-        assert out.finish_reasons is None
-
     def test_finish_reasons_field_holds_per_candidate_reasons(self):
         out = Output(
             output_ids=torch.tensor([[1, 2], [3, 4]]),
-            finish_reason="eos",
             finish_reasons=("eos", "length"),
         )
         assert out.finish_reasons == ("eos", "length")
-        assert dataclasses.fields(Output)[3].name == "finish_reasons"
 
 
 class _RowRecordingStateControl(StateControl):
@@ -1109,7 +1135,9 @@ class _FakeInnerSession:
         from steerability.algorithms.core.execution.payloads import ItemResult
 
         return [
-            ItemResult(index=i, output=Output(output_ids=torch.tensor([self._row_ids], dtype=torch.long)))
+            ItemResult(index=i, output=Output(
+                output_ids=torch.tensor([self._row_ids], dtype=torch.long), finish_reasons=(None,),
+            ))
             for i, _ in enumerate(items)
         ]
 

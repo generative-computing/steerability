@@ -142,6 +142,12 @@ artifact) raises `SpipeCodeRefError` under `lenient=True`, even when the bundle 
 
 ## Identity
 
-Every bundle contains two digests. `config_id` is the same configuration identity that `SteeringEval` records, which
-ties a `.spipe` to evaluation results. `recipe_id` additionally includes the model reference, since a steering
+A bundle is identified by two digests. `config_id` is the same configuration identity that `SteeringEval` records,
+which ties a `.spipe` to evaluation results. `recipe_id` additionally includes the model reference, since a steering
 artifact is meaningless without its model.
+
+A frozen bundle records both digests in its lock. An unfrozen (recipe-only) bundle records neither, and `config_id`
+and `recipe_id` are recomputed from the decoded recipe controls. A recipe value whose decoded form canonicalizes
+differently from the original value (e.g., a `$ref` callable, a `$data` reference, or a tensor artifact) can then give
+an identity that differs from the one the saved pipeline had. The next manifest format revision (`spipe/2`) records
+both digests in every manifest, and loading a `spipe/1` manifest then raises `SpipeFormatError`.

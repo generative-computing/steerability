@@ -196,7 +196,7 @@ class _FakeSession:
         return [
             ItemResult(
                 index=index,
-                output=Output(output_ids=torch.tensor([[token]]), adapted_input_ids=None, finish_reason="stop"),
+                output=Output(output_ids=torch.tensor([[token]]), adapted_input_ids=None, finish_reasons=("stop",)),
             )
             for index in range(len(items))
         ]

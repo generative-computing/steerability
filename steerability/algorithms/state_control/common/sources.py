@@ -568,9 +568,10 @@ class ConditionPointSearch:
 class LayerFilteredFit:
     """Wraps a source and restricts the resolved directions to a layer range.
 
-    Access, artifact class, and positional-ness delegate to the wrapped source. The filtered
-    result keeps the inner artifact's metadata and per-layer statistics for the surviving
-    layers.
+    Access, artifact class, and positional-ness delegate to the wrapped source. A wrapped source
+    that declares no `access` counts as `ModelAccess.MODULE`, since it builds against the live
+    model. The filtered result keeps the inner artifact's metadata and per-layer statistics for
+    the surviving layers.
 
     Attributes:
         inner: The wrapped source.
@@ -581,8 +582,8 @@ class LayerFilteredFit:
     layer_range: tuple[int, int] | None = None
 
     @property
-    def access(self) -> ModelAccess | None:
-        return getattr(self.inner, "access", None)
+    def access(self) -> ModelAccess:
+        return getattr(self.inner, "access", ModelAccess.MODULE)
 
     @property
     def artifact_class(self) -> str | None:

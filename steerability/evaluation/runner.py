@@ -7,9 +7,11 @@ at a time and never passes more than one pipeline-backed model to one `eval` or 
 
 There is no results checkpoint: the `.eval` logs under `save_dir/inspect_logs/` are the store, and
 `eval_set` resumes each (configuration, trial, suite) cell from them at sample granularity. `eval_set`
-matches task identity only (task, task args, model name); the runner's seed, generate defaults, provider
-options, fit, and backend are not part of it, so a changed protocol needs a new `save_dir` rather than a
-re-run into the old one. Each result row's `provenance` entry records what actually ran.
+matches task identity only (task, task args, model name). The runner therefore records the rest of the
+protocol (toolkit version, provider options and their `seed_scope`, generate defaults, `hf_model_kwargs`,
+seed, fit, and backend) in `save_dir/protocol.json` on the first run of a directory, and refuses to run into
+a directory whose recorded protocol differs, or whose logs have no recorded protocol. Each result row's
+`provenance` entry records what actually ran.
 
 Three frames reshape a completed run: `results()` gives the tidy one-row-per-metric frame,
 `runs_frame` pivots it to one row per (pipeline, trial) with one column per metric and per swept
@@ -19,6 +21,7 @@ into the summary form the plotting layer consumes.
 """
 import datetime
 import importlib.metadata
+import json
 import logging
 import tempfile
 import time
@@ -31,7 +34,7 @@ from tqdm.auto import tqdm
 
 import steerability
 from steerability.algorithms.core.execution.spec import BackendSpec
-from steerability.algorithms.core.identity import derive_trial_seed
+from steerability.algorithms.core.identity import canonical_value, derive_trial_seed
 from steerability.algorithms.core.sweeps import PipelineFactory, expand_configurations, preflight
 from steerability.algorithms.core.utils.controls import runtime_kwargs_schema
 from steerability.utils.rendering import has_chat_template
@@ -41,6 +44,8 @@ if TYPE_CHECKING:
     from steerability.evaluation.suite import InspectSuite
 
 logger = logging.getLogger(__name__)
+
+PROTOCOL_FILE = "protocol.json"
 
 _RESULTS_COLUMNS = (
     "config", "config_id", "trial", "seed", "suite", "task", "scorer", "metric", "value", "n", "log",
@@ -83,8 +88,9 @@ class SteeringEval:
         generate_defaults: `GenerateConfig` defaults applied under each suite's overrides.
         on_unsupported: `"raise"` (default) fails the run with one aggregate error on any
             unsupported configuration; `"skip"` runs the supported ones with a warning.
-        save_dir: Directory holding the `.eval` logs; when None, logs go to a
-            fresh temporary directory and the run cannot be resumed.
+        save_dir: Directory holding the `.eval` logs and `protocol.json`; when None, logs go to
+            a fresh temporary directory and the run cannot be resumed. A directory is resumed only
+            under the protocol it records.
         progress: Draw a `tqdm` bar over the (configuration, trial, suite) cells. The same
             information is logged at INFO regardless, so script users see it without the bar.
         display: Inspect's per-sample `display` mode, forwarded to every suite run (`"none"` by
@@ -166,6 +172,9 @@ class SteeringEval:
             RuntimeError: If any configuration is unsupported and `on_unsupported="raise"` (one
                 aggregate error before any model or engine work), or a suite's `eval_set` fails
                 after its retries.
+            ValueError: If `save_dir` records a protocol that differs from this run's, or
+                contains `.eval` logs but no `protocol.json` (both before any model or engine
+                work).
 
         Warns:
             UserWarning: If a static runtime kwarg in `provider_options` is declared by no
@@ -214,6 +223,7 @@ class SteeringEval:
         else:
             save_dir = Path(tempfile.mkdtemp(prefix="steering-eval-"))
             logger.info("No save_dir was given; logs go to %s and the run cannot be resumed.", save_dir)
+        self._check_protocol(save_dir)
         self._log_root = save_dir
 
         versions = {
@@ -321,6 +331,54 @@ class SteeringEval:
             factory.release()
         self._results = results
         return results
+
+    def _protocol(self) -> dict[str, Any]:
+        """The run protocol recorded in `protocol.json`, in canonical JSON form.
+
+        Returns:
+            A mapping with the toolkit version, the provider options (None when unset) and their
+            `seed_scope`, the generate defaults, `hf_model_kwargs`, the seed, the fit policy, and the
+            backend.
+        """
+        protocol = {
+            "toolkit_version": getattr(steerability, "__version__", "unknown"),
+            "provider_options": canonical_value(self.provider_options),
+            "seed_scope": getattr(self.provider_options, "seed_scope", None),
+            "generate_defaults": canonical_value(self.generate_defaults),
+            "hf_model_kwargs": canonical_value(self.hf_model_kwargs),
+            "seed": self.seed,
+            "fit": self.fit,
+            "backend": canonical_value(self.backend),
+        }
+        return json.loads(json.dumps(protocol, sort_keys=True))
+
+    def _check_protocol(self, save_dir: Path) -> None:
+        """Record this run's protocol in `save_dir`, or verify the one the directory records.
+
+        Args:
+            save_dir: The directory the run writes its logs under.
+
+        Raises:
+            ValueError: If `save_dir/protocol.json` records a different protocol, or the directory
+                contains `.eval` logs but no `protocol.json`.
+        """
+        protocol = self._protocol()
+        path = save_dir / PROTOCOL_FILE
+        if path.exists():
+            recorded = json.loads(path.read_text())
+            if recorded != protocol:
+                differing = sorted(key for key in {*recorded, *protocol} if recorded.get(key) != protocol.get(key))
+                raise ValueError(
+                    f"{save_dir} was written under a different protocol ({', '.join(differing)} differ from "
+                    f"{PROTOCOL_FILE}); start a new save_dir for this protocol."
+                )
+            return
+        if any((save_dir / "inspect_logs").rglob("*.eval")):
+            raise ValueError(
+                f"{save_dir} contains .eval logs but no {PROTOCOL_FILE}, so the protocol they were written under "
+                "is unknown; start a new save_dir."
+            )
+        path.write_text(json.dumps(protocol, indent=2, sort_keys=True) + "\n")
 
     def results(self) -> pandas.DataFrame:
         """The last `run()`'s results as one row per (config, trial, suite, task, scorer/metric).

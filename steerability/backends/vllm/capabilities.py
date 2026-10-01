@@ -1,8 +1,8 @@
-"""The vLLM capability tables, discovery cache and negotiation, and capability refusals.
+"""The vLLM capability tables, discovery negotiation, and capability refusals.
 
-The kind tables and baseline capabilities are static data used by `check()`; the discovery
-cache and negotiation narrow them to what a live engine or server confirms. This module imports
-cleanly without vLLM installed.
+The kind tables and baseline capabilities are static data used by `check()`. Negotiation narrows
+them, for one constructed backend, to what its engine or server confirms in its discovery payload.
+This module imports cleanly without vLLM installed.
 """
 import logging
 from collections.abc import Sequence
@@ -49,17 +49,13 @@ VLLM_BASELINE_CAPABILITIES = BackendCapabilities(
     constraint_kinds=_VLLM_CONSTRAINT_KINDS,
 )
 
-_DISCOVERY_CACHE: dict[str, dict] = {}
-
-
 def _vllm_capabilities(spec: BackendSpec, *, offline: bool) -> BackendCapabilities:
     """Capabilities implied by a vLLM spec: the plugin-free baseline, extended when the spec
     declares the vLLM-Hook plugin active. Hidden capture is advertised on the offline engine
     only, since serve-mode capture needs a bulk-tensor return path.
 
-    Once a backend for the spec has fetched discovery, the advertised kind sets are the
-    intersection of the static tables and the discovery payload, so a server missing a kind
-    stops advertising it."""
+    The advertisement depends on the spec alone. A constructed backend narrows it to its own
+    discovery payload (`_intersect_with_discovery`)."""
     if not spec.get_option("hook_plugin"):
         return VLLM_BASELINE_CAPABILITIES
     atoms = VLLM_BASELINE_CAPABILITIES.atoms | {
@@ -69,20 +65,21 @@ def _vllm_capabilities(spec: BackendSpec, *, offline: bool) -> BackendCapabiliti
     if offline:
         atoms = atoms | {Capability.HIDDEN_CAPTURE}
         capture_kinds = _PLUGIN_CAPTURE_KINDS
-    capabilities = BackendCapabilities(
+    return BackendCapabilities(
         atoms=frozenset(atoms),
         intervention_kinds=_PLUGIN_INTERVENTION_KINDS,
         capture_kinds=capture_kinds,
         constraint_kinds=_VLLM_CONSTRAINT_KINDS,
     )
-    payload = _DISCOVERY_CACHE.get(spec.spec_hash)
-    if payload is not None:
-        capabilities = _intersect_with_discovery(capabilities, payload)
-    return capabilities
 
 
 def _intersect_with_discovery(capabilities: BackendCapabilities, payload: dict) -> BackendCapabilities:
-    """The static capability tables narrowed to what the discovery payload confirms."""
+    """The static capability tables narrowed to what the discovery payload confirms.
+
+    Each kind set is intersected with the payload's. `Capability.HIDDEN_CAPTURE` is removed from
+    the atoms when the payload confirms fewer capture kinds, locations, or modes than the static
+    tables advertise, since the steer plan routes capture steps by the atom alone.
+    """
     remote_interventions = payload.get("intervention_kinds") or {}
     intervention_kinds = capabilities.intervention_kinds
     if intervention_kinds is not None:
@@ -102,14 +99,18 @@ def _intersect_with_discovery(capabilities: BackendCapabilities, payload: dict) 
         )
     remote_capture = payload.get("capture_kinds") or {}
     capture_kinds = capabilities.capture_kinds
+    atoms = capabilities.atoms
     if capture_kinds is not None:
-        capture_kinds = CaptureKinds(
+        negotiated = CaptureKinds(
             kinds=capture_kinds.kinds & frozenset(remote_capture.get("kinds", ())),
             locations=capture_kinds.locations & frozenset(remote_capture.get("locations", ())),
             modes=capture_kinds.modes & frozenset(remote_capture.get("modes", ())),
         )
+        if negotiated != capture_kinds:
+            atoms = atoms - {Capability.HIDDEN_CAPTURE}
+        capture_kinds = negotiated
     return BackendCapabilities(
-        atoms=capabilities.atoms,
+        atoms=atoms,
         intervention_kinds=intervention_kinds,
         processor_kinds=processor_kinds,
         capture_kinds=capture_kinds,

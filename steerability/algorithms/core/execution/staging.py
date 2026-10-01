@@ -29,19 +29,28 @@ from steerability.algorithms.core.execution.payloads import (
 def split_artifacts(artifacts: Sequence[Artifact]) -> tuple[CheckpointArtifact | None, LoRAArtifact | None]:
     """Select the checkpoint and the LoRA adapter that an engine serves from `artifacts`.
 
-    The first artifact of each type is selected. The engine backends and the staged
-    in-process model use the same selection.
+    The last checkpoint is selected, since structural controls run in list order and a later
+    checkpoint is trained on (or replaces) the weights of an earlier one. An engine serves one
+    LoRA adapter. The engine backends and the staged in-process model use the same selection.
 
     Args:
-        artifacts: The structural artifacts handed to the engine.
+        artifacts: The structural artifacts handed to the engine, in list order.
 
     Returns:
-        The first `CheckpointArtifact` and the first `LoRAArtifact`, each None when
-        `artifacts` contains no artifact of that type.
+        The last `CheckpointArtifact` and the `LoRAArtifact`, each None when `artifacts`
+        contains no artifact of that type.
+
+    Raises:
+        ValueError: If `artifacts` contains more than one `LoRAArtifact`.
     """
-    checkpoint = next((a for a in artifacts if isinstance(a, CheckpointArtifact)), None)
-    lora = next((a for a in artifacts if isinstance(a, LoRAArtifact)), None)
-    return checkpoint, lora
+    checkpoints = [a for a in artifacts if isinstance(a, CheckpointArtifact)]
+    loras = [a for a in artifacts if isinstance(a, LoRAArtifact)]
+    if len(loras) > 1:
+        raise ValueError(
+            f"An engine serves one LoRA adapter, but {len(loras)} adapters were handed to it "
+            f"({', '.join(str(lora.path) for lora in loras)}); merge one of them into the model weights."
+        )
+    return (checkpoints[-1] if checkpoints else None), (loras[0] if loras else None)
 
 
 def capture_smoke_failure(session, fallback_tokenizer=None) -> str | None:

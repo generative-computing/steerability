@@ -55,6 +55,9 @@ class ActivationAdapterArgs(BaseArgs):
         token_scope: Which positions to steer (see `make_token_mask`).
         last_k: Required when `token_scope == "last_k"`.
         from_position: Required when `token_scope == "from_position"`.
+        require_coverage: When True (default), `steer()` raises `ValueError` if the bound transform
+            has no direction for a behavior layer. When False, a behavior layer without a direction
+            is hooked and its hidden states pass through unchanged.
     """
 
     # transform (sole artifact carrier); required
@@ -75,6 +78,9 @@ class ActivationAdapterArgs(BaseArgs):
     token_scope: ScopeKind = "after_prompt"
     last_k: int | None = None
     from_position: int | None = None
+
+    # layer coverage
+    require_coverage: bool = True
 
     @classmethod
     def validate(cls, _init_data: Any | None = None, **kwargs) -> "ActivationAdapterArgs":

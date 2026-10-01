@@ -11,9 +11,13 @@ from transformers import PreTrainedTokenizerBase
 FINISH_REASONS: tuple[str, ...] = ("stop", "eos", "length")
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, kw_only=True)
 class Output:
     """The result of one generation call.
+
+    The constructor checks that `output_ids` is two-dimensional, that `finish_reasons` has one
+    entry per row of `output_ids`, and that every entry is one of `FINISH_REASONS` or None. A
+    single-row output reads its reason as `finish_reasons[0]`.
 
     Attributes:
         output_ids: Generated token IDs as a `[batch, seq]` tensor, excluding the prompt (the same
@@ -22,11 +26,9 @@ class Output:
         adapted_input_ids: The `input_ids` actually fed to the model after all input-control
             transformations. For a padded batch these are in left-packed layout. None if not
             provided by the producer.
-        finish_reason: The first row's finish reason, one of `"stop"`, `"eos"`, `"length"`, or
-            None when none can be inferred.
-        finish_reasons: Per-row finish reasons matching `output_ids` (one entry per candidate
-            when the producer generated several), or None when the producer reports only the
-            first row's reason.
+        finish_reasons: One reason per row of `output_ids`, in row order (one per candidate when
+            the producer generated several). Each entry is `"stop"`, `"eos"`, `"length"`, or None
+            when no reason could be inferred for that row.
         generated_tokens: The total tokens generated to produce this output, including rollouts a
             decoding driver proposed and discarded, or None when the producer did not count them.
             On the driver path the pipeline attaches the session wrapper's accumulated total; for a
@@ -36,9 +38,20 @@ class Output:
     """
     output_ids: torch.Tensor
     adapted_input_ids: torch.Tensor | None = None
-    finish_reason: str | None = None
-    finish_reasons: tuple[str | None, ...] | None = None
+    finish_reasons: tuple[str | None, ...]
     generated_tokens: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.output_ids.dim() != 2:
+            raise ValueError(f"output_ids must be [batch, seq]; got shape {tuple(self.output_ids.shape)}.")
+        if len(self.finish_reasons) != self.output_ids.size(0):
+            raise ValueError(
+                f"finish_reasons has {len(self.finish_reasons)} entries for {self.output_ids.size(0)} rows of "
+                "output_ids."
+            )
+        for reason in self.finish_reasons:
+            if reason is not None and reason not in FINISH_REASONS:
+                raise ValueError(f"finish_reasons entries are one of {FINISH_REASONS} or None; got {reason!r}.")
 
     def decode(
         self,

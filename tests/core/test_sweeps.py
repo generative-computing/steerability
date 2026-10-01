@@ -12,7 +12,7 @@ import pytest
 import torch
 
 from steerability.algorithms.core.execution.contracts import Capability, Requirements, needs
-from steerability.algorithms.core.specs import ControlSpec
+from steerability.algorithms.core.specs import ControlSpec, Factory
 from steerability.algorithms.core.sweeps import PipelineFactory, expand_configurations, preflight
 from tests.conftest import (
     MockInputControl,
@@ -115,6 +115,34 @@ class _UnsupportedStateControl(MockStateControl):
 
     def requirements(self) -> Requirements:
         return Requirements(generate=needs(Capability.INTERVENTION_SPECS))
+
+
+class TestSpecParams:
+    def test_callable_params_are_passed_through(self):
+        def scorer(response, row):
+            return 1.0
+
+        spec = ControlSpec(control_cls=MockInputControl, params={"prefix": scorer})
+        assert spec.resolve_params({}, {})["prefix"] is scorer
+
+    def test_factory_params_are_computed_from_the_point_context(self):
+        seen = []
+
+        def prefix_for(context):
+            seen.append(context)
+            return f"{context['pipeline_name']}-{context['search_params']['num_examples']}"
+
+        spec = ControlSpec(
+            control_cls=MockInputControl, params={"prefix": Factory(prefix_for)}, vars={"num_examples": [1, 2]},
+        )
+        points = _points({"sweep": [spec]})
+        assert [point.params["MockInputControl"]["prefix"] for point in points] == ["sweep-1", "sweep-2"]
+        assert [context["combo_id"] for context in seen] == [0, 1]
+
+    def test_empty_grid_dimension_raises(self):
+        spec = ControlSpec(control_cls=MockInputControl, vars={"num_examples": [], "prefix": ["a"]})
+        with pytest.raises(ValueError, match=r"search dimension\(s\) \['num_examples'\] with no values"):
+            _points({"sweep": [spec]})
 
 
 class TestPreflight:

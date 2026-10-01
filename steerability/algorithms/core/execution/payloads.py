@@ -581,7 +581,8 @@ class ItemResult:
     Attributes:
         index: Position of the item in the submitted sequence.
         output: The generation record. For `n > 1` the record's batch dimension holds the
-            candidates in request order and `finish_reason` reflects the first candidate.
+            candidates in request order, and `finish_reasons` holds one reason per candidate, in
+            request order.
     """
 
     index: int

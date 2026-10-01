@@ -2,9 +2,10 @@
 
 Pins the derived declarations: the steer plan stages a fit-carrying template on a capture-less
 backend and keeps a precomputed template on the session, generate offers the intervention-spec
-alternative exactly when every component has a wire form, and score is in-process (remote
-prompt-logprob scoring anchors token scopes at the request's prompt end). Also pins the eager
-steer-time lowering failure naming the intervention and reason.
+alternative exactly when every component has a wire form, and score offers it when, in addition,
+every scope has an exact scoring form and no intervention is gated (remote prompt-logprob scoring
+anchors `last_k` scopes and gate evidence at the end of the prompt-plus-reference). Also pins the
+eager steer-time lowering failure naming the intervention and reason.
 """
 import pytest
 import torch
@@ -63,16 +64,39 @@ class TestPhaseVerdicts:
         assert step.venue == "session"
         assert report.plan.stages is False
 
-    def test_score_phase_rejects_spec_backend_by_name(self):
-        """Scoring an intervention control on a spec backend fails at check, naming the control."""
+    @pytest.mark.parametrize("token_scope", ["after_prompt", "all"])
+    def test_score_phase_offers_specs_for_remapped_scopes(self, token_scope):
         pipeline = SteeringPipeline(
-            model_name_or_path="m",controls=[CAA(steering_vector=_vector(), layer_id=1)],
+            model_name_or_path="m", controls=[CAA(steering_vector=_vector(), layer_id=1, token_scope=token_scope)],
         )
-        report = pipeline.check(backend=SERVE_SPEC)
-        failures = report.failures_for("score")
-        assert len(failures) == 1
-        assert failures[0].control == "CAA"
-        assert "prompt" in failures[0].message
+        assert pipeline.check(backend=SERVE_SPEC).supported("score")
+
+    def test_score_phase_rejects_last_k_on_a_spec_backend_by_name(self):
+        """Scoring a `last_k` intervention on a spec backend fails at check, naming the control."""
+        control = CAA(steering_vector=_vector(), layer_id=1, token_scope="last_k", last_k=2)
+        report = SteeringPipeline(model_name_or_path="m", controls=[control]).check(backend=SERVE_SPEC)
+        assert report.supported("generate")
+        (failure,) = report.failures_for("score")
+        assert failure.control == "CAA"
+        assert "last_k scopes and gate evidence" in failure.message
+
+    def test_score_phase_rejects_gated_interventions(self):
+        from steerability.algorithms.state_control.activation_adapter import ActivationAdapter
+        from steerability.algorithms.state_control.common.gating import (
+            Evidence,
+            Gate,
+            PerKeyThreshold,
+            ProjectedCosineReadout,
+        )
+        from steerability.algorithms.state_control.common.transforms import AdditiveTransform
+
+        gate = Gate(Evidence((0,), ProjectedCosineReadout({0: torch.ones(HIDDEN)})), PerKeyThreshold(threshold=0.0))
+        adapter = ActivationAdapter(
+            transform=AdditiveTransform(_vector()), layer_ids=[1], hook_point="layer_input", gate=gate,
+        )
+        report = SteeringPipeline(model_name_or_path="m", controls=[adapter]).check(backend=SERVE_SPEC)
+        assert report.supported("generate")
+        assert not report.supported("score")
 
     def test_generate_offers_spec_alternative_only_with_a_wire_form(self):
         from steerability.algorithms.state_control.act_add.control import ActAdd
@@ -153,6 +177,11 @@ class TestEagerLoweringFailure:
 
         class _NullStager:
             _discovery = None
+
+            def negotiated_capabilities(self):
+                from steerability.algorithms.core.execution import capabilities_for_spec
+
+                return capabilities_for_spec(SERVE_SPEC)
 
             def open_session(self):
                 return _FakeServeSession()

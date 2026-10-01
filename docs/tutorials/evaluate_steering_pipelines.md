@@ -126,16 +126,15 @@ directory (`f"{TASK_FILE}@instruction_following"`).
 Each suite run goes through `inspect_ai.eval_set`, which provides task retry and log-based resume. The
 `.eval` logs under `save_dir/inspect_logs/` are the record of the run, and a re-run completes only the
 missing samples of each (configuration, trial, suite) cell. Since `eval_set` matches on task identity
-only, a changed protocol (seed, generate defaults, provider options, suites, fit, backend, toolkit
-version) needs a new `save_dir` rather than a re-run into the old one. Repetition is trial-based rather
-than epoch-based, and with `seed` set, each (configuration, trial) pair derives one seed.
+only, the runner records the rest of the protocol in `save_dir/protocol.json` on the first run of a
+directory. The record contains the toolkit version, the provider options (with their `seed_scope`), the
+generate defaults, `hf_model_kwargs`, the seed, the fit policy, and the backend. A re-run into a
+directory whose recorded protocol differs is refused, which means that a changed protocol needs a new
+`save_dir`. Repetition is trial-based rather than epoch-based, and with `seed` set, each (configuration,
+trial) pair derives one seed.
 
-In version 0.5.3, the `selector_seed` field of `FewShot` enters the configuration identity of every
-fixed `FewShot` instance, which changes its `config_id` and derived trial seeds. The fixed `FewShot`
-arms of a `save_dir` written with version 0.5.2 are therefore recomputed rather than resumed. Also in
-0.5.3, `max_new_tokens` bounds all phases of the phased drivers (`phased_decoding`, `budget_forcing`,
-`routed_decoding`) together, while their `config_id` is unchanged. This means that a re-run into a
-0.5.2 `save_dir` resumes these arms from logs produced under different generation limits.
+Note that a `save_dir` that contains `.eval` logs but no `protocol.json` (one written by version 0.5.3
+or earlier) is refused as well, since the protocol its logs were produced under is unknown.
 
 The runner draws a `tqdm` bar over the (configuration, trial, suite) cells (`progress=True` by
 default) and logs a summary line and one line per cell at INFO. `display="plain"` streams Inspect's

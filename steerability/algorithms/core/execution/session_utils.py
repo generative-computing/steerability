@@ -129,8 +129,8 @@ def session_generate_items(
     continuations: list[tuple[torch.Tensor, str | None]] = []
     for result in results:
         output = result.output
-        ids = output.output_ids[0] if output.output_ids.dim() == 2 else output.output_ids
-        reason = output.finish_reasons[0] if output.finish_reasons else output.finish_reason
+        ids = output.output_ids[0]
+        reason = output.finish_reasons[0]
         end = ids.numel()
         if pad_token_id is not None:
             real_positions = (ids != pad_token_id).nonzero()

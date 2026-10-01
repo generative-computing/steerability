@@ -75,6 +75,10 @@ def _core_artifact_view(core):
     return None
 
 
+# scope kinds with an exact form in remote prompt-logprob scoring: `all` and `from_position` select the same positions
+# of the submitted prompt-plus-reference, and the session rewrites `after_prompt` to `from_position` at the prompt end
+_SCORING_SCOPES = frozenset({"all", "after_prompt", "from_position"})
+
 PreHook = Callable[[nn.Module, tuple], tuple | torch.Tensor]
 ForwardHook = Callable[[nn.Module, tuple, torch.Tensor], torch.Tensor]
 BackwardHook = Callable[[nn.Module, tuple, tuple], tuple]
@@ -434,8 +438,8 @@ class InterventionControl(StateControl):
         """One `activation_adapter` entry per bound intervention, in intervention order.
 
         Each entry's args mirror the intervention: the bound transform, the resolved behavior
-        layers, the hook point, the resolved gate, and the token scope. Must be called after
-        `steer()`.
+        layers, the hook point, the resolved gate, the token scope, and the coverage requirement.
+        Must be called after `steer()`.
 
         Returns:
             List of `("state_control/activation_adapter", kwargs)` pairs.
@@ -472,6 +476,7 @@ class InterventionControl(StateControl):
                 "token_scope": intervention.scope.kind,
                 "last_k": intervention.scope.last_k,
                 "from_position": intervention.scope.from_position,
+                "require_coverage": intervention.require_coverage,
             }))
         return entries
 
@@ -480,38 +485,42 @@ class InterventionControl(StateControl):
 
         Generate offers the intervention-spec alternative whenever every component of every
         intervention has a wire form; hook-only configurations require the in-process backend.
-        Score is in-process: remote prompt-logprob scoring anchors token scopes at the
-        request's prompt end (the end of the prompt-plus-reference concatenation), which would
-        silently unanchor prompt-relative interventions.
+        Score offers the same alternative when, in addition, every intervention's token scope
+        has an exact form in remote prompt-logprob scoring (`"all"`, `"from_position"`, and
+        `"after_prompt"`, which the session rewrites to `"from_position"` at the prompt end) and
+        no intervention is gated. A `"last_k"` scope and a gate's evidence are anchored at the
+        end of the submitted prompt-plus-reference, so such configurations score in process.
         """
         from steerability.algorithms.core.execution.contracts import Capability, Requirements, any_of, needs
 
         kinds = self.wire_kinds()
         in_process = needs(Capability.IN_PROCESS_TORCH)
-        score = needs(
-            Capability.IN_PROCESS_TORCH,
-            hint=(
-                "remote prompt-logprob scoring anchors token scopes at the request's prompt "
-                "end, so scoped interventions would not cover the reference; score on the "
-                "huggingface backend"
-            ),
-        )
         if kinds is None:
             return Requirements(
                 generate=needs(Capability.IN_PROCESS_TORCH, hint=self.hook_only_hint),
-                score=score,
+                score=needs(Capability.IN_PROCESS_TORCH, hint=self.hook_only_hint),
             )
-        return Requirements(
-            generate=any_of(
-                in_process,
-                needs(
-                    Capability.INTERVENTION_SPECS,
-                    kinds=kinds,
-                    hint="serve this intervention through the vLLM-Hook plugin",
-                ),
-            ),
-            score=score,
+        specs = needs(
+            Capability.INTERVENTION_SPECS,
+            kinds=kinds,
+            hint="serve this intervention through the vLLM-Hook plugin",
         )
+        interventions = self.interventions or self._template
+        scores_as_spec = all(
+            intervention.scope.kind in _SCORING_SCOPES and intervention.gate is None
+            for intervention in interventions
+        )
+        if scores_as_spec:
+            score = any_of(in_process, specs)
+        else:
+            score = needs(
+                Capability.IN_PROCESS_TORCH,
+                hint=(
+                    "remote prompt-logprob scoring anchors last_k scopes and gate evidence at the end "
+                    "of the submitted prompt-plus-reference; score on the huggingface backend"
+                ),
+            )
+        return Requirements(generate=any_of(in_process, specs), score=score)
 
     def clone_for_call(self, seed: int | None = None, *, memo: dict | None = None):
         """Return a clone for one generation call whose interventions have their own gate state.

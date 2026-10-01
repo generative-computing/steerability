@@ -4,6 +4,7 @@ Specification utilities for steering controls.
 Provides:
 
 - `ControlSpec`: a description of a steering control plus a hyperparameter search space.
+- `Factory`: a marker for a `ControlSpec` parameter that is computed from the sweep context.
 """
 import itertools
 import math
@@ -18,6 +19,26 @@ from typing import Any, Callable, Iterable, Literal, Mapping, Sequence
 Space = Mapping[str, Sequence[Any]] | Sequence[Mapping[str, Any]] | Callable[[dict], Iterable[Mapping[str, Any]]]
 
 
+@dataclass(frozen=True, slots=True)
+class Factory:
+    """A `ControlSpec` parameter computed from the sweep context at each search point.
+
+    `ControlSpec.resolve_params` calls `function` with the context of the search point and
+    passes the return value to the control's constructor. Parameters that are not wrapped in
+    `Factory`, including callables, are passed to the constructor unchanged.
+
+    Attributes:
+        function: A callable `(context) -> value`. The context contains the sweep's base context
+            and the point's chosen values under `"search_params"`.
+    """
+
+    function: Callable[[dict], Any]
+
+    def __call__(self, context: dict) -> Any:
+        """Return `function(context)`."""
+        return self.function(context)
+
+
 @dataclass(slots=True)
 class ControlSpec:
     """Specification for a parameterized steering control.
@@ -28,10 +49,12 @@ class ControlSpec:
 
     Attributes:
         control_cls: The steering control class to instantiate.
-        params: Fixed constructor arguments for the control.
+        params: Fixed constructor arguments for the control. A value wrapped in `Factory` is
+            computed from the context of each search point. Every other value, including a
+            callable, is passed to the constructor unchanged.
         vars: Optional search space over additional constructor arguments. May be:
 
-            - mapping (cartesian grid)
+            - mapping (cartesian grid), whose dimensions must each contain at least one value
             - list of parameter dicts
             - callable that yields parameter dicts given a context
         name: Optional short name for this spec; defaults to `control_cls.__name__` if omitted.
@@ -59,6 +82,9 @@ class ControlSpec:
         Yields:
             Parameter dictionaries (possibly empty) that will be merged into `params` when constructing a concrete
             control instance.
+
+        Raises:
+            ValueError: If `vars` is a mapping with a dimension that contains no values.
         """
         search_space = self.vars
 
@@ -77,8 +103,12 @@ class ControlSpec:
             param_names = list(search_space.keys())
             param_values = [list(search_space[name]) for name in param_names]
 
-            if any(len(vals) == 0 for vals in param_values):
-                return
+            empty = [name for name, vals in zip(param_names, param_values) if not vals]
+            if empty:
+                raise ValueError(
+                    f"ControlSpec for {self.control_cls.__name__} has search dimension(s) {empty} with no values; give "
+                    "each dimension at least one value, or move a fixed value to `params`."
+                )
 
             sizes = [len(vals) for vals in param_values]
             n_points = math.prod(sizes)
@@ -126,13 +156,25 @@ class ControlSpec:
             yield combination
 
     def resolve_params(self, chosen: dict[str, Any], context: dict) -> dict[str, Any]:
-        """Compute the full kwargs for this control at a given search point.
+        """Compute the full constructor kwargs for this control at one search point.
+
+        Each `Factory` value in `params` is called with the context of the point, and every other
+        value is used unchanged. The chosen values of the point then take precedence over
+        `params`.
+
+        Args:
+            chosen: The values the search point assigns to the swept arguments.
+            context: The sweep context. A copy with `"search_params"` set to `chosen` is passed to
+                each `Factory`.
+
+        Returns:
+            The constructor kwargs.
         """
         local_context = dict(context)
         local_context["search_params"] = chosen
 
         resolved_params = {
-            key: (value(local_context) if callable(value) else value)
+            key: (value(local_context) if isinstance(value, Factory) else value)
             for key, value in self.params.items()
         }
 

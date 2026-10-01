@@ -39,7 +39,7 @@ from inspect_ai.model import (
 from steerability.algorithms.core.output import Output, truncate_at_stop_strings
 from steerability.algorithms.core.utils.controls import runtime_kwargs_schema
 from steerability.evaluation.batching import LockLeaderCollator
-from steerability.utils.rendering import has_chat_template, render_messages
+from steerability.utils.rendering import has_chat_template, join_message_contents
 from steerability.utils.thinking import (
     DEFAULT_THINK_TAGS,
     ThinkingSplit,
@@ -304,7 +304,8 @@ class SteeringPipelineModelAPI(ModelAPI):
         gen_kwargs, per_sample_runtime_kwargs, num_choices = self._map_generate_config(config)
         prompt: Any = messages
         if self._prompt_path == "text":
-            prompt = render_messages(self._pipeline.tokenizer, messages)
+            # the construction warning announces the text path once per provider
+            prompt = join_message_contents(messages)
         record = self._collator.admit(prompt, gen_kwargs, per_sample_runtime_kwargs, num_choices)
         output = await self._collator.serve(record)
         return self._assemble_model_output(output, stop_strings=gen_kwargs.get("stop_strings", ()))
@@ -450,10 +451,7 @@ class SteeringPipelineModelAPI(ModelAPI):
         tokenizer = self._pipeline.tokenizer
         pad_token_id = getattr(tokenizer, "pad_token_id", None)
         texts = output.decode(tokenizer)
-        num_rows = output.output_ids.size(0)
         reasons = output.finish_reasons
-        if reasons is None or len(reasons) != num_rows:
-            reasons = (output.finish_reason,) * num_rows
 
         choices: list[ChatCompletionChoice] = []
         unclosed = 0

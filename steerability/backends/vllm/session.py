@@ -162,7 +162,6 @@ class _RequestSessionBase:
             output=Output(
                 output_ids=rows,
                 adapted_input_ids=torch.tensor([prompt_ids], dtype=torch.long),
-                finish_reason=reasons[0] if reasons else None,
                 finish_reasons=tuple(reasons),
             ),
         )
@@ -173,6 +172,7 @@ class _RequestSessionBase:
         layers: list[int],
         mode: Literal["all_tokens", "last_token"],
         location: Literal["layer_output", "layer_input"] = "layer_output",
+        state_entries: Sequence = (),
     ) -> CaptureResult:
         """Hidden-state capture over the plugin is not implemented in this toolkit version."""
         raise UnsupportedOperationError(
@@ -193,13 +193,16 @@ class VLLMOfflineSession(_RequestSessionBase):
         layers: list[int],
         mode: Literal["all_tokens", "last_token"],
         location: Literal["layer_output", "layer_input"] = "layer_output",
+        state_entries: Sequence = (),
     ) -> CaptureResult:
         """Hidden-state capture over the plugin's capture surface.
 
         One request per prompt carries a `capture` spec and a fresh random `cache_salt`
         (a prefix-cache hit skips forward passes, so capture cannot tolerate reused salts) with
         `max_tokens=1`; the surplus decode position is truncated by the plugin. Per-layer
-        tensors are stacked and right-padded to the batch's longest prompt.
+        tensors are stacked and right-padded to the batch's longest prompt. With
+        `state_entries`, every request also carries their merged intervention spec, so the
+        captured forward passes are steered as a generation request with the same entries is.
 
         Args:
             prompts: The prompts to capture over.
@@ -207,6 +210,9 @@ class VLLMOfflineSession(_RequestSessionBase):
             mode: `"all_tokens"` for every prompt position, `"last_token"` for the final real
                 position per row.
             location: The residual-stream boundary, `"layer_output"` or `"layer_input"`.
+            state_entries: `InterventionEntry` contributions applied to the captured forward
+                passes, e.g., the steering of the generation that a decoding driver runs. Empty
+                (default) captures the unsteered model.
 
         Returns:
             The capture result: `[N, T, H]` per layer for `"all_tokens"` or `[N, H]` for
@@ -256,6 +262,14 @@ class VLLMOfflineSession(_RequestSessionBase):
         # position themselves, so every wire capture requests all_tokens
         wire_mode = "all_tokens" if mode == "last_token" else mode
         capture_spec = {"layers": layer_ids, "mode": wire_mode, "location": location}
+        extra_args: dict[str, Any] = {"capture": capture_spec}
+        if state_entries:
+            # every prompt carries the same entries, so one item gives the merged spec
+            (intervention,), _, _ = self._prepare_spec_submission(
+                [GenerationItem(prompt=prompts[0], state_entries=tuple(state_entries))], "vllm",
+            )
+            if intervention is not None:
+                extra_args["intervention_spec"] = intervention.to_wire()
         engine_prompts = []
         prompt_lens: list[int] = []
         for prompt in prompts:
@@ -268,7 +282,7 @@ class VLLMOfflineSession(_RequestSessionBase):
             engine_prompt = TokensPrompt(prompt_token_ids=ids)
             engine_prompt["cache_salt"] = uuid.uuid4().hex
             engine_prompts.append(engine_prompt)
-        sampling = SamplingParams(max_tokens=1, temperature=0.0, extra_args={"capture": capture_spec})
+        sampling = SamplingParams(max_tokens=1, temperature=0.0, extra_args=extra_args)
 
         request_outputs = self._backend._require_llm().generate(engine_prompts, sampling, use_tqdm=False)
 

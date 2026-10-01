@@ -75,6 +75,27 @@ def infer_attention_mask_from_ids(
     return mask.long()
 
 
+def strip_leading_pads(
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Remove the leading positions of a one-row prompt that its attention mask leaves out.
+
+    Args:
+        input_ids: Token ids of shape `[1, seq_len]`.
+        attention_mask: Attention mask of shape `[1, seq_len]`.
+
+    Returns:
+        The `(input_ids, attention_mask)` pair from the first position the mask marks on. Both tensors are
+        returned unchanged when the mask marks no position.
+    """
+    marked = attention_mask[0].nonzero()
+    if marked.numel() == 0:
+        return input_ids, attention_mask
+    start = int(marked[0])
+    return input_ids[:, start:], attention_mask[:, start:]
+
+
 def to_left_pad(
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,

@@ -63,7 +63,6 @@ def make_output(row_ids: list[list[int]], prompt_ids: list[int], reasons: tuple[
     return Output(
         output_ids=torch.tensor(row_ids, dtype=torch.long),
         adapted_input_ids=torch.tensor([prompt_ids], dtype=torch.long),
-        finish_reason=reasons[0],
         finish_reasons=tuple(reasons),
     )
 

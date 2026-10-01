@@ -35,8 +35,8 @@ class ActivationAdapter(InterventionControl):
     generation.
 
     The control is declarative: `_configure` maps the validated args onto one `Intervention`
-    (transform, layers, scope, and gate), and the base class binds it at `steer()`, verifying the
-    transform covers every behavior layer.
+    (transform, layers, scope, and gate), and the base class binds it at `steer()`. Binding verifies
+    that the transform covers every behavior layer unless `require_coverage` is False.
 
     Steering multiple behaviors is done by placing multiple adapters in a pipeline's `controls`
     list (each adapter owns exactly one transform chain / gate / token scope). Joint conditioning
@@ -79,6 +79,7 @@ class ActivationAdapter(InterventionControl):
             gate=self.gate,
             gate_driven_externally=self.gate_driven_externally,
             boundary=self.hook_point,
+            require_coverage=self.require_coverage,
         ),)
 
     @property

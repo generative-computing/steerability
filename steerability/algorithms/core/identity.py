@@ -6,7 +6,9 @@ handled value type. The module does not import `ControlSpec`; spec objects are d
 `control_cls` and `name` attributes.
 """
 import dataclasses
+import functools
 import hashlib
+import inspect
 import json
 import logging
 from collections.abc import Mapping, Sequence
@@ -21,6 +23,8 @@ logger = logging.getLogger(__name__)
 _TENSOR_TAG = "__tensor__"
 _DATACLASS_TAG = "__dataclass__"
 _TYPE_TAG = "__type__"
+_PARTIAL_TAG = "__partial__"
+_METHOD_TAG = "__method__"
 
 
 def qualname(obj_type: type) -> str:
@@ -62,10 +66,15 @@ def canonical_value(obj: Any, _path: str = "$") -> Any:
     The form is stable across processes and machines for every handled type. Tensor identity is
     content-addressed over dtype, shape, and bytes, with device and `requires_grad` excluded.
     Mapping key order never affects the form, sequence order always does, and set element order
-    never does. A callable reduces to its qualified name. An unhandled object type reduces to its
-    type qualname (value-blind), logged at debug. NumPy scalars reduce with `item()`; NumPy arrays
-    convert through `tolist()` and then recurse, so the elements of object arrays follow the same
-    rules as list elements.
+    never does. A `torch.dtype` reduces to its name. A dataclass reduces to its type qualname and
+    its `init=True` fields. State that a dataclass sets after construction (e.g., the cached result
+    of a fit source) therefore does not change the form. A `functools.partial` reduces to its
+    function, positional arguments, and keyword arguments. A bound method reduces to its qualified
+    name and the qualname of the type it is bound to (the class itself for a classmethod). Any other
+    callable reduces to its qualified name only, and two callables with one qualified name share a
+    form. An unhandled object type reduces to its type qualname (value-blind), logged at debug.
+    NumPy scalars reduce with `item()`; NumPy arrays convert through `tolist()` and then recurse,
+    and the elements of object arrays follow the same rules as list elements.
 
     Args:
         obj: The value to canonicalize.
@@ -83,6 +92,8 @@ def canonical_value(obj: Any, _path: str = "$") -> Any:
         return obj.item()
     if isinstance(obj, np.ndarray):
         return canonical_value(obj.tolist(), _path)
+    if isinstance(obj, torch.dtype):
+        return str(obj)
     if isinstance(obj, torch.Tensor):
         tensor = obj.detach().to("cpu").contiguous()
         digest = hashlib.sha256()
@@ -102,6 +113,7 @@ def canonical_value(obj: Any, _path: str = "$") -> Any:
             "fields": {
                 field.name: canonical_value(getattr(obj, field.name), f"{_path}.{field.name}")
                 for field in dataclasses.fields(obj)
+                if field.init
             },
         }
     if isinstance(obj, Mapping):
@@ -112,6 +124,18 @@ def canonical_value(obj: Any, _path: str = "$") -> Any:
         return sorted(canonical, key=lambda value: json.dumps(value, sort_keys=True))
     if isinstance(obj, (list, tuple)):
         return [canonical_value(item, f"{_path}[{i}]") for i, item in enumerate(obj)]
+    if isinstance(obj, functools.partial):
+        return {
+            _PARTIAL_TAG: {
+                "func": canonical_value(obj.func, f"{_path}.func"),
+                "args": canonical_value(list(obj.args), f"{_path}.args"),
+                "keywords": canonical_value(dict(obj.keywords), f"{_path}.keywords"),
+            }
+        }
+    if inspect.ismethod(obj):
+        owner = obj.__self__
+        owner_type = owner if isinstance(owner, type) else type(owner)
+        return {_METHOD_TAG: {"bound_to": qualname(owner_type), "function": obj.__func__.__qualname__}}
     if callable(obj):
         return f"callable:{getattr(obj, '__qualname__', type(obj).__name__)}"
     logger.debug("canonical_value: value-blind fallback for %s at %s", qualname(type(obj)), _path)

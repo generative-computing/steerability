@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import gc
 import logging
 import os
@@ -74,8 +75,8 @@ class SASA(OutputControl):
     forward per step. `candidate_policy` selects which tokens are scored: `'surviving'` (every token earlier
     processors left finite), `'top_p'` (the nucleus of the raw logits, the paper's setting), or `'top_k'`. The
     margins are softmax-normalized over the candidate set and added (scaled by `beta`) to the candidate logits with
-    no non-candidate masking. `max_candidates` clamps the set on top of any policy to bound the per-step forward. As
-    a step-level control, SASA composes with other output controls and with a decoding driver.
+    no non-candidate masking. `max_candidates` (20 by default) clamps the set on top of any policy to bound the
+    per-step forward. As a step-level control, SASA composes with other output controls and with a decoding driver.
 
     A `value_trace` list passed via `runtime_kwargs` receives one `ValueStepRecord` per scored step (the candidate
     ids, their pre-shift scores, the raw margins, and the softmax-normalized shift), for inspecting the per-step
@@ -177,12 +178,15 @@ class SASA(OutputControl):
                 output boundary of the final decoder layer.
         """
         self.model = model
-        self.tokenizer = tokenizer or getattr(model, "tokenizer", None)
-        if self.tokenizer.pad_token_id is None:
-            if self.tokenizer.eos_token_id is not None:
-                self.tokenizer = ensure_pad_token(self.tokenizer)
+        tokenizer = tokenizer or getattr(model, "tokenizer", None)
+        if tokenizer.pad_token_id is None:
+            # the pipeline tokenizer is shared, so the pad token is set on a copy
+            tokenizer = copy.deepcopy(tokenizer)
+            if tokenizer.eos_token_id is not None:
+                tokenizer = ensure_pad_token(tokenizer)
             else:
-                self.tokenizer.add_special_tokens({"pad_token": "<pad>"})
+                tokenizer.add_special_tokens({"pad_token": "<pad>"})
+        self.tokenizer = tokenizer
 
         final_layer = resolve_model_layout(model).num_layers - 1
         if getattr(self, "wv_path", None):

@@ -66,7 +66,15 @@ class CPOArgs(BaseArgs):
 
     prompt_lm: Any = field(
         default=None,
-        metadata={"help": "LLM used to propose candidate prompts in Stage 2 (tree search)."},
+        metadata={"help": (
+            "LLM used to propose candidate prompts in Stage 2 (tree search). None uses the pipeline's model as the "
+            "proposer, with the pipeline tokenizer."
+        )},
+    )
+
+    prompt_tokenizer: Any = field(
+        default=None,
+        metadata={"help": "Tokenizer paired with `prompt_lm`. Required when `prompt_lm` is set."},
     )
 
     rounds: int = field(
@@ -152,3 +160,13 @@ class CPOArgs(BaseArgs):
                 raise ValueError("`prompt_lm` is required when offline_data is generated from train_dataset.")
         if self.rounds <= 0 or self.candidates_per_parent <= 0 or self.retained_per_round <= 0:
             raise ValueError("rounds, candidates_per_parent, retained_per_round must all be positive.")
+        if self.prompt_lm is not None and self.prompt_tokenizer is None:
+            raise ValueError(
+                "`prompt_tokenizer` is required with `prompt_lm`; pass the tokenizer paired with `prompt_lm`, or "
+                "leave `prompt_lm` unset to propose with the pipeline's model and tokenizer."
+            )
+        if self.prompt_lm is None and self.prompt_tokenizer is not None:
+            raise ValueError(
+                "`prompt_tokenizer` was given without `prompt_lm`; the proposer is then the pipeline's model, which "
+                "uses the pipeline tokenizer."
+            )

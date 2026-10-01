@@ -25,7 +25,7 @@ class StoppingRules(OutputControl):
 
     Token ids are returned as generated (the stop text plus any token-boundary overrun stays in
     the ids); the pipeline truncates decoded text at the first stop-string occurrence and rows
-    halted by these rules report `finish_reason="stop"` (budget stops report `"length"`).
+    halted by these rules report `"stop"` in `Output.finish_reasons` (budget stops report `"length"`).
     `get_stopping_criteria` remains available for direct composition outside the pipeline and
     returns fresh criteria anchored at the current prompt length.
     """
