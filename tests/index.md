@@ -1,7 +1,8 @@
 # Tests
 
 Tests evaluate control implementations across a set of control arguments, models (listed in `tests/utils/ci_models.yaml`),
-and the available devices on the machine.
+and the available devices on the machine. Each entry in `tests/utils/ci_models.yaml` is either a Hub id or a
+`local:<builder>` entry for a model that a function in `tests/utils/tiny_models.py` builds in process.
 
 The test tree is organized by area:
 

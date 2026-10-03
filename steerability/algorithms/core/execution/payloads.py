@@ -88,10 +88,12 @@ class ModelFacts:
         hidden_size: Residual-stream width.
         num_attention_heads: Number of attention heads, or None when the model config does not
             state one.
-        head_dim: Per-head dimension, the config's nominal value (else `hidden_size` divided by
-            `num_attention_heads`), or None when neither is derivable. Per-layer geometry can
-            differ from this nominal value (some models alternate head dimensions across layers);
-            consumers needing the actual per-layer geometry read `head_geometry`.
+        head_dim: Per-head dimension, the config's `head_dim` (else `hidden_size` divided by
+            `num_attention_heads` when the config declares none), or None when the config
+            declares `head_dim` per layer or no value is derivable. Per-layer geometry can differ
+            from this value on models that alternate head dimensions across layers (Gemma 4).
+            Consumers needing one layer's geometry read `head_geometry` on a loaded model or
+            `config_layer_head_dim` on a config.
         dtype: Canonical dtype string, e.g. `"bfloat16"`.
         model_fingerprint: A 16-character hex digest identifying the model weights and config.
         model_type: The config's `model_type`, or None when unknown.

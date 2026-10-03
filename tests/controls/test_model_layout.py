@@ -4,7 +4,8 @@ Pins the single-source-of-truth layout registry (roots times conventions across 
 resolution through composite multimodal wrappers and unmerged PEFT adapters, hybrid attention
 stacks that resolve to their attention layers' family (Qwen3.5 / Qwen3-Next style, where only
 some decoder layers carry an attention module), the detector registration hook, the `text_config`
-fact-derivation helper, the unified unsupported-architecture error, and that the two `hook_utils`
+fact-derivation helper, the config head-geometry readers on configs that declare `head_dim` per
+layer (Gemma 4), the unified unsupported-architecture error, and that the two `hook_utils`
 wrappers still produce the same output they did before delegating (so the pure consumers cannot
 silently change behavior).
 """
@@ -15,6 +16,8 @@ import torch.nn as nn
 from steerability.algorithms.core.internals import model_layout as layout_mod
 from steerability.algorithms.core.internals.model_layout import (
     ModelLayout,
+    config_head_geometry,
+    config_layer_head_dim,
     head_geometry,
     register_layout_detector,
     resolve_model_layout,
@@ -25,7 +28,17 @@ from steerability.algorithms.state_control.common.hook_utils import (
     get_model_layer_list,
     get_norm_module_names,
 )
-from tests.utils.tiny_models import hybrid_attention_stub, tiny_gemma3_conditional, tiny_gpt2, tiny_llama, tiny_lora
+from tests.utils.tiny_models import (
+    gemma4_declares_per_layer_head_dim,
+    hybrid_attention_stub,
+    tiny_gemma3_conditional,
+    tiny_gemma4_causal,
+    tiny_gemma4_conditional,
+    tiny_gemma4_text_config,
+    tiny_gpt2,
+    tiny_llama,
+    tiny_lora,
+)
 
 LAYERS = 4
 HIDDEN = 32
@@ -311,3 +324,126 @@ def test_gpt2_prehook_extract_hidden_states(suffix):
     hidden = seen[0]
     assert isinstance(hidden, torch.Tensor)
     assert hidden.ndim == 3 and hidden.size(-1) == HIDDEN
+
+
+# per-layer head geometry
+
+requires_per_layer_head_dim = pytest.mark.skipif(
+    not gemma4_declares_per_layer_head_dim(),
+    reason="the installed transformers does not declare Gemma 4's head_dim per layer",
+)
+
+
+def _attention_stub_without_head_dim(config, oproj_widths):
+    """A llama-layout stub whose attention modules have no `head_dim` attribute.
+
+    Layer `i` has an `o_proj` with input width `oproj_widths[i]`, so `head_geometry` reads the
+    layer's `head_dim` from `config`.
+    """
+
+    class _Attn(nn.Module):
+        def __init__(self, width):
+            super().__init__()
+            self.o_proj = nn.Linear(width, HIDDEN, bias=False)
+
+    class _Layer(nn.Module):
+        def __init__(self, width):
+            super().__init__()
+            self.self_attn = _Attn(width)
+            self.input_layernorm = nn.Identity()
+            self.post_attention_layernorm = nn.Identity()
+
+    class _Inner(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layers = nn.ModuleList(_Layer(width) for width in oproj_widths)
+
+    class _Stub(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.model = _Inner()
+            self.config = config
+
+    return _Stub()
+
+
+class TestConfigHeadGeometry:
+    """`config_head_geometry` and `config_layer_head_dim` on homogeneous and heterogeneous configs."""
+
+    def test_declared_head_dim(self):
+        assert config_head_geometry(text_config(tiny_llama(hidden=HIDDEN, heads=HEADS))) == (HEADS, HIDDEN // HEADS)
+
+    def test_attribute_map_without_head_dim_falls_back_to_quotient(self):
+        cfg = text_config(tiny_gpt2(hidden=HIDDEN, heads=HEADS))
+        assert config_head_geometry(cfg) == (HEADS, HIDDEN // HEADS)
+        assert config_layer_head_dim(cfg, 0) == HIDDEN // HEADS
+
+    def test_composite_reads_text_subconfig(self):
+        cfg = text_config(tiny_gemma3_conditional(hidden=HIDDEN, heads=HEADS))
+        assert config_head_geometry(cfg) == (HEADS, HIDDEN // HEADS)
+
+    def test_config_without_heads_or_head_dim_reports_none(self):
+        from transformers import PretrainedConfig
+
+        assert config_head_geometry(PretrainedConfig(hidden_size=HIDDEN)) == (None, None)
+        assert config_layer_head_dim(PretrainedConfig(hidden_size=HIDDEN), 0) is None
+
+    @requires_per_layer_head_dim
+    def test_per_layer_head_dim_reports_none_globally(self):
+        cfg = tiny_gemma4_text_config(num_layers=6, hidden=HIDDEN, heads=HEADS, head_dim=8, global_head_dim=16)
+        with pytest.raises(RuntimeError):
+            _ = getattr(cfg, "head_dim", None)  # a global read of a per-layer attribute raises despite the default
+        assert config_head_geometry(cfg) == (HEADS, None)
+
+    @requires_per_layer_head_dim
+    def test_per_layer_head_dim_reads_each_layer(self):
+        cfg = tiny_gemma4_text_config(num_layers=6, hidden=HIDDEN, heads=HEADS, head_dim=8, global_head_dim=16)
+        per_layer = [config_layer_head_dim(cfg, i) for i in range(6)]
+        assert per_layer == [16 if layer_type == "full_attention" else 8 for layer_type in cfg.layer_types]
+        assert per_layer == [8, 8, 8, 8, 8, 16]
+
+    @requires_per_layer_head_dim
+    def test_equal_global_and_sliding_head_dim_is_one_value(self):
+        cfg = tiny_gemma4_text_config(num_layers=6, hidden=HIDDEN, heads=HEADS, head_dim=8, global_head_dim=8)
+        assert config_head_geometry(cfg) == (HEADS, 8)
+
+
+@requires_per_layer_head_dim
+def test_gemma4_head_geometry_reads_each_layer_from_the_module():
+    model = tiny_gemma4_causal(num_layers=6, hidden=HIDDEN, heads=HEADS, head_dim=8, global_head_dim=16)
+    layout = resolve_model_layout(model)
+    assert layout.family == "gemma_style"
+    assert layout.num_layers == 6
+    geometries = [head_geometry(model, layout, i) for i in range(6)]
+    assert [(g.num_heads, g.head_dim) for g in geometries] == [(HEADS, 8)] * 5 + [(HEADS, 16)]
+
+
+@requires_per_layer_head_dim
+def test_head_geometry_config_fallback_reads_the_layer_value():
+    """An attention module without `head_dim` falls back to the config's value for its layer."""
+    cfg = tiny_gemma4_text_config(num_layers=6, hidden=HIDDEN, heads=HEADS, head_dim=8, global_head_dim=16)
+    head_dims = [8, 8, 8, 8, 8, 16]
+    stub = _attention_stub_without_head_dim(cfg, [HEADS * head_dim for head_dim in head_dims])
+    layout = resolve_model_layout(stub)
+    geometries = [head_geometry(stub, layout, i) for i in range(6)]
+    assert [g.head_dim for g in geometries] == head_dims
+    assert all(g.num_heads == HEADS for g in geometries)
+
+
+def test_head_geometry_without_any_head_dim_raises():
+    """Head geometry raises when neither the attention module nor the config declares `head_dim`."""
+    from transformers import PretrainedConfig
+
+    stub = _attention_stub_without_head_dim(PretrainedConfig(hidden_size=HIDDEN, num_hidden_layers=2), [HIDDEN] * 2)
+    with pytest.raises(ValueError, match="per-head dimension"):
+        head_geometry(stub, resolve_model_layout(stub), 0)
+
+
+@requires_per_layer_head_dim
+def test_gemma4_conditional_nested_root_and_per_layer_geometry():
+    model = tiny_gemma4_conditional(num_layers=6, hidden=HIDDEN, heads=HEADS, head_dim=8, global_head_dim=16)
+    layout = resolve_model_layout(model)
+    assert layout.family == "gemma_style"
+    assert layout.layer_prefix == "model.language_model.layers"
+    assert [head_geometry(model, layout, i).head_dim for i in range(6)] == [8, 8, 8, 8, 8, 16]
+    assert config_head_geometry(text_config(model)) == (HEADS, None)

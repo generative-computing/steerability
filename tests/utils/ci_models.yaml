@@ -2,3 +2,6 @@ models:
   llama: hf-internal-testing/tiny-random-LlamaForCausalLM
   mistral: hf-internal-testing/tiny-random-MistralForCausalLM
   gemma: hf-internal-testing/tiny-random-Gemma3ForCausalLM
+  # built in process by tests.utils.tiny_models.tiny_gemma4_grid, with a heterogeneous head geometry
+  # (head_dim 8 on the sliding layers and 16 on the global layer)
+  gemma4: local:tiny_gemma4_grid

@@ -209,6 +209,66 @@ def text_config(model_or_config: PreTrainedModel | PretrainedConfig) -> Pretrain
     return config.get_text_config()
 
 
+def _per_layer_attributes(text_cfg: PretrainedConfig) -> frozenset[str]:
+    """The attribute names that `text_cfg` declares per decoder layer.
+
+    A heterogeneous config (transformers >= 5.14, `per_layer_config`) lists the attributes that its
+    layers override in `per_layer_attributes`. Reading one of these attributes from the global
+    config raises `AmbiguousGlobalPerLayerAttributeError`, a `RuntimeError` that `getattr` with a
+    default does not catch. Homogeneous configs report None or an empty set, and configs from
+    earlier transformers releases lack the property; each case resolves to an empty set.
+    """
+    return frozenset(getattr(text_cfg, "per_layer_attributes", None) or ())
+
+
+def config_head_geometry(text_cfg: PretrainedConfig) -> tuple[int | None, int | None]:
+    """The attention head count and per-head dimension that the text config declares for every layer.
+
+    A value that the config declares per layer is None, since no single value describes the model
+    (Gemma 4 declares `head_dim` separately for its sliding and global attention layers).
+    `config_layer_head_dim` reads one layer's `head_dim` from a config, and `head_geometry` reads
+    one layer's geometry from a loaded model. When the config declares no `head_dim` (GPT-2),
+    `head_dim` falls back to `hidden_size // num_attention_heads`. A per-layer `head_dim` never
+    falls back to this quotient, since the quotient need not match any layer.
+
+    Args:
+        text_cfg: The text config (`text_config(model_or_config)`).
+
+    Returns:
+        The `(num_attention_heads, head_dim)` pair, with None for a value that the config declares
+        per layer or that cannot be derived.
+    """
+    per_layer = _per_layer_attributes(text_cfg)
+    num_heads = None if "num_attention_heads" in per_layer else getattr(text_cfg, "num_attention_heads", None)
+    if "head_dim" in per_layer:
+        return num_heads, None
+    head_dim = getattr(text_cfg, "head_dim", None)
+    if head_dim is None and num_heads:
+        hidden_size = getattr(text_cfg, "hidden_size", None)
+        if hidden_size:
+            head_dim = hidden_size // num_heads
+    return num_heads, head_dim
+
+
+def config_layer_head_dim(text_cfg: PretrainedConfig, layer_id: int) -> int | None:
+    """The per-head dimension that the text config declares for decoder layer `layer_id`.
+
+    When the config declares `head_dim` per layer, the value is read from the layer's entry in
+    `per_layer_config`. Otherwise the config's single `head_dim` applies to every layer, with
+    `hidden_size // num_attention_heads` as the fallback when the config declares no `head_dim`.
+
+    Args:
+        text_cfg: The text config (`text_config(model_or_config)`).
+        layer_id: The decoder layer index.
+
+    Returns:
+        The layer's `head_dim`, or None when the config declares none and none can be derived.
+    """
+    if "head_dim" in _per_layer_attributes(text_cfg):
+        return text_cfg.per_layer_config[layer_id].head_dim
+    return config_head_geometry(text_cfg)[1]
+
+
 _DETECTORS: list[Callable[[PreTrainedModel], ModelLayout | None]] = []
 
 
@@ -325,10 +385,10 @@ class HeadGeometry:
 def head_geometry(model: PreTrainedModel, layout: ModelLayout, layer_id: int) -> HeadGeometry:
     """Per-layer attention head geometry, read from the module tree.
 
-    `head_dim` comes from the attention module's `head_dim` attribute, else the text config;
-    `num_heads` is the output projection's input width divided by `head_dim`. GPT-2's `Conv1D`
-    stores its weight as `[in, out]`, so the width is read from `weight.shape[0]` when
-    `in_features` is absent.
+    `head_dim` comes from the attention module's `head_dim` attribute, else the text config's
+    value for this layer (`config_layer_head_dim`); `num_heads` is the output projection's input
+    width divided by `head_dim`. GPT-2's `Conv1D` stores its weight as `[in, out]`, so the width
+    is read from `weight.shape[0]` when `in_features` is absent.
 
     Args:
         model: The live model (or PEFT wrapper) carrying the attention modules.
@@ -340,7 +400,8 @@ def head_geometry(model: PreTrainedModel, layout: ModelLayout, layer_id: int) ->
 
     Raises:
         ValueError: If `layer_id` carries no attention module (a non-attention layer of a hybrid
-            stack), or the projection width is not a multiple of `head_dim`.
+            stack), neither the attention module nor the text config declares a per-head
+            dimension for the layer, or the projection width is not a multiple of `head_dim`.
     """
     if not layout.has_attention(layer_id):
         raise ValueError(
@@ -350,10 +411,12 @@ def head_geometry(model: PreTrainedModel, layout: ModelLayout, layer_id: int) ->
     attn = model.get_submodule(layout.attn_names[layer_id])
     head_dim = getattr(attn, "head_dim", None)
     if head_dim is None:
-        text_cfg = text_config(model)
-        head_dim = getattr(text_cfg, "head_dim", None)
-        if head_dim is None:
-            head_dim = text_cfg.hidden_size // text_cfg.num_attention_heads
+        head_dim = config_layer_head_dim(text_config(model), layer_id)
+    if head_dim is None:
+        raise ValueError(
+            f"Neither the attention module at layer {layer_id} ({layout.attn_names[layer_id]!r}) "
+            "nor the text config declares a per-head dimension; cannot infer the head geometry."
+        )
 
     oproj = model.get_submodule(layout.oproj_names[layer_id])
     width = getattr(oproj, "in_features", None)

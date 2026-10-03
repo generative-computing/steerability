@@ -776,6 +776,28 @@ class TestConfigLayout:
         assert facts.head_dim == 8
         assert facts.model_type == "gemma3"
 
+    def test_gemma4_config_dir_reports_per_layer_head_dim_as_none(self, tmp_path):
+        """A Gemma 4 config declares `head_dim` per layer (sliding versus global attention), and the
+        client-side facts report it as None."""
+        from tests.utils.tiny_models import gemma4_declares_per_layer_head_dim, tiny_gemma4_text_config
+
+        if not gemma4_declares_per_layer_head_dim():
+            pytest.skip("the installed transformers does not declare Gemma 4's head_dim per layer")
+        from transformers import Gemma4Config
+
+        from steerability.backends.vllm.backend import _config_layout
+
+        text = tiny_gemma4_text_config(num_layers=6, hidden=32, heads=4, head_dim=8, global_head_dim=16)
+        Gemma4Config(text_config=text).save_pretrained(tmp_path)
+
+        facts = _config_layout(str(tmp_path))
+        assert facts is not None
+        assert facts.num_layers == 6
+        assert facts.hidden_size == 32
+        assert facts.num_attention_heads == 4
+        assert facts.head_dim is None
+        assert facts.model_type == "gemma4"
+
 
 class _FakeCaptureLLM:
     """An offline engine double that records each capture request and returns zero hidden states."""

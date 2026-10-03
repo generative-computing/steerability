@@ -20,12 +20,11 @@ from steerability.algorithms.core.execution.payloads import (
     ScoringItem,
     StackEntry,
 )
-from steerability.algorithms.core.internals.model_layout import text_config
+from steerability.algorithms.core.internals.facts import model_facts
 from steerability.algorithms.core.output import Output, infer_finish_reasons
 from steerability.algorithms.core.utils.generate_call import generate_call
 from steerability.algorithms.output_control.base import stack_generate_kwargs
 from steerability.algorithms.output_control.common.criteria import StopOnSubstring, StopOnTokens
-from steerability.algorithms.state_control.common.hook_utils import get_model_layer_list
 from steerability.utils.tokenization import infer_attention_mask_from_ids, strip_leading_pads, to_left_pad
 
 if TYPE_CHECKING:
@@ -151,37 +150,9 @@ class ExclusiveSession:
 
     @property
     def layout(self) -> ModelFacts:
-        """Structural facts derived from the loaded model, computed on every access so weight
-        edits and model replacements are always reflected.
-
-        `num_layers` comes from the resolved decoder layer list; `hidden_size`,
-        `num_attention_heads`, and `head_dim` come from the text config (`text_config(model)`,
-        the text sub-config on composite multimodal models), with a
-        `hidden_size // num_attention_heads` fallback for `head_dim`; `dtype` from the model;
-        `model_fingerprint` from the weight/config fingerprint; and `model_type` from the
-        composite config, so a multimodal checkpoint keeps its wrapper `model_type`.
-        """
-        model = self.model
-
-        from steerability.algorithms.core.internals.fingerprint import model_fingerprint
-
-        _, layer_names = get_model_layer_list(model)
-        text_cfg = text_config(model)
-        hidden_size = text_cfg.hidden_size
-        num_heads = getattr(text_cfg, "num_attention_heads", None)
-        head_dim = getattr(text_cfg, "head_dim", None)
-        if head_dim is None and num_heads:
-            head_dim = hidden_size // num_heads
-        return ModelFacts(
-            num_layers=len(layer_names),
-            hidden_size=hidden_size,
-            num_attention_heads=num_heads,
-            head_dim=head_dim,
-            dtype=str(model.dtype).removeprefix("torch."),
-            model_fingerprint=model_fingerprint(model),
-            model_type=getattr(model.config, "model_type", None),
-            model_ref=getattr(model, "name_or_path", None),
-        )
+        """Structural facts of the loaded model, as `model_facts(model)` builds them, computed on
+        every access so weight edits and model replacements are always reflected."""
+        return model_facts(self.model)
 
     def _resolve_prompt_tensors(
         self, prompt: PreparedPrompt, *, drop_leading_pads: bool = False,

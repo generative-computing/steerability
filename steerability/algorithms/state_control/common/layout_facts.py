@@ -2,18 +2,16 @@
 
 State controls consume structural facts (layer count, dtype, hidden size) from the steering
 session's `ModelFacts` so preparation works the same whether the steering backend holds a live
-model or only a layout. Module-path resolution stays out of this module; hook module names are
-resolved from the module tree at `get_hooks()` time.
+model or only a layout. With a loaded model and no session, the facts come from the builder that
+the Hugging Face session uses (`model_facts`). Module-path resolution stays out of this module;
+hook module names are resolved from the module tree at `get_hooks()` time.
 """
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 from steerability.algorithms.core.execution.payloads import ModelFacts
-from steerability.algorithms.core.internals.fingerprint import model_fingerprint
-from steerability.algorithms.core.internals.model_layout import text_config
-
-from .hook_utils import get_model_layer_list
+from steerability.algorithms.core.internals.facts import model_facts
 
 if TYPE_CHECKING:
     from transformers import PreTrainedModel
@@ -22,7 +20,8 @@ if TYPE_CHECKING:
 
 
 def resolve_layout(model: PreTrainedModel | None = None, session: SteeringSession | None = None) -> ModelFacts:
-    """Structural facts from the session's layout, else derived from the live model.
+    """Structural facts from the session's layout, else derived from the loaded model by
+    `model_facts`.
 
     Args:
         model: A live model, consulted only when `session` is None.
@@ -41,20 +40,4 @@ def resolve_layout(model: PreTrainedModel | None = None, session: SteeringSessio
             "Structural facts require a steering session (session.layout) or a live model; "
             "vector-supplied configurations may steer with model=None only when a session is given."
         )
-    _, layer_names = get_model_layer_list(model)
-    text_cfg = text_config(model)
-    hidden_size = text_cfg.hidden_size
-    num_heads = getattr(text_cfg, "num_attention_heads", None)
-    head_dim = getattr(text_cfg, "head_dim", None)
-    if head_dim is None and num_heads:
-        head_dim = hidden_size // num_heads
-    return ModelFacts(
-        num_layers=len(layer_names),
-        hidden_size=hidden_size,
-        num_attention_heads=num_heads,
-        head_dim=head_dim,
-        dtype=str(model.dtype).removeprefix("torch."),
-        model_fingerprint=model_fingerprint(model),
-        model_type=getattr(model.config, "model_type", None),
-        model_ref=getattr(model, "name_or_path", None),
-    )
+    return model_facts(model)

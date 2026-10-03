@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING, Callable, Mapping, Sequence
 import torch
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
-from steerability.algorithms.core.internals.model_layout import head_geometry, resolve_model_layout, text_config
+from steerability.algorithms.core.internals.model_layout import (
+    config_head_geometry,
+    head_geometry,
+    resolve_model_layout,
+    text_config,
+)
 
 from ..sources import ArtifactSource, _as_artifact_source
 from ..steering_vector import SteeringVector
@@ -86,10 +91,7 @@ def _build_context(
             num_heads = geometry.num_heads
             head_dim = geometry.head_dim
         else:
-            num_heads = getattr(text_cfg, "num_attention_heads", None)
-            head_dim = getattr(text_cfg, "head_dim", None)
-            if head_dim is None and num_heads:
-                head_dim = hidden_size // num_heads
+            num_heads, head_dim = config_head_geometry(text_cfg)
     else:
         if layout is None:
             raise ValueError("Building a TransformContext requires a live model or a structural layout.")

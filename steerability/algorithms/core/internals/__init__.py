@@ -25,10 +25,13 @@ Layering rules:
 from .capture import HiddenStateLocation, layerwise_tokenwise_hidden
 from .data import ContrastivePairs, LabeledExamples, as_contrastive_pairs, as_labeled_examples
 from .encoding import tokenize_pairs, tokenize_texts
+from .facts import model_facts
 from .fingerprint import model_fingerprint
 from .model_layout import (
     HeadGeometry,
     ModelLayout,
+    config_head_geometry,
+    config_layer_head_dim,
     head_geometry,
     lora_target_pattern,
     register_layout_detector,
@@ -58,12 +61,15 @@ __all__ = [
     "aggregate_condition_hidden",
     "as_contrastive_pairs",
     "as_labeled_examples",
+    "config_head_geometry",
+    "config_layer_head_dim",
     "get_last_token_positions",
     "head_geometry",
     "layerwise_tokenwise_hidden",
     "lora_target_pattern",
     "masked_mean",
     "measure_residual_norms",
+    "model_facts",
     "model_fingerprint",
     "pool_over_spans",
     "register_layout_detector",

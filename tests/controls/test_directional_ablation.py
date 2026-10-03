@@ -258,7 +258,8 @@ def test_steer_does_not_mutate_caller_vector(model_and_tokenizer, device: torch.
     original_layers = set(steering_vector.directions.keys())
     original_dtype = steering_vector.directions[0].dtype
 
-    ablation = DirectionalAblation(steering_vector=steering_vector, alpha=1.0, layer_range=(0, 1))
+    # the explicit layer keeps the behavior layer inside the range on models deeper than two layers
+    ablation = DirectionalAblation(steering_vector=steering_vector, alpha=1.0, layer_ids=[0], layer_range=(0, 1))
     pipeline = SteeringPipeline(controls=[ablation],  device_map=device, model=model, tokenizer=tokenizer)
     pipeline.steer()
 

@@ -24,7 +24,7 @@ from steerability.algorithms.input_control.base import InputControl
 from steerability.algorithms.output_control.base import OutputControl
 from steerability.algorithms.state_control.base import StateControl
 from steerability.algorithms.structural_control.base import StructuralControl
-from tests.utils.load_ci_models import get_models
+from tests.utils.load_ci_models import LOCAL_PREFIX, build_local_model, get_models
 
 # Real Model/Device Fixtures (for integration tests)
 MODELS = get_models()
@@ -56,14 +56,20 @@ def device(request):
 )
 def model_and_tokenizer(request):
     """
-    Loads each model once per test session.
+    Loads each model once per test session (`local:<builder>` entries are built in process).
     """
     model_id: str = request.param
-    try:
-        model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True)
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
-    except Exception as exc:
-        pytest.skip(f"Could not load {model_id}: {exc}")
+    if model_id.startswith(LOCAL_PREFIX):
+        try:
+            model, tokenizer = build_local_model(model_id)
+        except ImportError as exc:  # the installed transformers lacks the architecture
+            pytest.skip(f"Could not build {model_id}: {exc}")
+    else:
+        try:
+            model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True)
+            tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+        except Exception as exc:
+            pytest.skip(f"Could not load {model_id}: {exc}")
 
     # ensure padding token exists for batching
     if tokenizer.pad_token_id is None:

@@ -187,9 +187,11 @@ models (Llama, Mistral, Qwen, and Gemma), for composite multimodal wrappers load
 3/4 and Qwen3.5), and for GPT-2. Hybrid architectures that interleave attention layers with another token mixer
 (Qwen3.5 and Qwen3-Next) are supported by the residual-stream controls and by hidden-state capture, while controls that
 act on attention (`PASTA` and o_proj-site interventions) are restricted to the attention layers, and `ITI` does not
-support them. A multimodal checkpoint is steered on its text decoder under text-only prompting, and images and audio
-are out of scope. The LoRA adapters the TRL wrappers train attach to that decoder as well. A state control listed after
-an unmerged LoRA adapter steers the adapted model. For an architecture not on this list, register a detector with
+support them. Gemma 4 uses different head dimensions on its sliding and global attention layers. Controls that act on
+attention heads read each layer's head geometry from the model, and `ITI` does not support models whose head geometry
+varies across layers. A multimodal checkpoint is steered on its text decoder under text-only prompting, and images and
+audio are out of scope. The LoRA adapters the TRL wrappers train attach to that decoder as well. A state control listed
+after an unmerged LoRA adapter steers the adapted model. For an architecture not on this list, register a detector with
 `register_layout_detector` (from `steerability.algorithms.core.internals`).
 
 

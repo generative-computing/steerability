@@ -31,7 +31,7 @@ from steerability.algorithms.core.execution.payloads import (
 from steerability.algorithms.core.execution.spec import BackendSpec
 from steerability.algorithms.core.execution.staging import split_artifacts
 from steerability.algorithms.core.internals.fingerprint import is_absent_chat_template_fingerprint
-from steerability.algorithms.core.internals.model_layout import text_config
+from steerability.algorithms.core.internals.model_layout import config_head_geometry, text_config
 from steerability.backends.vllm.capabilities import _intersect_with_discovery, _reconcile_discovery, _vllm_capabilities
 from steerability.backends.vllm.environment import engine_boot_environment, engine_environment
 from steerability.backends.vllm.rendering import raise_for_spec_rejection
@@ -107,10 +107,7 @@ def _config_layout(model_ref: str, trust_remote_code: bool = False) -> ModelFact
         return None
     facts = text_config(config)
     hidden_size = facts.hidden_size
-    num_heads = getattr(facts, "num_attention_heads", None)
-    head_dim = getattr(facts, "head_dim", None)
-    if head_dim is None and hidden_size and num_heads:
-        head_dim = hidden_size // num_heads
+    num_heads, head_dim = config_head_geometry(facts)
     dtype = getattr(config, "dtype", None)
     config_dict = {
         key: value for key, value in config.to_dict().items()

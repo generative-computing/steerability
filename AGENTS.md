@@ -50,7 +50,8 @@ steerability/
 │   │   │                        # sessions, session_generate, session_generate_items); staging (stage freeing,
 │   │   │                        # served-artifact selection)
 │   │   ├── internals/           # activation capture, pooling, stats, model_layout (decoder-stack resolution,
-│   │   │                        # text_config), fingerprint, data/encoding/render; probes/ (detection)
+│   │   │                        # text_config, head geometry), facts (model_facts), fingerprint,
+│   │   │                        # data/encoding/render; probes/ (detection)
 │   │   └── utils/               # control merging, generation helpers, auxiliary_pass, generate_call (marks each
 │   │                            # model.generate call for hook pass counting), assembly (per-generation
 │   │                            # hook/spec/processor entry assembly)
@@ -131,7 +132,9 @@ uv sync --extra all --group docs && uv run mkdocs serve   # docs at localhost:80
 ```
 
 Tests parametrize over the models in `tests/utils/ci_models.yaml` and over devices (`cpu`, `cuda`, `mps`); unavailable
-devices are skipped automatically, so the suite runs on CPU-only machines. Commit messages require a DCO
+devices are skipped automatically, so the suite runs on CPU-only machines. An entry in `ci_models.yaml` is a Hub id or
+a `local:<builder>` entry for a model that a function in `tests/utils/tiny_models.py` builds in process (the `gemma4`
+entry uses different head dimensions on its sliding and global attention layers). Commit messages require a DCO
 `Signed-off-by:` line (see `CONTRIBUTING.md`).
 
 ## Usage guide
@@ -733,9 +736,13 @@ model in its `PRESET_KWARGS`, and the suite fails for a preset without one.
   is enforced by isort (black profile) via pre-commit.
 - Read structural facts (`hidden_size`, `num_attention_heads`, `head_dim`, `num_hidden_layers`) through
   `text_config(model)` (from `steerability.algorithms.core.internals`), which returns the text sub-config on composite
-  multimodal models; never read `model.config.hidden_size` directly, and never default a missing fact to `0`. Resolve
-  decoder module paths through `resolve_model_layout(model)` rather than by matching `model.model.layers`, and scope
-  LoRA adapter targets through `lora_target_pattern(target_modules, model)`.
+  multimodal models; never read `model.config.hidden_size` directly, and never default a missing fact to `0`. Read
+  head geometry with `config_head_geometry(text_cfg)` or `config_layer_head_dim(text_cfg, layer_id)` on a config and
+  with `head_geometry(model, layout, layer_id)` on a loaded model rather than with
+  `getattr(text_cfg, "head_dim", None)`, since a config that declares `head_dim` per layer (Gemma 4) raises an error on
+  the global read (`ModelFacts.head_dim` is `None` for such a model). Build `ModelFacts` from a loaded model through
+  `model_facts(model)`. Resolve decoder module paths through `resolve_model_layout(model)` rather than by matching
+  `model.model.layers`, and scope LoRA adapter targets through `lora_target_pattern(target_modules, model)`.
 
 ### Docstrings and documentation
 
