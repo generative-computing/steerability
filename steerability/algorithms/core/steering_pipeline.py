@@ -3,6 +3,7 @@ Core steering pipeline for composing and applying multiple LLM control methods.
 """
 import contextlib
 import logging
+import threading
 import time
 import traceback
 import warnings
@@ -18,6 +19,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel, P
 
 from steerability.algorithms.core.execution.access import ModelAccess, PlannedFit, PlannedStep, SteerPlan
 from steerability.algorithms.core.execution.backend import SteeredSession, capabilities_for_spec, resolve_backend_class
+from steerability.algorithms.core.execution.cancellation import CancelToken
 from steerability.algorithms.core.execution.contracts import (
     BackendCapabilities,
     Capability,
@@ -70,7 +72,7 @@ from steerability.algorithms.core.utils.generation import (
     resolve_token_prompt,
 )
 from steerability.algorithms.input_control.base import InputControl
-from steerability.algorithms.output_control.base import OutputControl
+from steerability.algorithms.output_control.base import DecodingDriver, OutputControl
 from steerability.algorithms.state_control.base import StateControl
 from steerability.algorithms.structural_control.base import StructuralControl
 from steerability.utils.tokenization import ensure_pad_token, to_left_pad
@@ -91,6 +93,62 @@ def _split_generated_tokens(total: int | None, num_rows: int) -> list[int | None
         return [None] * num_rows
     base, remainder = divmod(total, num_rows)
     return [base + (1 if i < remainder else 0) for i in range(num_rows)]
+
+
+@dataclass(frozen=True, slots=True)
+class _DriverDecode:
+    """The decoding-driver inputs of one generation, assembled in its prompt phase.
+
+    Attributes:
+        driver: The enabled `DecodingDriver`.
+        logits_processors: The composed logits-processor stack passed to `decode`.
+        stopping_criteria: The composed stopping-criteria stack passed to `decode`.
+        state_entries: The generation's state-control entries.
+        rollout_entries: The entries the `SteeredSession` injects into each rollout; empty when the
+            session hosts the state entries as in-process hooks for the span of the decode.
+        hooks_in_process: Whether the session hosts the state entries as in-process hooks.
+        runtime_kwargs: The call's runtime kwargs, passed to `decode`.
+    """
+
+    driver: DecodingDriver
+    logits_processors: Any
+    stopping_criteria: Any
+    state_entries: tuple
+    rollout_entries: tuple
+    hooks_in_process: bool
+    runtime_kwargs: dict
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedGeneration:
+    """The assembled inputs of one `generate()` call, built in its prompt phase.
+
+    Attributes:
+        backend: The inference backend that runs the call.
+        steered_input_ids: The left-packed steered prompt ids, `[batch, seq_len]`.
+        steered_attention_mask: The attention mask matching `steered_input_ids`.
+        params: The call's normalized generation parameters.
+        items: One `GenerationItem` per prompt row on the default decode path; empty under a driver.
+        driver_decode: The decoding-driver inputs, or None on the default decode path.
+        decode_text: Whether the return is decoded to text.
+        is_single: Whether the caller passed one prompt, which removes the batch dimension of the
+            return.
+        return_output: Whether the return is `Output` objects.
+        return_full_sequence: Whether the returned ids include the prompt.
+        cancel_token: The call's cancellation token, or None.
+    """
+
+    backend: Any
+    steered_input_ids: torch.Tensor
+    steered_attention_mask: torch.Tensor
+    params: GenerationParams
+    items: tuple[GenerationItem, ...]
+    driver_decode: _DriverDecode | None
+    decode_text: bool
+    is_single: bool
+    return_output: bool
+    return_full_sequence: bool
+    cancel_token: CancelToken | None
 
 
 @dataclass(slots=True, eq=False, weakref_slot=True)
@@ -156,6 +214,11 @@ class SteeringPipeline:
         unless a preloaded `model=` was passed.
     - On engine backends, `model` is non-None only while the staged in-process model exists
         during the steer phase; the stage is freed before the engine boots.
+    - `generate()` accepts concurrent calls from several threads. Each call's prompt phase runs
+        under the pipeline's prompt lock, and the dispatch runs concurrently with other calls when
+        `supports_concurrent_generate` is True; otherwise the calls run one at a time.
+        `steer()`, `release_backends()`, and `compute_logprobs()` must not run concurrently with
+        `generate()`. A call is cancelled from another thread through its `cancel_token`.
 
     For the state category, list order in `controls` defines the composition surface. List order sets
     `steer()` order, hook registration order, and execution order for hooks on the same module. PyTorch
@@ -207,6 +270,8 @@ class SteeringPipeline:
 
     _is_steered: bool = field(default=False, init=False, repr=False)
     _prompt_warnings: PromptWarnings = field(default_factory=PromptWarnings, init=False, repr=False)
+    # reentrant so that a control calling back into the pipeline during steer() cannot deadlock
+    _prompt_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
 
     def __post_init__(self) -> None:
 
@@ -365,6 +430,27 @@ class SteeringPipeline:
             return not any(control.enabled for control in self.state_controls)
         return True
 
+    @property
+    def supports_concurrent_generate(self) -> bool:
+        """Return True if concurrent `generate()` calls on this pipeline dispatch concurrently.
+
+        The pipeline's backend must lack `Capability.IN_PROCESS_TORCH`, which excludes the Hugging
+        Face backend (one loaded model, with hooks registered per item), and no enabled
+        `DecodingDriver` may be present, since a driver's `decode` runs client-side code with
+        per-call state. The backend's capabilities are its negotiated capabilities when the
+        pipeline holds a constructed backend (after `steer()`), and are read from its spec
+        otherwise. Reading the property never constructs a backend. The result does not depend
+        on the arguments of a `generate()` call. When it is False, concurrent calls are accepted and
+        run one at a time.
+        """
+        spec = self._resolve_backend_spec(self.backend)
+        with self._prompt_lock:
+            backend = self._backends.get(spec)
+        capabilities = backend.negotiated_capabilities() if backend is not None else capabilities_for_spec(spec)
+        if Capability.IN_PROCESS_TORCH in capabilities.atoms:
+            return False
+        return resolve_decoding_driver(self.output_controls) is None
+
     def _inject_tokenizer(self) -> None:
         """Attach the pipeline tokenizer to every control exposing an unset `tokenizer`."""
         if self.tokenizer is None:
@@ -471,14 +557,17 @@ class SteeringPipeline:
         Subsequent operations construct fresh backends against the same specs. Lowered
         intervention entries and staged artifacts persist, so a released pipeline remains usable
         at the cost of re-booting engines on next use. Release is idempotent. Engine-owning
-        backends shut down deterministically.
+        backends shut down deterministically. Release must not run concurrently with
+        `generate()`; a generation whose engine requests are still in flight raises
+        `EngineClosedError`.
         """
-        backends, self._backends = self._backends, {}
-        for backend in backends.values():
-            try:
-                backend.release()
-            except Exception:
-                logger.warning("Backend release failed", exc_info=True)
+        with self._prompt_lock:
+            backends, self._backends = self._backends, {}
+            for backend in backends.values():
+                try:
+                    backend.release()
+                except Exception:
+                    logger.warning("Backend release failed", exc_info=True)
 
     def __enter__(self) -> "SteeringPipeline":
         """Return the pipeline for use as a context manager."""
@@ -714,7 +803,9 @@ class SteeringPipeline:
         retried `steer()` starts new engines. The stage frames in the error's traceback are
         cleared of their local variables, which frees the stage weights even while the caller
         keeps a reference to the error. A post-mortem debugger shows those frames without their
-        local variables. A repeated call on an already-steered pipeline is a no-op.
+        local variables. A repeated call on an already-steered pipeline is a no-op. The steer
+        holds the pipeline's prompt lock for its whole duration and must not run concurrently
+        with `generate()`.
 
         Warns:
             UserWarning: If two or more enabled controls declare the same `RUNTIME_KWARGS_SCHEMA`
@@ -733,6 +824,11 @@ class SteeringPipeline:
             ModuleNotFoundError: If a configured backend kind requires an optional dependency
                 that is not installed (e.g. the `vllm` extra).
         """
+        with self._prompt_lock:
+            self._steer_locked(steer_kwargs)
+
+    def _steer_locked(self, steer_kwargs: dict) -> None:
+        """Run `steer()` with the prompt lock held."""
         if self._is_steered:
             return
 
@@ -1236,7 +1332,7 @@ class SteeringPipeline:
             input_ids: Token prompt as a 1-D/2-D integer tensor, `list[int]`, or `list[list[int]]`.
             **gen_kwargs: Generation parameters in `model.generate` vocabulary, normalized
                 through `GenerationParams` and executed by the inference backend's session
-                (unlisted keys pass through in process and raise on API backends). Two keys are
+                (unlisted keys pass through in process and raise on API backends). Three keys are
                 reserved and consumed here rather than forwarded to the backend:
 
                     - `return_full_sequence: bool` to include the prompt in the returned token IDs.
@@ -1251,6 +1347,18 @@ class SteeringPipeline:
                         does not interpret the mapping; keys are model-family specific (e.g.
                         `enable_thinking`), and models whose templates expose no such switch are
                         unaffected.
+                    - `cancel_token: CancelToken` to cancel the call from another thread. The
+                        session that runs the call honors it at its stated granularity (the
+                        offline vLLM session aborts the call's engine requests, and the in-process
+                        and serve sessions stop between items), and a decoding driver's rollouts
+                        receive it through their `SteeredSession`. A call whose token is cancelled
+                        before it completes raises `GenerationCancelled`.
+
+        Concurrent calls from several threads are supported. Each call's prompt phase (input
+        controls, templating, tokenization, and the assembly of the session's items) runs under the
+        pipeline's prompt lock. The dispatch then runs concurrently with other calls when
+        `supports_concurrent_generate` is True. Otherwise each call holds the lock until it returns,
+        and concurrent calls run one at a time.
 
         Returns:
             See dispatch table above.
@@ -1259,8 +1367,9 @@ class SteeringPipeline:
             RuntimeError: If `steer()` has not yet been called.
             TypeError: If no prompt source or more than one is provided, if a source fails
                 validation, if `attention_mask` is paired with `text=`/`messages=`, if
-                `chat_template_kwargs` is paired with `text=`/`input_ids=`, or if
-                `chat_template_kwargs` is not a mapping.
+                `chat_template_kwargs` is paired with `text=`/`input_ids=`, if
+                `chat_template_kwargs` is not a mapping, or if `cancel_token` is neither a
+                `CancelToken` nor None.
             ValueError: If a token tensor is not 1-D/2-D, nested token lists are ragged, a text/
                 chat sequence is empty, `chat_template_kwargs` contains a pipeline-owned template
                 argument, or multiple candidates per prompt (`num_return_sequences`/`n` greater
@@ -1269,6 +1378,7 @@ class SteeringPipeline:
                 state controls run as in-process hooks, and either the driver sets
                 `whole_batch_rollouts` to False or the call passes a seed with `seed_scope="item"`
                 (the default).
+            GenerationCancelled: If `cancel_token` is cancelled before the call completes.
         """
         if not self._is_steered:
             raise RuntimeError("Must call `.steer()` before `.generate()`.")
@@ -1276,6 +1386,9 @@ class SteeringPipeline:
         runtime_kwargs = runtime_kwargs or {}
         return_full_sequence = bool(gen_kwargs.pop("return_full_sequence", False))
         chat_template_kwargs = gen_kwargs.pop("chat_template_kwargs", None)
+        cancel_token = gen_kwargs.pop("cancel_token", None)
+        if cancel_token is not None and not isinstance(cancel_token, CancelToken):
+            raise TypeError(f"cancel_token must be a CancelToken or None; got {type(cancel_token).__name__}.")
 
         if chat_template_kwargs is not None:
             if not isinstance(chat_template_kwargs, Mapping):
@@ -1320,42 +1433,49 @@ class SteeringPipeline:
                     "input_ids= for a [batch * n, gen_len] token return."
                 )
 
-        # resolve the prompt tensors per modality
-        message_handled: set[int] = set()
-        if kind == "text":
-            prompt_input_ids, prompt_attention_mask, is_single = resolve_text_prompt(
-                payload,
-                input_controls=self.input_controls,
-                tokenizer=self.tokenizer,
-                warnings_state=self._prompt_warnings,
-            )
-        elif kind == "messages":
-            prompt_input_ids, prompt_attention_mask, message_handled, is_single = resolve_messages_prompt(
-                payload,
-                runtime_kwargs,
-                input_controls=self.input_controls,
-                tokenizer=self.tokenizer,
-                chat_template_kwargs=chat_template_kwargs,
-            )
-        else:  # tokens
-            prompt_input_ids, prompt_attention_mask, is_single = resolve_token_prompt(
-                payload,
-                attention_mask,
-                input_controls=self.input_controls,
-                warnings_state=self._prompt_warnings,
-            )
+        # the prompt phase runs under the prompt lock; the dispatch releases it only when the
+        # pipeline supports concurrent generation
+        with self._prompt_lock:
+            # resolve the prompt tensors per modality
+            message_handled: set[int] = set()
+            if kind == "text":
+                prompt_input_ids, prompt_attention_mask, is_single = resolve_text_prompt(
+                    payload,
+                    input_controls=self.input_controls,
+                    tokenizer=self.tokenizer,
+                    warnings_state=self._prompt_warnings,
+                )
+            elif kind == "messages":
+                prompt_input_ids, prompt_attention_mask, message_handled, is_single = resolve_messages_prompt(
+                    payload,
+                    runtime_kwargs,
+                    input_controls=self.input_controls,
+                    tokenizer=self.tokenizer,
+                    chat_template_kwargs=chat_template_kwargs,
+                )
+            else:  # tokens
+                prompt_input_ids, prompt_attention_mask, is_single = resolve_token_prompt(
+                    payload,
+                    attention_mask,
+                    input_controls=self.input_controls,
+                    warnings_state=self._prompt_warnings,
+                )
 
-        return self._execute_generation(
-            prompt_input_ids=prompt_input_ids,
-            prompt_attention_mask=prompt_attention_mask,
-            message_handled=message_handled,
-            decode_text=(kind != "tokens"),
-            is_single=is_single,
-            runtime_kwargs=runtime_kwargs,
-            return_output=return_output,
-            return_full_sequence=return_full_sequence,
-            gen_kwargs=gen_kwargs,
-        )
+            prepared = self._prepare_generation(
+                prompt_input_ids=prompt_input_ids,
+                prompt_attention_mask=prompt_attention_mask,
+                message_handled=message_handled,
+                decode_text=(kind != "tokens"),
+                is_single=is_single,
+                runtime_kwargs=runtime_kwargs,
+                return_output=return_output,
+                return_full_sequence=return_full_sequence,
+                cancel_token=cancel_token,
+                gen_kwargs=gen_kwargs,
+            )
+            if prepared.driver_decode is not None or not self.supports_concurrent_generate:
+                return self._dispatch_generation(prepared)
+        return self._dispatch_generation(prepared)
 
     @overload
     def generate_text(
@@ -1365,6 +1485,7 @@ class SteeringPipeline:
             runtime_kwargs: dict | None = ...,
             return_output: Literal[False] = ...,
             return_full_sequence: bool = ...,
+            cancel_token: CancelToken | None = ...,
             **gen_kwargs: Any,
     ) -> str: ...
     @overload
@@ -1375,6 +1496,7 @@ class SteeringPipeline:
             runtime_kwargs: dict | None = ...,
             return_output: Literal[False] = ...,
             return_full_sequence: bool = ...,
+            cancel_token: CancelToken | None = ...,
             **gen_kwargs: Any,
     ) -> list[str]: ...
     @overload
@@ -1385,6 +1507,7 @@ class SteeringPipeline:
             runtime_kwargs: dict | None = ...,
             return_output: Literal[True],
             return_full_sequence: bool = ...,
+            cancel_token: CancelToken | None = ...,
             **gen_kwargs: Any,
     ) -> Output | list[Output]: ...
     @overload
@@ -1395,6 +1518,7 @@ class SteeringPipeline:
             runtime_kwargs: dict | None = ...,
             return_output: bool = ...,
             return_full_sequence: bool = ...,
+            cancel_token: CancelToken | None = ...,
             **gen_kwargs: Any,
     ) -> str | list[str] | Output | list[Output]: ...
 
@@ -1405,6 +1529,7 @@ class SteeringPipeline:
             runtime_kwargs: dict | None = None,
             return_output: bool = False,
             return_full_sequence: bool = False,
+            cancel_token: CancelToken | None = None,
             **gen_kwargs: Any,
     ) -> str | list[str] | Output | list[Output]:
         """Generate from plain-text prompts.
@@ -1422,12 +1547,15 @@ class SteeringPipeline:
             return_full_sequence: If True, include the prompt in the returned token IDs.
                 Returned ids exclude the prompt by default; do not slice the result by
                 prompt length.
+            cancel_token: Token that cancels the call from another thread, as for `generate()`.
             **gen_kwargs: Generation parameters, as for `generate()`.
 
         Returns:
             `str`, `list[str]`, `Output`, or `list[Output]`.
         """
         gen_kwargs["return_full_sequence"] = return_full_sequence
+        if cancel_token is not None:
+            gen_kwargs["cancel_token"] = cancel_token
         return self.generate(
             text=text, runtime_kwargs=runtime_kwargs, return_output=return_output, **gen_kwargs,
         )
@@ -1441,6 +1569,7 @@ class SteeringPipeline:
             runtime_kwargs: dict | None = ...,
             return_output: Literal[False] = ...,
             return_full_sequence: bool = ...,
+            cancel_token: CancelToken | None = ...,
             **gen_kwargs: Any,
     ) -> str: ...
     @overload
@@ -1452,6 +1581,7 @@ class SteeringPipeline:
             runtime_kwargs: dict | None = ...,
             return_output: Literal[False] = ...,
             return_full_sequence: bool = ...,
+            cancel_token: CancelToken | None = ...,
             **gen_kwargs: Any,
     ) -> list[str]: ...
     @overload
@@ -1463,6 +1593,7 @@ class SteeringPipeline:
             runtime_kwargs: dict | None = ...,
             return_output: Literal[True],
             return_full_sequence: bool = ...,
+            cancel_token: CancelToken | None = ...,
             **gen_kwargs: Any,
     ) -> Output | list[Output]: ...
     @overload
@@ -1474,6 +1605,7 @@ class SteeringPipeline:
             runtime_kwargs: dict | None = ...,
             return_output: bool = ...,
             return_full_sequence: bool = ...,
+            cancel_token: CancelToken | None = ...,
             **gen_kwargs: Any,
     ) -> str | list[str] | Output | list[Output]: ...
 
@@ -1485,6 +1617,7 @@ class SteeringPipeline:
             runtime_kwargs: dict | None = None,
             return_output: bool = False,
             return_full_sequence: bool = False,
+            cancel_token: CancelToken | None = None,
             **gen_kwargs: Any,
     ) -> str | list[str] | Output | list[Output]:
         """Generate from chat prompts through the tokenizer's chat template.
@@ -1509,12 +1642,15 @@ class SteeringPipeline:
             return_full_sequence: If True, include the prompt in the returned token IDs.
                 Returned ids exclude the prompt by default; do not slice the result by
                 prompt length.
+            cancel_token: Token that cancels the call from another thread, as for `generate()`.
             **gen_kwargs: Generation parameters, as for `generate()`.
 
         Returns:
             `str`, `list[str]`, `Output`, or `list[Output]`.
         """
         gen_kwargs["return_full_sequence"] = return_full_sequence
+        if cancel_token is not None:
+            gen_kwargs["cancel_token"] = cancel_token
         if chat_template_kwargs is not None:
             gen_kwargs["chat_template_kwargs"] = chat_template_kwargs
         return self.generate(
@@ -1531,6 +1667,7 @@ class SteeringPipeline:
             runtime_kwargs: dict | None = ...,
             return_output: Literal[False] = ...,
             return_full_sequence: bool = ...,
+            cancel_token: CancelToken | None = ...,
             **gen_kwargs: Any,
     ) -> torch.Tensor: ...
     @overload
@@ -1542,6 +1679,7 @@ class SteeringPipeline:
             runtime_kwargs: dict | None = ...,
             return_output: Literal[True],
             return_full_sequence: bool = ...,
+            cancel_token: CancelToken | None = ...,
             **gen_kwargs: Any,
     ) -> Output | list[Output]: ...
     @overload
@@ -1553,6 +1691,7 @@ class SteeringPipeline:
             runtime_kwargs: dict | None = ...,
             return_output: bool = ...,
             return_full_sequence: bool = ...,
+            cancel_token: CancelToken | None = ...,
             **gen_kwargs: Any,
     ) -> torch.Tensor | Output | list[Output]: ...
 
@@ -1564,6 +1703,7 @@ class SteeringPipeline:
             runtime_kwargs: dict | None = None,
             return_output: bool = False,
             return_full_sequence: bool = False,
+            cancel_token: CancelToken | None = None,
             **gen_kwargs: Any,
     ) -> torch.Tensor | Output | list[Output]:
         """Generate from already-tokenized prompts.
@@ -1583,18 +1723,21 @@ class SteeringPipeline:
             return_full_sequence: If True, include the prompt in the returned token IDs.
                 Returned ids exclude the prompt by default; do not slice the result by
                 prompt length.
+            cancel_token: Token that cancels the call from another thread, as for `generate()`.
             **gen_kwargs: Generation parameters, as for `generate()`.
 
         Returns:
             `torch.Tensor`, `Output`, or `list[Output]`.
         """
         gen_kwargs["return_full_sequence"] = return_full_sequence
+        if cancel_token is not None:
+            gen_kwargs["cancel_token"] = cancel_token
         return self.generate(
             input_ids=input_ids, attention_mask=attention_mask, runtime_kwargs=runtime_kwargs,
             return_output=return_output, **gen_kwargs,
         )
 
-    def _execute_generation(
+    def _prepare_generation(
             self,
             prompt_input_ids: torch.Tensor,
             prompt_attention_mask: torch.Tensor | None,
@@ -1605,21 +1748,20 @@ class SteeringPipeline:
             runtime_kwargs: dict,
             return_output: bool,
             return_full_sequence: bool,
+            cancel_token: CancelToken | None,
             gen_kwargs: dict,
-    ) -> str | list[str] | torch.Tensor | Output | list[Output]:
-        """Run generation from the prompt tensors and shape the return value.
+    ) -> _PreparedGeneration:
+        """Assemble one generation's inputs from the prompt tensors; the prompt phase of `generate()`.
 
         The token-level input-control chain runs first. The steered prompt tensors are then
         left-packed, since the sessions run batched forwards in that layout. The later steps
         (state hooks, per-item prompts, driver inputs, full-sequence returns) use the same
         layout. Output controls that export generation parameters are merged into the call's
         `GenerationParams`, and the state-control entries are collected for the backend. With
-        the default decoding driver, each prompt row becomes a `GenerationItem` that the
-        inference backend's session runs. An enabled `DecodingDriver` instead runs in the client
-        process and issues its rollouts through `session=`. In-process state hooks then stay
-        registered for the whole decode. The returned token IDs contain only the continuation
-        unless `return_full_sequence` is True. Decoded continuation text is truncated at the
-        first stop string.
+        the default decoding driver, each prompt row becomes a `GenerationItem` for the
+        inference backend's session. With an enabled `DecodingDriver`, the composed processor
+        and criteria stacks and the rollout entries are assembled for its `decode`. The caller
+        holds the prompt lock.
 
         Args:
             prompt_input_ids: Prompt token IDs [seq_len] or [batch, seq_len] before the token-level
@@ -1635,12 +1777,12 @@ class SteeringPipeline:
             return_output: If True, return `Output` (single) or `list[Output]` (batched) regardless
                 of `decode_text`.
             return_full_sequence: If True, include the prompt in the returned token IDs.
+            cancel_token: The call's cancellation token, or None.
             gen_kwargs: Generation parameters, normalized through `GenerationParams` and passed to
                 the decoding driver or the session.
 
         Returns:
-            `str` or `list[str]` when `decode_text` is True, `torch.Tensor` when False, or
-            `Output`/`list[Output]` when `return_output` is True.
+            The `_PreparedGeneration` that `_dispatch_generation` runs.
 
         Raises:
             ValueError: If a batch of more than one row reaches a decoding driver while enabled
@@ -1739,42 +1881,152 @@ class SteeringPipeline:
                 model=self.model, **gen_kwargs
             )
 
-        driver_generated_tokens: int | None = None
-        with backend.open_session() as session:
-            if decoding_driver is not None:
-                # client-side driver path: composed stacks, session-hosted hooks for the span
-                # of the decode, rollouts through a SteeredSession
-                logits_processors, stopping_criteria = compose_stacks(
-                    self.output_controls, steered_input_ids, runtime_kwargs,
-                    steered_attention_mask, gen_kwargs, skip_ids=skip_ids,
+        if decoding_driver is not None:
+            # client-side driver path: composed stacks, session-hosted hooks for the span of the
+            # decode, rollouts through a SteeredSession
+            logits_processors, stopping_criteria = compose_stacks(
+                self.output_controls, steered_input_ids, runtime_kwargs,
+                steered_attention_mask, gen_kwargs, skip_ids=skip_ids,
+            )
+            params = GenerationParams.from_gen_kwargs(**gen_kwargs)
+            for contribution in lowered.values():
+                params = merge_lowered_params(params, contribution)
+            # in process, the session hosts this generation's hooks for the whole decode, so
+            # rollouts through the session and auxiliary forwards on the loaded model are steered
+            # alike and the SteeredSession injects nothing (ambient hooks already cover its items);
+            # on spec-consuming backends the SteeredSession injects a rollout variant of each
+            # lowered entry whose prompt-relative scopes are rewritten to absolute positions at the
+            # generation's original prompt boundary
+            driver_rollout_entries: tuple = ()
+            if state_entries and not hooks_in_process:
+                driver_rollout_entries = rollout_entries(
+                    state_entries, steered_input_ids, steered_attention_mask,
                 )
-                params = GenerationParams.from_gen_kwargs(**gen_kwargs)
-                for contribution in lowered.values():
-                    params = merge_lowered_params(params, contribution)
-                # in process, the session hosts this generation's hooks for the whole decode,
-                # so rollouts through the session and auxiliary forwards on the live model are
-                # steered alike and the SteeredSession injects nothing (ambient hooks already
-                # cover its items); on spec-consuming backends the SteeredSession injects a
-                # rollout variant of each lowered entry whose prompt-relative scopes are
-                # rewritten to absolute positions at the generation's original prompt boundary
-                driver_rollout_entries: tuple = ()
-                if state_entries and hooks_in_process:
-                    applied = session.entries_applied(state_entries)
+            return _PreparedGeneration(
+                backend=backend,
+                steered_input_ids=steered_input_ids,
+                steered_attention_mask=steered_attention_mask,
+                params=params,
+                items=(),
+                driver_decode=_DriverDecode(
+                    driver=decoding_driver,
+                    logits_processors=logits_processors,
+                    stopping_criteria=stopping_criteria,
+                    state_entries=tuple(state_entries),
+                    rollout_entries=tuple(driver_rollout_entries),
+                    hooks_in_process=hooks_in_process,
+                    runtime_kwargs=runtime_kwargs,
+                ),
+                decode_text=decode_text,
+                is_single=is_single,
+                return_output=return_output,
+                return_full_sequence=return_full_sequence,
+                cancel_token=cancel_token,
+            )
+
+        # default path: per-prompt items executed by the session; on backends hosting structured
+        # outputs natively, declarative constraints lower in place of their in-memory processors
+        constraint_sources: dict[int, ConstraintSource] = {}
+        processor_specs: dict[int, ProcessorSpecEntry] = {}
+        if not hooks_in_process:
+            constraint_sources = constraint_contributions(self.output_controls, runtime_kwargs)
+            processor_specs = processor_spec_contributions(
+                self.output_controls, runtime_kwargs, inference_capabilities,
+            )
+        output_entries = collect_output_entries(
+            self.output_controls, steered_input_ids, runtime_kwargs,
+            attention_mask=steered_attention_mask,
+            skip_ids=skip_ids | frozenset(constraint_sources) | frozenset(processor_specs),
+            **gen_kwargs,
+        )
+        if constraint_sources or processor_specs:
+            output_entries = output_entries + tuple(
+                ConstraintEntry(source=source) for source in constraint_sources.values()
+            ) + tuple(processor_specs.values())
+        user_processors = gen_kwargs.pop("logits_processor", None) or []
+        user_criteria = gen_kwargs.pop("stopping_criteria", None) or []
+        params = GenerationParams.from_gen_kwargs(**gen_kwargs)
+        for contribution in lowered.values():
+            params = merge_lowered_params(params, contribution)
+        if user_processors or user_criteria:
+            extra = dict(params.extra)
+            if user_processors:
+                extra["logits_processor"] = user_processors
+            if user_criteria:
+                extra["stopping_criteria"] = user_criteria
+            params = replace(params, extra=extra)
+
+        items = tuple(
+            GenerationItem(
+                prompt=PreparedPrompt.from_token_ids(
+                    steered_input_ids[i:i + 1], steered_attention_mask[i:i + 1],
+                ),
+                state_entries=state_entry_rows[i] if state_entry_rows is not None else state_entries,
+                output_entries=output_entries,
+            )
+            for i in range(steered_input_ids.size(0))
+        )
+        return _PreparedGeneration(
+            backend=backend,
+            steered_input_ids=steered_input_ids,
+            steered_attention_mask=steered_attention_mask,
+            params=params,
+            items=items,
+            driver_decode=None,
+            decode_text=decode_text,
+            is_single=is_single,
+            return_output=return_output,
+            return_full_sequence=return_full_sequence,
+            cancel_token=cancel_token,
+        )
+
+    def _dispatch_generation(
+            self, prepared: _PreparedGeneration,
+    ) -> str | list[str] | torch.Tensor | Output | list[Output]:
+        """Run one prepared generation on its backend's session and shape the return value.
+
+        With the default decoding driver, the session generates the prepared items. An enabled
+        `DecodingDriver` instead runs in the client process and issues its rollouts through a
+        `SteeredSession`, which forwards the call's `cancel_token`. In-process state hooks stay
+        registered for the whole decode. The returned token IDs contain only the continuation
+        unless `return_full_sequence` is True. Decoded continuation text is truncated at the first
+        stop string. The driver path runs under the prompt lock.
+
+        Args:
+            prepared: The generation's inputs, from `_prepare_generation`.
+
+        Returns:
+            `str` or `list[str]` when `decode_text` is True, `torch.Tensor` when False, or
+            `Output`/`list[Output]` when `return_output` is True.
+
+        Raises:
+            GenerationCancelled: If the call's `cancel_token` is cancelled before it completes.
+        """
+        steered_input_ids = prepared.steered_input_ids
+        steered_attention_mask = prepared.steered_attention_mask
+        params = prepared.params
+        cancel_token = prepared.cancel_token
+        return_full_sequence = prepared.return_full_sequence
+        driver_decode = prepared.driver_decode
+
+        driver_generated_tokens: int | None = None
+        with prepared.backend.open_session() as session:
+            if driver_decode is not None:
+                if driver_decode.state_entries and driver_decode.hooks_in_process:
+                    applied = session.entries_applied(driver_decode.state_entries)
                 else:
                     applied = contextlib.nullcontext()
-                    if state_entries:
-                        driver_rollout_entries = rollout_entries(
-                            state_entries, steered_input_ids, steered_attention_mask,
-                        )
-                driver_session = SteeredSession(session, driver_rollout_entries)
+                driver_session = SteeredSession(session, driver_decode.rollout_entries, cancel_token=cancel_token)
+                if cancel_token is not None:
+                    cancel_token.raise_if_cancelled()
                 with applied:
-                    full_output_ids = decoding_driver.decode(
+                    full_output_ids = driver_decode.driver.decode(
                         input_ids=steered_input_ids,
                         attention_mask=steered_attention_mask,
                         model=self.model,
-                        logits_processors=logits_processors,
-                        stopping_criteria=stopping_criteria,
-                        runtime_kwargs=runtime_kwargs,
+                        logits_processors=driver_decode.logits_processors,
+                        stopping_criteria=driver_decode.stopping_criteria,
+                        runtime_kwargs=driver_decode.runtime_kwargs,
                         session=driver_session,
                         **params.to_gen_kwargs(),
                     )
@@ -1791,50 +2043,7 @@ class SteeringPipeline:
                     tokenizer=self.tokenizer,
                 )
             else:
-                # default path: per-prompt items executed by the session; on backends hosting
-                # structured outputs natively, declarative constraints lower in place of their
-                # live processors
-                constraint_sources: dict[int, ConstraintSource] = {}
-                processor_specs: dict[int, ProcessorSpecEntry] = {}
-                if not hooks_in_process:
-                    constraint_sources = constraint_contributions(self.output_controls, runtime_kwargs)
-                    processor_specs = processor_spec_contributions(
-                        self.output_controls, runtime_kwargs, inference_capabilities,
-                    )
-                output_entries = collect_output_entries(
-                    self.output_controls, steered_input_ids, runtime_kwargs,
-                    attention_mask=steered_attention_mask,
-                    skip_ids=skip_ids | frozenset(constraint_sources) | frozenset(processor_specs),
-                    **gen_kwargs,
-                )
-                if constraint_sources or processor_specs:
-                    output_entries = output_entries + tuple(
-                        ConstraintEntry(source=source) for source in constraint_sources.values()
-                    ) + tuple(processor_specs.values())
-                user_processors = gen_kwargs.pop("logits_processor", None) or []
-                user_criteria = gen_kwargs.pop("stopping_criteria", None) or []
-                params = GenerationParams.from_gen_kwargs(**gen_kwargs)
-                for contribution in lowered.values():
-                    params = merge_lowered_params(params, contribution)
-                if user_processors or user_criteria:
-                    extra = dict(params.extra)
-                    if user_processors:
-                        extra["logits_processor"] = user_processors
-                    if user_criteria:
-                        extra["stopping_criteria"] = user_criteria
-                    params = replace(params, extra=extra)
-
-                items = [
-                    GenerationItem(
-                        prompt=PreparedPrompt.from_token_ids(
-                            steered_input_ids[i:i + 1], steered_attention_mask[i:i + 1],
-                        ),
-                        state_entries=state_entry_rows[i] if state_entry_rows is not None else state_entries,
-                        output_entries=output_entries,
-                    )
-                    for i in range(steered_input_ids.size(0))
-                ]
-                results = session.generate(items, params)
+                results = session.generate(list(prepared.items), params, cancel_token=cancel_token)
                 new_tokens, reasons = self._assemble_item_outputs(results)
                 num_candidates = params.n or 1
                 if return_full_sequence:
@@ -1852,8 +2061,8 @@ class SteeringPipeline:
         # rows (remainder on the first row) so arm-level sums are preserved; the driverless path
         # leaves generated_tokens None and consumers fall back to the returned continuation count
         generated_per_row = _split_generated_tokens(driver_generated_tokens, num_rows)
-        if return_output:
-            if is_single:
+        if prepared.return_output:
+            if prepared.is_single:
                 # one Output covers every candidate row, so it carries the full dispatch total
                 return Output(
                     output_ids=new_tokens,
@@ -1871,14 +2080,14 @@ class SteeringPipeline:
                 for i in range(num_rows)
             ]
 
-        if not decode_text:
+        if not prepared.decode_text:
             return returned_ids
 
         # text / chat → decode; decoded continuation text truncates at the first stop string
         decoded = self.tokenizer.decode(returned_ids, skip_special_tokens=True)
         if params.stop_strings and not return_full_sequence:
             decoded = [truncate_at_stop_strings(text, params.stop_strings) for text in decoded]
-        if is_single:
+        if prepared.is_single:
             return decoded[0]
         return decoded
 
@@ -1926,7 +2135,9 @@ class SteeringPipeline:
         When all pipeline controls support batching, the items share one set of control entries
         and score in a single pass (inputs are left-padded internally for correct positional
         alignment); otherwise each item is prepared and scored sequentially. Encoder-decoder
-        models score in process against the live model.
+        models score in process against the live model. Scoring holds the pipeline's prompt lock
+        for its whole duration. Concurrent calls therefore score one at a time and wait for the
+        prompt phase of a concurrent `generate()`.
 
         Args:
             input_ids: Input token IDs as list or tensor [seq_len] or [batch, seq_len]
@@ -1945,6 +2156,20 @@ class SteeringPipeline:
             UnsupportedPipelineError: If an enabled control is score-unsupported on the
                 configured inference backend.
         """
+        with self._prompt_lock:
+            return self._compute_logprobs_locked(
+                input_ids, attention_mask, ref_output_ids, runtime_kwargs, **forward_kwargs,
+            )
+
+    def _compute_logprobs_locked(
+            self,
+            input_ids: list[int] | torch.LongTensor,
+            attention_mask: torch.Tensor | None,
+            ref_output_ids: list[int] | torch.LongTensor | None,
+            runtime_kwargs: dict | None,
+            **forward_kwargs: Any,
+    ) -> torch.Tensor:
+        """Run `compute_logprobs()` with the prompt lock held."""
         if not self._is_steered:
             raise RuntimeError("Must call `.steer()` before `.compute_logprobs()`.")
         if ref_output_ids is None:

@@ -125,11 +125,11 @@ class _SessionProbe:
         self.calls.append("layout")
         return "layout-sentinel"
 
-    def generate(self, items, params):
+    def generate(self, items, params, *, cancel_token=None):
         self.calls.append("generate")
         return []
 
-    def score(self, items, params):
+    def score(self, items, params, *, cancel_token=None):
         self.calls.append("score")
         return torch.zeros(0, 0)
 

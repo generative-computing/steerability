@@ -81,9 +81,9 @@ def _count_session_calls(monkeypatch) -> list[int]:
     calls: list[int] = []
     original = ExclusiveSession.generate
 
-    def counting(self, items, params):
+    def counting(self, items, params, *, cancel_token=None):
         calls.append(len(items))
-        return original(self, items, params)
+        return original(self, items, params, cancel_token=cancel_token)
 
     monkeypatch.setattr(ExclusiveSession, "generate", counting)
     return calls
@@ -276,9 +276,9 @@ def _record_session_calls(monkeypatch, recorder: RecordingTransform) -> list[tup
     calls: list[tuple[list[int], list[torch.Tensor]]] = []
     original = ExclusiveSession.generate
 
-    def recording(self, items, params):
+    def recording(self, items, params, *, cancel_token=None):
         start = len(recorder.masks)
-        results = original(self, items, params)
+        results = original(self, items, params, cancel_token=cancel_token)
         calls.append(([item.prompt.token_ids.size(-1) for item in items], recorder.masks[start:]))
         return results
 
@@ -467,7 +467,7 @@ class _PaddingSession:
         self._reasons = reasons
         self.seen = []
 
-    def generate(self, items, params):
+    def generate(self, items, params, *, cancel_token=None):
         self.seen.append((items, params))
         width = max(len(ids) for ids in self._continuations)
         pad = self.tokenizer.pad_token_id

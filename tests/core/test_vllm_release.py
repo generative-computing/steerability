@@ -136,3 +136,35 @@ def test_pipeline_end_to_end_with_stopping_rules():
         assert out.output_ids.shape[1] <= 6
     finally:
         pipeline.release_backends()
+
+
+def test_release_with_a_request_in_flight_fails_that_request():
+    """Release while a long request is in flight: the waiter raises `EngineClosedError`, the engine
+    shuts down, and the backend refuses new sessions."""
+    import threading
+    import time
+
+    from steerability.backends.vllm.engine_thread import EngineClosedError
+
+    backend = _boot_or_skip()
+    item = GenerationItem(prompt=PreparedPrompt.from_text("Once upon a time"))
+    params = GenerationParams(max_new_tokens=480, min_new_tokens=480, greedy=True)
+    errors = []
+
+    def run():
+        try:
+            with backend.open_session() as session:
+                session.generate([item], params)
+        except BaseException as error:
+            errors.append(error)
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    time.sleep(0.5)
+    backend.release()
+    thread.join(60)
+
+    assert len(errors) == 1 and isinstance(errors[0], EngineClosedError)
+    assert backend._engine_thread.closed
+    with pytest.raises(RuntimeError, match="was released"):
+        backend.open_session()

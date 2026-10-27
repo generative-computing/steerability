@@ -182,7 +182,7 @@ class _FakeSession:
         self.current_score = 0.0
         self.item_count = 0
 
-    def generate(self, items, params):
+    def generate(self, items, params, *, cancel_token=None):
         entries = items[0].state_entries
         if entries:
             keywords = entries[0].hooks["pre"][0]["hook_func"].keywords

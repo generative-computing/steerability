@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Literal
 import torch
 from transformers import LogitsProcessorList, PreTrainedModel, PreTrainedTokenizerBase, StoppingCriteriaList
 
+from steerability.algorithms.core.execution.cancellation import CancelToken
 from steerability.algorithms.core.execution.contracts import UnsupportedOperationError
 from steerability.algorithms.core.execution.fanout import derive_item_seed
 from steerability.algorithms.core.execution.params import GenerationParams
@@ -365,6 +366,8 @@ class ExclusiveSession:
         self,
         items: Sequence[GenerationItem],
         params: GenerationParams,
+        *,
+        cancel_token: CancelToken | None = None,
     ) -> list[ItemResult]:
         """Generate one result per item under the item's state and output entries.
 
@@ -389,9 +392,13 @@ class ExclusiveSession:
         restart their count at the prefill of each call. The restart also applies to hooks that
         `entries_applied` keeps registered across calls.
 
+        A cancelled `cancel_token` is checked before each item's decode on the serial path and
+        once before a batched decode; a running `model.generate` call finishes.
+
         Args:
             items: The generation items.
             params: Normalized generation parameters shared by all items.
+            cancel_token: Token checked before each decode, or None.
 
         Returns:
             One `ItemResult` per item, in item order. The `finish_reasons` of each result contain
@@ -403,6 +410,7 @@ class ExclusiveSession:
             UnsupportedOperationError: If an item contains a state entry that is not a
                 `HookEntry` or an output entry that is not a `StackEntry`.
             ValueError: If `params.stop_strings` is set and the session has no tokenizer.
+            GenerationCancelled: If `cancel_token` is cancelled before a decode starts.
         """
         self._ensure_open()
         model = self.model
@@ -431,6 +439,8 @@ class ExclusiveSession:
             and len(set(seeds)) == 1
         )
         if batchable:
+            if cancel_token is not None:
+                cancel_token.raise_if_cancelled()
             return self._generate_batched(
                 items, params, gen_kwargs, user_processors, user_criteria, seeds[0],
             )
@@ -439,6 +449,8 @@ class ExclusiveSession:
 
         results: list[ItemResult] = []
         for index, item in enumerate(items):
+            if cancel_token is not None:
+                cancel_token.raise_if_cancelled()
             input_ids, attention_mask = self._resolve_prompt_tensors(item.prompt, drop_leading_pads=len(items) > 1)
             processors, criteria = self._compose_entry_stacks(
                 item.output_entries, extra_processors=user_processors, extra_criteria=user_criteria,
@@ -532,6 +544,8 @@ class ExclusiveSession:
         self,
         items: Sequence[ScoringItem],
         params: GenerationParams,
+        *,
+        cancel_token: CancelToken | None = None,
     ) -> torch.Tensor:
         """Teacher-forced log-probabilities of each item's reference tokens.
 
@@ -543,10 +557,13 @@ class ExclusiveSession:
         batched forward pass (prompts right-padded to a common length, then left-packed
         together); otherwise items score serially. Stopping criteria never apply. Decoder-only
         models only; the pipeline's `compute_logprobs` serves encoder-decoder models in-process.
+        A cancelled `cancel_token` is checked before each item's forward pass on the serial path
+        and once before a batched pass.
 
         Args:
             items: The scoring items. Every item must carry the same reference length.
             params: `params.extra` passes through as forward keyword arguments.
+            cancel_token: Token checked before each forward pass, or None.
 
         Returns:
             Log probabilities of shape `[num_items, ref_len]`.
@@ -554,6 +571,7 @@ class ExclusiveSession:
         Raises:
             ValueError: If items carry differing reference lengths.
             UnsupportedOperationError: If the model is an encoder-decoder model.
+            GenerationCancelled: If `cancel_token` is cancelled before a forward pass starts.
         """
         self._ensure_open()
         model = self.model
@@ -572,10 +590,14 @@ class ExclusiveSession:
             raise ValueError(f"All scoring items must share one reference length; got {sorted(ref_lens)}.")
 
         if len(items) > 1 and self._entries_identical(items):
+            if cancel_token is not None:
+                cancel_token.raise_if_cancelled()
             return self._score_batched(items, forward_kwargs)
 
         all_logprobs: list[torch.Tensor] = []
         for item in items:
+            if cancel_token is not None:
+                cancel_token.raise_if_cancelled()
             input_ids, attention_mask = self._resolve_prompt_tensors(item.prompt)
             input_ids, attention_mask = to_left_pad(input_ids, attention_mask)
             ref_output_ids = item.ref_output_ids

@@ -109,6 +109,7 @@ class TestRunShapeAndResults:
         assert baseline_run["suites"]["capability"]["stub/task"]["metrics"]["match/accuracy"] == 0.5
         assert baseline_run["provenance"]["backend"] == "huggingface"
         assert baseline_run["provenance"]["prompt_path"] == "messages"
+        assert baseline_run["provenance"]["dispatch_mode"] == "batched"
 
         frame = runner.results()
         assert list(frame.columns) == [
@@ -202,6 +203,27 @@ class TestResume:
         second = _runner({"baseline": []}, save_dir=tmp_path, hf_model_kwargs={"torch_dtype": torch.bfloat16})
         with pytest.raises(ValueError, match=r"different protocol \(hf_model_kwargs differ"):
             second.run()
+
+    def test_changed_max_concurrency_is_a_changed_protocol(self, tiny_base, tmp_path):
+        import json
+
+        from steerability.evaluation.provider import ProviderOptions
+
+        _runner({"baseline": []}, save_dir=tmp_path, provider_options=ProviderOptions()).run()
+        recorded = json.loads((tmp_path / "protocol.json").read_text())["provider_options"]
+        assert recorded["fields"]["max_concurrency"] is None
+        second = _runner({"baseline": []}, save_dir=tmp_path, provider_options=ProviderOptions(max_concurrency=16))
+        with pytest.raises(ValueError, match=r"different protocol \(provider_options differ"):
+            second.run()
+
+    def test_recorded_provider_options_contain_max_concurrency(self, tiny_base, tmp_path):
+        import json
+
+        from steerability.evaluation.provider import ProviderOptions
+
+        _runner({"baseline": []}, save_dir=tmp_path, provider_options=ProviderOptions(max_concurrency=16)).run()
+        protocol = json.loads((tmp_path / "protocol.json").read_text())
+        assert protocol["provider_options"]["fields"]["max_concurrency"] == 16
 
     def test_logs_without_a_protocol_are_refused(self, tiny_base, tmp_path):
         log_dir = tmp_path / "inspect_logs" / "baseline" / "trial_0" / "capability"

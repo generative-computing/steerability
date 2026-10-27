@@ -165,8 +165,9 @@ class SteeringEval:
                     dict for fixed and baseline configurations.
                 - `"suites"`: Mapping from suite name to that suite's flattened results, with log
                     paths relative to `save_dir`.
-                - `"provenance"`: Versions, backend kind, `prompt_path`, the shared-base
-                    fingerprint when one exists, and a timestamp.
+                - `"provenance"`: Versions, backend kind, `prompt_path`, `dispatch_mode`
+                    (`"batched"` or `"per_request"`), the shared-base fingerprint when one exists,
+                    and a timestamp.
 
         Raises:
             RuntimeError: If any configuration is unsupported and `on_unsupported="raise"` (one
@@ -273,6 +274,13 @@ class SteeringEval:
                 with factory.steered(point.controls_factory()) as pipeline:
                     logger.info("Steered %s in %.0fs.", label, time.monotonic() - steer_started)
                     prompt_path = "messages" if has_chat_template(pipeline.tokenizer) else "text"
+                    # the provider dispatches per request when max_concurrency is set and the
+                    # pipeline supports concurrent generation
+                    per_request = (
+                        getattr(self.provider_options, "max_concurrency", None) is not None
+                        and pipeline.supports_concurrent_generate
+                    )
+                    dispatch_mode = "per_request" if per_request else "batched"
                     for trial_id in range(self.num_trials):
                         trial_seed = (
                             derive_trial_seed(self.seed, point.config_id, trial_id)
@@ -320,6 +328,7 @@ class SteeringEval:
                                 **versions,
                                 "backend": factory.backend_kind,
                                 "prompt_path": prompt_path,
+                                "dispatch_mode": dispatch_mode,
                                 "shared_base_fingerprint": factory.shared_base_fingerprint,
                                 "recorded_utc": datetime.datetime.now(
                                     datetime.timezone.utc

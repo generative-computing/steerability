@@ -240,6 +240,10 @@ Behaviors that differ from bare Hugging Face usage:
   `add_generation_prompt`, `return_dict`). The toolkit does not interpret its contents; keys are model-family
   specific (e.g. `enable_thinking`). Because it rides inside `gen_kwargs`, thinking-on and thinking-off runs get
   distinct configuration identities in sweeps.
+- `cancel_token` is a reserved key inside `gen_kwargs` (a `CancelToken` from `algorithms/core/execution`, else
+  `TypeError`). Cancelling the token from another thread stops the call at the granularity of the session that runs
+  it (see Execution backends), and the call raises `GenerationCancelled`. A decoding driver's rollouts receive the
+  token through their `SteeredSession`.
 - Token ids are returned as generated on every backend (stop text and any token-boundary overrun stay in the ids);
   decoded continuation text is truncated at the first stop-string occurrence by one client-side rule.
 - `generate(..., return_output=True)` returns an `Output` object (or list of them) with fields `output_ids`,
@@ -267,6 +271,12 @@ Behaviors that differ from bare Hugging Face usage:
   state control; the Inspect model provider batches concurrent requests when it is `True` and serializes them
   otherwise. With state hooks in process, the driver path raises `ValueError` for a batch of more than one prompt
   when the driver sets `whole_batch_rollouts = False` or the call is seeded under `seed_scope="item"`.
+- `pipeline.supports_concurrent_generate` is `True` when the backend lacks `IN_PROCESS_TORCH` (the vLLM backends) and
+  no enabled decoding driver is present. `generate()` accepts concurrent calls from several threads on any pipeline.
+  Each call's prompt phase (input controls, templating, tokenization, item assembly) runs under the pipeline's
+  prompt lock, and the dispatch runs concurrently with other calls only when `supports_concurrent_generate` is
+  `True`; otherwise the calls run one at a time. `steer()`, `release_backends()`, and `compute_logprobs()` hold the
+  lock for their whole duration and must not run concurrently with `generate()`.
 - `pipeline.compute_logprobs(input_ids, ref_output_ids=...)` scores reference tokens teacher-forced with the full
   steering applied; output controls with `include_in_scoring=False` are excluded from scoring.
 - Controls with a `tokenizer` attribute left as `None` get the pipeline tokenizer injected automatically.
@@ -310,6 +320,23 @@ pipeline = SteeringPipeline(
   forcing `VLLM_HOOK_WORKER=unified` for `hook_plugin` boots. `serve_environment` returns the same policy as a fresh
   mapping for a `vllm serve` process. The model-runner constraint is owned by the vLLM-Hook plugin (which pins the
   legacy runner or supports V2), not the toolkit.
+- The offline engine is vLLM's `AsyncLLM`, constructed from `AsyncEngineArgs(model=..., **engine_kwargs)` on an
+  event loop that the backend owns on a daemon thread (`backends/vllm/engine_thread.py`). The session submits one
+  engine request per item, and the engine admits each request as it arrives. Concurrent `generate()` calls therefore
+  share one running batch, and each request returns when it finishes. The vLLM-Hook plugin's patch of `AsyncLLM.generate`
+  performs each request's admission, spec staging, capture attachment, and cleanup. `release()` cancels in-flight
+  requests (their callers raise `EngineClosedError`), shuts the engine down on its loop, and joins the thread. The
+  engine is built under vLLM's `LLM_CLASS` usage context, which keeps the offline scheduler defaults (`max_num_seqs`,
+  `max_num_batched_tokens`). Per-request lifecycle logging defaults off (`enable_log_requests=False`), and the
+  periodic stats logging keeps vLLM's default (on, which reports preemptions); an explicit entry in `engine_kwargs`
+  takes precedence for either.
+- Sessions honor a `cancel_token` at different granularity. The offline vLLM session aborts the call's unfinished
+  engine requests. The in-process session checks the token before each decode and lets a running `model.generate`
+  finish, and the serve session checks it before each HTTP request and lets a request already sent complete.
+- On `vllm-serve`, a single-prompt call issues one HTTP request on the caller's thread, and the server batches
+  requests from concurrent calls. `request_timeout` must cover one full generation, `max_retries` applies to
+  transport errors only, and `max_concurrency` bounds the fan-out inside one call rather than the number of
+  concurrent calls. Launching and supervising the server stays with the caller.
 - Structural controls train on the staged model and serve their artifacts (checkpoint or LoRA) on vLLM backends. An
   engine serves the last checkpoint and one LoRA adapter, and `check()` fails a second adapter; on `vllm-serve`, a
   checkpoint is served only when its path is the spec's `model`.
@@ -493,6 +520,15 @@ dispatch carries `seed_scope` from `ProviderOptions` (default `"dispatch"`), so 
 the Hugging Face backend, and bitwise reproducibility of stochastic sampling is not preserved under concurrency (see
 the `steerability/evaluation/batching.py` module docstring for the full contract).
 
+`ProviderOptions(max_concurrency=N)` selects per-request mode on a pipeline whose `supports_concurrent_generate` is
+`True`. Each Inspect request is then dispatched at once as its own single-prompt `pipeline.generate()` call in a
+worker thread, with at most `N` in flight, and `max_connections()` returns `N`. A seeded request samples under
+`derive_item_seed(seed, f"request:{digest}", 0)`, where `digest` hashes the request's prompt and per-sample runtime
+kwargs. The request therefore reproduces regardless of concurrency and arrival order. A cancelled Inspect request cancels its
+`CancelToken`, which aborts its engine request. On any other pipeline the provider logs at info level and stays in
+batching mode. The mode is recorded as `dispatch_mode` in each result row's provenance, and `max_concurrency` is part
+of the recorded protocol.
+
 There is no results checkpoint: the `.eval` logs under `save_dir/inspect_logs/` are the store, and `eval_set`
 resumes each (config, trial, suite) cell from them at sample granularity. Because `eval_set` matches task identity
 only, the runner records the rest of the protocol (toolkit version, provider options and `seed_scope`, generate
@@ -578,8 +614,8 @@ own in the common case. Required hooks per category:
   at every scoring step. `decode` returns `[B * n, T + L]` ids, where `n` is the caller's `num_return_sequences`
   (default 1). Each row is the padded prompt row as received followed by one candidate's continuation, right-padded,
   in row-major, candidate-minor order. The pipeline always passes `session=` (a `SteeredSession` containing the
-  generation's steering entries); drivers issue their rollouts through it, and `model` is None on backends without a
-  loaded model. `session_generate_items(session, rows, eos_token_ids=(), **gen_kwargs)` (in
+  generation's steering entries and its `cancel_token`); drivers issue their rollouts through it, and `model` is None
+  on backends without a loaded model. `session_generate_items(session, rows, eos_token_ids=(), **gen_kwargs)` (in
   `core/execution/session_utils.py`) runs one session call over unpadded rows and returns one
   `(continuation_ids, finish_reason)` per row; pass the generation config's eos ids as `eos_token_ids` so that an eos
   sharing the pad id is kept.
@@ -855,6 +891,10 @@ Rules that hold regardless of task:
     during `steer()` never changes a `config_id` or a `.spipe` fit digest.
 17. `Output.finish_reasons` has one entry per row of `output_ids`, enforced at construction together with the
     `[batch, seq]` shape of `output_ids`.
+18. Concurrent `generate()` calls serialize their prompt phase under the pipeline's prompt lock and dispatch
+    concurrently only when `supports_concurrent_generate` is True; a decoding driver's `decode` never runs
+    concurrently with another generation of the same pipeline. A cancelled `CancelToken` stops its generation at the
+    session's stated granularity and surfaces as `GenerationCancelled`.
 
 ## Pointers
 

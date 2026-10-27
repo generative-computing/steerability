@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 import torch
 
+from steerability.algorithms.core.execution.cancellation import CancelToken
 from steerability.algorithms.core.execution.contracts import (
     BackendCapabilities,
     Capability,
@@ -42,6 +43,9 @@ class SteeringSession(Protocol):
     holds only per-operation state. Session-contract facts, provided by every backend and
     therefore never capability atoms, include token-id prompts, stop rules, minimum tokens,
     multiple candidates, seeded sampling, prompt-logprob scoring, and the model layout.
+
+    `generate` and `score` accept a `cancel_token`. A session raises `GenerationCancelled` once
+    it observes the token cancelled, at the granularity its docstring states.
     """
 
     @property
@@ -53,6 +57,8 @@ class SteeringSession(Protocol):
         self,
         items: Sequence[GenerationItem],
         params: GenerationParams,
+        *,
+        cancel_token: CancelToken | None = None,
     ) -> list[ItemResult]:
         """Generate one result per item, in item order."""
         ...
@@ -61,6 +67,8 @@ class SteeringSession(Protocol):
         self,
         items: Sequence[ScoringItem],
         params: GenerationParams,
+        *,
+        cancel_token: CancelToken | None = None,
     ) -> torch.Tensor:
         """Teacher-forced log-probabilities of each item's reference tokens, shape
         `[num_items, ref_len]`."""
@@ -88,20 +96,25 @@ class SteeredSession:
     generation's hooks ambiently for the span of the driver's decode; on spec-consuming
     backends the injected entries are the generation's lowered interventions with
     prompt-relative scopes rewritten to absolute positions at the generation's original prompt
-    boundary, so re-prefilled continuation tokens are steered at their original positions.
+    boundary, so re-prefilled continuation tokens are steered at their original positions. The
+    wrapper also forwards the generation's `CancelToken` on every `generate` and `score`, and a
+    driver's rollouts therefore stop with their generation.
 
     Attributes:
         inner: The wrapped backend session.
         state_entries: Entries injected ahead of each item's own.
+        cancel_token: The generation's cancellation token, forwarded to the wrapped session, or
+            None.
         generated_tokens: Running non-pad token count over every `ItemResult.output.output_ids`
             this wrapper has returned from `generate`, across all of a driver's rollouts. The pad
             id is read from the wrapped session's tokenizer; `numel()` counts every position when
             there is none. The pipeline reads this total after the driver's `decode` returns.
     """
 
-    def __init__(self, inner, state_entries: tuple = ()):
+    def __init__(self, inner, state_entries: tuple = (), cancel_token: CancelToken | None = None):
         self.inner = inner
         self.state_entries = tuple(state_entries)
+        self.cancel_token = cancel_token
         self.generated_tokens = 0
 
     @property
@@ -124,7 +137,9 @@ class SteeredSession:
     def generate(self, items, params):
         """Generate with the wrapper's entries injected into every item, accumulating the non-pad
         token count of every returned output into `generated_tokens`."""
-        results = self.inner.generate([self._inject(item) for item in items], params)
+        results = self.inner.generate(
+            [self._inject(item) for item in items], params, cancel_token=self.cancel_token,
+        )
         pad_token_id = getattr(getattr(self.inner, "tokenizer", None), "pad_token_id", None)
         for result in results:
             output_ids = result.output.output_ids
@@ -136,7 +151,9 @@ class SteeredSession:
 
     def score(self, items, params):
         """Score with the wrapper's entries injected into every item."""
-        return self.inner.score([self._inject(item) for item in items], params)
+        return self.inner.score(
+            [self._inject(item) for item in items], params, cancel_token=self.cancel_token,
+        )
 
     def capture(self, prompts, layers, mode, location="layer_output"):
         """Capture through the wrapped session under the wrapper's entries.

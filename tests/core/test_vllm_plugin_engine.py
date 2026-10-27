@@ -391,3 +391,56 @@ class TestCaptureOnEngine:
         pipeline.steer()
         text = pipeline.generate(text="the committee approved it", max_new_tokens=8, do_sample=False)
         assert isinstance(text, str)
+
+
+class TestPerRequestPluginEngine:
+    """Capture and interventions through the per-request path: a spec-bearing request that shares the
+    running batch with a plain request is steered exactly as it is when it runs alone."""
+
+    def test_capture_returns_the_plugin_payload_per_request(self, plugin_backend):
+        prompts = [PreparedPrompt.from_text("The cat sat on the mat"), PreparedPrompt.from_text("Hello")]
+        with plugin_backend.open_session() as session:
+            result = session.capture(prompts, [0, 1], "all_tokens")
+        assert set(result.hidden) == {0, 1}
+        assert result.hidden[0].shape[0] == 2
+        assert result.attention_mask.shape[0] == 2
+
+    def test_steered_and_plain_requests_share_a_batch(self, plugin_backend):
+        import threading
+
+        from steerability.algorithms.state_control.caa.control import CAA
+
+        hidden = plugin_backend._layout.hidden_size
+        vector = _steered_vector(TINY_MODEL, hidden, layers=[1])
+        control = CAA(steering_vector=vector, layer_id=1, multiplier=6.0)
+        pipeline = SteeringPipeline(controls=[control], backend=plugin_backend.spec)
+        pipeline.model = AutoModelForCausalLM.from_pretrained(TINY_MODEL)
+        pipeline.tokenizer = _tokenizer()
+        pipeline._backends[plugin_backend.spec] = plugin_backend
+        pipeline.steer()
+        plain = SteeringPipeline(backend=plugin_backend.spec, tokenizer=_tokenizer())
+        plain._backends[plugin_backend.spec] = plugin_backend
+        plain.steer()
+
+        steered_prompt, plain_prompt = "The committee reviewed the plan", "The weather today is"
+        kwargs = dict(max_new_tokens=24, do_sample=False, return_output=True)
+        serial_steered = pipeline.generate(text=steered_prompt, **kwargs).output_ids[0].tolist()
+        serial_plain = plain.generate(text=plain_prompt, **kwargs).output_ids[0].tolist()
+
+        outputs = {}
+
+        def run(name, target, prompt):
+            outputs[name] = target.generate(text=prompt, **kwargs).output_ids[0].tolist()
+
+        threads = [
+            threading.Thread(target=run, args=("steered", pipeline, steered_prompt)),
+            threading.Thread(target=run, args=("plain", plain, plain_prompt)),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(120)
+
+        assert outputs["steered"] == serial_steered
+        assert outputs["plain"] == serial_plain
+        assert serial_steered != plain.generate(text=steered_prompt, **kwargs).output_ids[0].tolist()

@@ -138,7 +138,64 @@ class TestRegistrationAndConstruction:
         assert api.tools_required() is False
 
 
+class TestDispatchMode:
+    def test_default_is_batched(self):
+        api = _api(StubSteeringPipeline(supports_concurrent_generate=True), options=ProviderOptions(max_batch_size=3))
+        assert api.dispatch_mode == "batched"
+        assert api.max_connections() == 3
+
+    def test_max_concurrency_on_a_supporting_pipeline_is_per_request(self):
+        from steerability.evaluation.batching import PerRequestDispatcher
+
+        pipeline = StubSteeringPipeline(supports_concurrent_generate=True)
+        api = _api(pipeline, options=ProviderOptions(max_concurrency=64, max_batch_size=3))
+        assert api.dispatch_mode == "per_request"
+        assert api.max_connections() == 64
+        assert isinstance(api._collator, PerRequestDispatcher)
+
+    def test_max_concurrency_on_an_unsupporting_pipeline_falls_back_and_logs(self, caplog):
+        pipeline = StubSteeringPipeline(supports_concurrent_generate=False)
+        with caplog.at_level("INFO", logger="steerability.evaluation.provider"):
+            api = _api(pipeline, options=ProviderOptions(max_concurrency=64, max_batch_size=3))
+        assert api.dispatch_mode == "batched"
+        assert api.max_connections() == 3
+        fallback = [
+            record for record in caplog.records if "does not support concurrent generation" in record.getMessage()
+        ]
+        assert len(fallback) == 1
+
+    def test_fallback_log_names_the_in_process_backend(self, caplog):
+        from steerability.algorithms.core.steering_pipeline import SteeringPipeline
+        from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
+
+        tokenizer = wordlevel_tokenizer()
+        tokenizer.chat_template = CHAT_TEMPLATE
+        pipeline = SteeringPipeline(model=tiny_llama(), tokenizer=tokenizer)
+        pipeline.steer()
+        with caplog.at_level("INFO", logger="steerability.evaluation.provider"):
+            api = _api(pipeline, options=ProviderOptions(max_concurrency=8))
+        assert api.dispatch_mode == "batched"
+        assert any("backend kind 'huggingface' runs in process" in record.getMessage() for record in caplog.records)
+
+    def test_per_request_generate_dispatches_one_conversation_with_a_token(self):
+        from steerability.algorithms.core.execution import CancelToken
+
+        pipeline = StubSteeringPipeline(supports_concurrent_generate=True)
+        api = _api(pipeline, options=ProviderOptions(max_concurrency=4))
+        output = _generate(api, [ChatMessageUser(content="hello")])
+        assert output.choices[0].message.text == "row-0"
+        (call,) = pipeline.calls
+        assert call["messages"] == [[{"role": "user", "content": "hello"}]]
+        assert isinstance(call["gen_kwargs"]["cancel_token"], CancelToken)
+
+
 class TestProviderOptionsValidation:
+    def test_max_concurrency_validation(self):
+        with pytest.raises(ValueError, match="max_concurrency"):
+            ProviderOptions(max_concurrency=0)
+        assert ProviderOptions().max_concurrency is None
+        assert ProviderOptions(max_concurrency=1).max_concurrency == 1
+
     def test_bad_values_raise(self):
         with pytest.raises(ValueError, match="max_batch_size"):
             ProviderOptions(max_batch_size=0)

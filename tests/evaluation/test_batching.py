@@ -1,5 +1,10 @@
-"""Tests for the lock-leader collator: batching under deterministic gating, batch keys, runtime-
-kwargs collation, poison isolation, cancellation, strict serialization, and loop reuse."""
+"""Tests for the request dispatchers.
+
+The lock-leader collator tests cover batching under deterministic gating, batch keys, runtime-kwargs
+collation, poison isolation, cancellation, strict serialization, and loop reuse. The per-request
+dispatcher tests cover one call per request, the concurrency limiter, error isolation, request seeds, and
+cancellation of a request's generation.
+"""
 import threading
 
 import anyio
@@ -7,7 +12,8 @@ import pytest
 
 pytest.importorskip("inspect_ai")
 
-from steerability.evaluation.batching import LockLeaderCollator
+from steerability.algorithms.core.execution import CancelToken
+from steerability.evaluation.batching import LockLeaderCollator, PerRequestDispatcher, request_seed
 from tests.evaluation.conftest import StubSteeringPipeline
 
 
@@ -350,3 +356,261 @@ class TestPoisonIsolation:
 
         with pytest.raises(RuntimeError, match="boom"):
             anyio.run(main)
+
+
+def _dispatcher(pipeline=None, *, max_concurrency=4, declared_scopes=None, static_runtime_kwargs=None,
+                prompt_path="messages") -> tuple[PerRequestDispatcher, StubSteeringPipeline]:
+    pipeline = pipeline if pipeline is not None else StubSteeringPipeline(supports_concurrent_generate=True)
+    dispatcher = PerRequestDispatcher(
+        pipeline,
+        max_concurrency=max_concurrency,
+        prompt_path=prompt_path,
+        declared_scopes={"spans": "row"} if declared_scopes is None else declared_scopes,
+        static_runtime_kwargs=static_runtime_kwargs or {},
+    )
+    return dispatcher, pipeline
+
+
+class _BlockingPipeline(StubSteeringPipeline):
+    """A stub whose `generate` records its interval and blocks until released or cancelled."""
+
+    def __init__(self, *, release: threading.Event | None = None, hold_seconds: float = 0.3):
+        super().__init__(supports_concurrent_generate=True)
+        self.release = release
+        self.hold_seconds = hold_seconds
+        self.intervals: list[tuple[float, float]] = []
+        self.active = 0
+        self.peak = 0
+        self._counter = threading.Lock()
+
+    def generate(self, **kwargs):
+        import time
+
+        with self._counter:
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+        started = time.monotonic()
+        token = kwargs.get("cancel_token")
+        try:
+            deadline = started + self.hold_seconds
+            while time.monotonic() < deadline:
+                if token is not None and token.cancelled:
+                    from steerability.algorithms.core.execution import GenerationCancelled
+
+                    raise GenerationCancelled("cancelled")
+                if self.release is not None and self.release.is_set():
+                    break
+                time.sleep(0.01)
+            return super().generate(**kwargs)
+        finally:
+            self.intervals.append((started, time.monotonic()))
+            with self._counter:
+                self.active -= 1
+
+
+def _serve_all(dispatcher, records):
+    results: list = [None] * len(records)
+    errors: list = [None] * len(records)
+
+    async def serve(index):
+        try:
+            results[index] = await dispatcher.serve(records[index])
+        except Exception as error:
+            errors[index] = error
+
+    async def main():
+        async with anyio.create_task_group() as tg:
+            for index in range(len(records)):
+                tg.start_soon(serve, index)
+
+    anyio.run(main)
+    return results, errors
+
+
+class TestPerRequestDispatcher:
+    def test_every_record_dispatches_as_its_own_single_prompt_call(self):
+        pipeline = _BlockingPipeline(hold_seconds=0.3)
+        dispatcher, _ = _dispatcher(pipeline, max_concurrency=8)
+        records = [_admit(dispatcher, [{"role": "user", "content": f"q{i}"}], per_sample={"spans": [f"s{i}"]})
+                   for i in range(4)]
+        results, errors = _serve_all(dispatcher, records)
+
+        assert errors == [None] * 4
+        assert all(result is not None for result in results)
+        assert len(pipeline.calls) == 4
+        # a batch of one conversation per call; the dispatcher does not wait for other records
+        assert all(len(call["messages"]) == 1 for call in pipeline.calls)
+        assert pipeline.peak == 4
+        dispatched = sorted(call["messages"][0][0]["content"] for call in pipeline.calls)
+        assert dispatched == ["q0", "q1", "q2", "q3"]
+        spans = sorted(call["runtime_kwargs"]["spans"][0][0] for call in pipeline.calls)
+        assert spans == ["s0", "s1", "s2", "s3"]  # per-sample values arrive as one-element lists
+
+    def test_limiter_bounds_the_calls_in_flight(self):
+        pipeline = _BlockingPipeline(hold_seconds=0.2)
+        dispatcher, _ = _dispatcher(pipeline, max_concurrency=2)
+        records = [_admit(dispatcher, [{"role": "user", "content": f"q{i}"}]) for i in range(5)]
+        _, errors = _serve_all(dispatcher, records)
+        assert errors == [None] * 5
+        assert pipeline.peak == 2
+
+    def test_each_record_receives_its_own_error(self):
+        class PoisonPipeline(StubSteeringPipeline):
+            def generate(self, *, messages=None, **kwargs):
+                (conversation,) = messages
+                if conversation[0]["content"] == "poison":
+                    raise ValueError("bad sample")
+                return super().generate(messages=messages, **kwargs)
+
+        dispatcher, _ = _dispatcher(PoisonPipeline(supports_concurrent_generate=True))
+        records = [_admit(dispatcher, [{"role": "user", "content": prompt}]) for prompt in ("ok", "poison", "ok2")]
+        results, errors = _serve_all(dispatcher, records)
+        assert results[0] is not None and results[2] is not None
+        assert isinstance(errors[1], ValueError) and "bad sample" in str(errors[1])
+        assert errors[0] is None and errors[2] is None
+
+    def test_static_and_per_sample_kwargs_partition_like_the_collator(self, caplog):
+        pipeline = StubSteeringPipeline(supports_concurrent_generate=True)
+        artifact = {"a": "b"}
+        with caplog.at_level("INFO", logger="steerability.evaluation.batching"):
+            dispatcher, _ = _dispatcher(
+                pipeline,
+                declared_scopes={"spans": "row", "canned_responses": "call"},
+                static_runtime_kwargs={"canned_responses": artifact, "other": 1},
+            )
+        record = _admit(dispatcher, [{"role": "user", "content": "q"}], per_sample={"spans": ["x"], "unused": 2})
+        _serve_all(dispatcher, [record])
+        (call,) = pipeline.calls
+        assert call["runtime_kwargs"]["canned_responses"] is artifact
+        assert call["runtime_kwargs"]["spans"] == [["x"]]
+        assert "other" not in call["runtime_kwargs"] and "unused" not in call["runtime_kwargs"]
+        assert dispatcher.inert_runtime_kwargs == frozenset({"other", "unused"})
+        with pytest.raises(ValueError, match="both per sample"):
+            _admit(dispatcher, [{"role": "user", "content": "q"}], per_sample={"canned_responses": {}})
+        scoped, _ = _dispatcher(declared_scopes={"canned_responses": "call"})
+        with pytest.raises(ValueError, match="declared 'call'-scoped"):
+            _admit(scoped, [{"role": "user", "content": "q"}], per_sample={"canned_responses": {}})
+
+    def test_static_row_scoped_value_is_one_row(self):
+        pipeline = StubSteeringPipeline(supports_concurrent_generate=True)
+        dispatcher, _ = _dispatcher(pipeline, static_runtime_kwargs={"spans": ["x"]})
+        _serve_all(dispatcher, [_admit(dispatcher, [{"role": "user", "content": "q"}])])
+        (call,) = pipeline.calls
+        assert call["runtime_kwargs"]["spans"] == [["x"]]
+
+    def test_multi_candidate_request_dispatches_a_bare_conversation(self):
+        pipeline = StubSteeringPipeline(supports_concurrent_generate=True)
+        dispatcher, _ = _dispatcher(pipeline)
+        conversation = [{"role": "user", "content": "q"}]
+        results, errors = _serve_all(dispatcher, [_admit(dispatcher, conversation, num_choices=3)])
+        assert errors == [None]
+        (call,) = pipeline.calls
+        assert call["messages"] == conversation
+        assert call["gen_kwargs"]["n"] == 3
+        assert results[0].output_ids.shape[0] == 3
+
+    def test_closed_dispatcher_refuses_admission(self):
+        dispatcher, _ = _dispatcher()
+        dispatcher.close()
+        assert dispatcher.closed
+        with pytest.raises(RuntimeError, match="closed"):
+            _admit(dispatcher, [{"role": "user", "content": "q"}])
+
+    def test_max_concurrency_is_validated(self):
+        with pytest.raises(ValueError, match="max_concurrency"):
+            _dispatcher(max_concurrency=0)
+
+    def test_a_cancel_token_reaches_pipeline_generate(self):
+        pipeline = StubSteeringPipeline(supports_concurrent_generate=True)
+        dispatcher, _ = _dispatcher(pipeline)
+        record = _admit(dispatcher, [{"role": "user", "content": "q"}])
+        _serve_all(dispatcher, [record])
+        (call,) = pipeline.calls
+        token = call["gen_kwargs"]["cancel_token"]
+        assert isinstance(token, CancelToken)
+        assert token is record.cancel_token and not token.cancelled
+
+    def test_cancelling_the_serving_task_cancels_the_token(self):
+        import time
+
+        pipeline = _BlockingPipeline(hold_seconds=30.0)
+        dispatcher, _ = _dispatcher(pipeline)
+        record = _admit(dispatcher, [{"role": "user", "content": "q"}])
+        outcome = {}
+
+        async def main():
+            with anyio.move_on_after(0.3) as scope:
+                await dispatcher.serve(record)
+            outcome["cancelled"] = scope.cancelled_caught
+            outcome["returned_at"] = time.monotonic()
+
+        started = time.monotonic()
+        anyio.run(main)
+        assert outcome["cancelled"] is True
+        assert outcome["returned_at"] - started < 5  # the task returned at once
+        assert record.cancel_token.cancelled
+        deadline = time.monotonic() + 5
+        while not pipeline.intervals and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert pipeline.intervals  # the worker thread observed the token and ended
+        assert record.output is None
+
+    def test_reuse_across_two_anyio_run_loops(self):
+        dispatcher, pipeline = _dispatcher()
+
+        async def one_request(tag):
+            return await dispatcher.serve(_admit(dispatcher, [{"role": "user", "content": tag}]))
+
+        assert anyio.run(one_request, "first") is not None
+        assert anyio.run(one_request, "second") is not None
+        assert len(pipeline.calls) == 2
+
+
+class TestRequestSeeds:
+    @staticmethod
+    def _seed_of(prompt, *, seed=7, per_sample=None):
+        pipeline = StubSteeringPipeline(supports_concurrent_generate=True)
+        dispatcher, _ = _dispatcher(pipeline)
+        record = _admit(dispatcher, prompt, gen_kwargs={"max_new_tokens": 4, "seed": seed, "seed_scope": "dispatch"},
+                        per_sample=per_sample or {})
+        _serve_all(dispatcher, [record])
+        (call,) = pipeline.calls
+        return call["gen_kwargs"]["seed"]
+
+    def test_seed_is_derived_from_the_base_seed_and_the_request(self):
+        prompt = [{"role": "user", "content": "q"}]
+        assert self._seed_of(prompt) == request_seed(7, prompt, {})
+        assert self._seed_of(prompt) != 7
+
+    def test_seed_is_deterministic_and_shared_by_identical_requests(self):
+        prompt = [{"role": "user", "content": "q"}]
+        assert self._seed_of(prompt) == self._seed_of([{"role": "user", "content": "q"}])
+
+    def test_distinct_prompts_and_base_seeds_give_distinct_seeds(self):
+        first = self._seed_of([{"role": "user", "content": "a"}])
+        second = self._seed_of([{"role": "user", "content": "b"}])
+        third = self._seed_of([{"role": "user", "content": "a"}], seed=8)
+        assert len({first, second, third}) == 3
+
+    def test_per_sample_kwargs_enter_the_seed(self):
+        prompt = [{"role": "user", "content": "q"}]
+        assert self._seed_of(prompt, per_sample={"spans": ["x"]}) != self._seed_of(prompt, per_sample={"spans": ["y"]})
+
+    def test_unseeded_request_attaches_no_seed(self):
+        pipeline = StubSteeringPipeline(supports_concurrent_generate=True)
+        dispatcher, _ = _dispatcher(pipeline)
+        _serve_all(dispatcher, [_admit(dispatcher, [{"role": "user", "content": "q"}])])
+        (call,) = pipeline.calls
+        assert "seed" not in call["gen_kwargs"]
+
+    def test_seed_is_independent_of_arrival_order(self):
+        prompts = [[{"role": "user", "content": f"q{i}"}] for i in range(4)]
+
+        def seeds_in(order):
+            pipeline = StubSteeringPipeline(supports_concurrent_generate=True)
+            dispatcher, _ = _dispatcher(pipeline)
+            records = [_admit(dispatcher, prompts[i], gen_kwargs={"max_new_tokens": 4, "seed": 3}) for i in order]
+            _serve_all(dispatcher, records)
+            return {call["messages"][0][0]["content"]: call["gen_kwargs"]["seed"] for call in pipeline.calls}
+
+        assert seeds_in([0, 1, 2, 3]) == seeds_in([3, 1, 0, 2])

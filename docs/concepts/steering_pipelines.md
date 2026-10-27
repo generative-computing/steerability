@@ -154,6 +154,28 @@ with SteeringPipeline(controls=[caa], backend="vllm") as pipeline:
 # the engine is shut down on exit
 ```
 
+### Concurrent generation
+
+A pipeline accepts `generate()` calls from several threads at once. Each call's prompt phase (input controls, chat
+templating, tokenization) runs under a lock owned by the pipeline, since input controls keep state between calls. On
+the vLLM backends the dispatch then runs concurrently with other calls. The offline engine admits each request into
+its running batch as soon as there is room, and a request returns as soon as its own generation finishes. The
+`supports_concurrent_generate` property reports whether this applies. It is `False` on the Hugging Face backend
+(one loaded model) and under an enabled decoding driver, and concurrent calls on such a pipeline run one at a time.
+
+A call can be cancelled from another thread by passing a `CancelToken` (via `cancel_token`) and cancelling it. On the
+offline vLLM engine this aborts the call's requests, which frees their slots in the running batch. The in-process and
+serve backends stop between items and let a running decode or HTTP request finish. In each case the call raises
+`GenerationCancelled`.
+
+```python
+from steerability.algorithms.core.execution import CancelToken
+
+token = CancelToken()
+# on another thread: token.cancel()
+response = pipeline.generate(text="...", max_new_tokens=64, cancel_token=token)
+```
+
 ### Evaluation
 
 The `SteeringEval` runner forwards its `backend` and `fit` arguments to the pipelines it builds and checks support over
@@ -188,6 +210,10 @@ spec = BackendSpec(
     options={"base_url": "http://localhost:8000"},
 )
 ```
+
+Note that `request_timeout` (default 120 seconds) bounds each HTTP request and must cover one full generation.
+The `max_retries` option applies to transport errors only, and `max_concurrency` bounds the requests issued in
+parallel by one `generate()` call rather than the number of concurrent calls.
 
 Serving activation interventions through the vLLM-Hook plugin additionally requires the plugin in the serving
 environment, `VLLM_HOOK_WORKER=unified` and eager execution on the server, and `hook_plugin: True` on the spec.

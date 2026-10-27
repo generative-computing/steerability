@@ -13,6 +13,7 @@ from steerability.algorithms.core.execution.backend import (
     capabilities_for_spec,
     resolve_backend_class,
 )
+from steerability.algorithms.core.execution.cancellation import CancelToken, GenerationCancelled
 from steerability.algorithms.core.execution.contracts import (
     Alternative,
     BackendCapabilities,
@@ -71,6 +72,7 @@ __all__ = [
     "Backend",
     "BackendCapabilities",
     "BackendSpec",
+    "CancelToken",
     "Capability",
     "CaptureKinds",
     "ConstraintEntry",
@@ -79,6 +81,7 @@ __all__ = [
     "as_constraint_source",
     "CaptureResult",
     "CheckpointArtifact",
+    "GenerationCancelled",
     "GenerationItem",
     "GenerationParams",
     "HookEntry",

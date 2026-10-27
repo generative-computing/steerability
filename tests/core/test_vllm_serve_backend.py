@@ -378,6 +378,57 @@ class TestServeSessionLifecycle:
                 _ = session.layout
 
 
+class TestServeSessionCancellation:
+    """The serve session checks the token before each item's request; a sent request completes."""
+
+    def test_cancelled_token_sends_no_request(self, fake_server):
+        from steerability.algorithms.core.execution import CancelToken, GenerationCancelled
+
+        backend = VLLMServeBackend(_serve_spec())
+        token = CancelToken()
+        token.cancel()
+        items = [GenerationItem(prompt=PreparedPrompt.from_token_ids([0, 3, 4]))]
+        with backend.open_session() as session:
+            with pytest.raises(GenerationCancelled):
+                session.generate(items, GenerationParams(max_new_tokens=4), cancel_token=token)
+            with pytest.raises(GenerationCancelled):
+                session.score(
+                    [ScoringItem(prompt=PreparedPrompt.from_token_ids([0, 3]), ref_output_ids=torch.tensor([[5]]))],
+                    GenerationParams(), cancel_token=token,
+                )
+        assert not [path for path, _ in fake_server.requests if path == "/v1/completions"]
+
+    def test_cancellation_between_items_stops_the_remaining_requests(self, fake_server):
+        from steerability.algorithms.core.execution import CancelToken, GenerationCancelled
+
+        backend = VLLMServeBackend(_serve_spec(max_concurrency=1))
+        token = CancelToken()
+        original = fake_server.handle
+
+        def cancel_after_first(path, payload):
+            response = original(path, payload)
+            if path == "/v1/completions":
+                token.cancel()
+            return response
+
+        fake_server.handle = cancel_after_first
+        items = [GenerationItem(prompt=PreparedPrompt.from_token_ids([0, 3 + index])) for index in range(3)]
+        with backend.open_session() as session:
+            with pytest.raises(GenerationCancelled):
+                session.generate(items, GenerationParams(max_new_tokens=4), cancel_token=token)
+        completions = [payload for path, payload in fake_server.requests if path == "/v1/completions"]
+        assert [payload["prompt"] for payload in completions] == [[0, 3]]
+
+    def test_uncancelled_token_generates_normally(self, fake_server):
+        from steerability.algorithms.core.execution import CancelToken
+
+        backend = VLLMServeBackend(_serve_spec())
+        items = [GenerationItem(prompt=PreparedPrompt.from_token_ids([0, 3, 4]))]
+        with backend.open_session() as session:
+            results = session.generate(items, GenerationParams(max_new_tokens=4), cancel_token=CancelToken())
+        assert results[0].output.output_ids.tolist() == [[9, 1]]
+
+
 class TestEncoderDecoderSpecRejection:
 
     def test_local_encoder_decoder_config_rejected_for_vllm_kinds(self, tmp_path):
@@ -799,39 +850,44 @@ class TestConfigLayout:
         assert facts.model_type == "gemma4"
 
 
-class _FakeCaptureLLM:
-    """An offline engine double that records each capture request and returns zero hidden states."""
+class _FakeCaptureEngine:
+    """An `AsyncLLM` double that records each capture request and returns zero hidden states."""
 
     def __init__(self, hidden: int = 4):
         self.hidden = hidden
         self.extra_args: list[dict] = []
+        self.request_ids: list[str] = []
 
-    def generate(self, prompts, sampling, use_tqdm=False):
+    async def generate(self, prompt, sampling_params, request_id, lora_request=None):
         import json
         from types import SimpleNamespace
 
         import safetensors.torch
 
-        self.extra_args.append(dict(sampling.extra_args))
-        layers = sampling.extra_args["capture"]["layers"]
-        outputs = []
-        for prompt in prompts:
-            length = len(prompt["prompt_token_ids"])
-            tensors = {f"layer_{layer}": torch.zeros(length, self.hidden) for layer in layers}
-            outputs.append(SimpleNamespace(captures=(json.dumps({"positions": {}}), safetensors.torch.save(tensors))))
-        return outputs
+        self.extra_args.append(dict(sampling_params.extra_args))
+        self.request_ids.append(request_id)
+        layers = sampling_params.extra_args["capture"]["layers"]
+        length = len(prompt["prompt_token_ids"])
+        tensors = {f"layer_{layer}": torch.zeros(length, self.hidden) for layer in layers}
+        yield SimpleNamespace(captures=(json.dumps({"positions": {}}), safetensors.torch.save(tensors)))
 
 
-def _offline_backend(llm, tmp_path):
-    """A `VLLMBackend` over a fake engine, built without booting vLLM."""
+def _offline_backend(engine, tmp_path):
+    """A `VLLMBackend` over a fake engine on a started engine thread, built without booting vLLM."""
+    import itertools
+
     from steerability.algorithms.core.execution import ModelFacts
     from steerability.backends.vllm import VLLMBackend
     from steerability.backends.vllm.backend import _ArtifactUploader
+    from steerability.backends.vllm.engine_thread import EngineThread
 
     backend = VLLMBackend.__new__(VLLMBackend)
     backend.spec = BackendSpec(kind="vllm", model="m", options={"hook_plugin": True, "artifact_dir": str(tmp_path)})
     backend._released = False
-    backend._llm = llm
+    backend._engine = engine
+    backend._engine_thread = EngineThread(name="fake-engine")
+    backend._engine_thread.start()
+    backend._request_counter = itertools.count()
     backend._lora_request = None
     backend.tokenizer = wordlevel_tokenizer()
     backend._layout = ModelFacts(
@@ -849,30 +905,39 @@ class TestOfflineSteeredCapture:
     def test_capture_requests_carry_the_entries_spec(self, tmp_path):
         pytest.importorskip("vllm")
         pytest.importorskip("vllm_hook_plugins")
-        llm = _FakeCaptureLLM()
-        backend = _offline_backend(llm, tmp_path)
+        engine = _FakeCaptureEngine()
+        backend = _offline_backend(engine, tmp_path)
         spec = _mini_spec()
         prompts = [PreparedPrompt.from_token_ids([0, 3, 4]), PreparedPrompt.from_token_ids([0, 5])]
-        with backend.open_session() as session:
-            unsteered = session.capture(prompts, [0], "last_token")
-            steered = session.capture(prompts, [0], "last_token", state_entries=(InterventionEntry(spec=spec),))
+        try:
+            with backend.open_session() as session:
+                unsteered = session.capture(prompts, [0], "last_token")
+                steered = session.capture(prompts, [0], "last_token", state_entries=(InterventionEntry(spec=spec),))
+        finally:
+            backend._engine_thread.close()
 
         assert unsteered.hidden[0].shape == steered.hidden[0].shape == (2, 4)
-        assert "intervention_spec" not in llm.extra_args[0]
-        assert llm.extra_args[1]["intervention_spec"] == spec.to_wire()
-        assert llm.extra_args[1]["capture"] == llm.extra_args[0]["capture"]
+        # one engine request per prompt: the unsteered call's two requests, then the steered call's
+        assert len(engine.extra_args) == 4
+        assert all("intervention_spec" not in extra for extra in engine.extra_args[:2])
+        assert all(extra["intervention_spec"] == spec.to_wire() for extra in engine.extra_args[2:])
+        assert all(extra["capture"] == engine.extra_args[0]["capture"] for extra in engine.extra_args)
+        assert len(set(engine.request_ids)) == 4
 
     def test_last_token_capture_needs_only_the_all_tokens_wire_mode(self, tmp_path):
         pytest.importorskip("vllm")
         pytest.importorskip("vllm_hook_plugins")
-        llm = _FakeCaptureLLM()
-        backend = _offline_backend(llm, tmp_path)
+        engine = _FakeCaptureEngine()
+        backend = _offline_backend(engine, tmp_path)
         backend._discovery["capture_kinds"] = {**backend._discovery["capture_kinds"], "modes": ["all_tokens"]}
         assert backend.capture_kinds.modes == frozenset({"all_tokens"})
-        with backend.open_session() as session:
-            result = session.capture([PreparedPrompt.from_token_ids([0, 3, 4])], [0], "last_token")
+        try:
+            with backend.open_session() as session:
+                result = session.capture([PreparedPrompt.from_token_ids([0, 3, 4])], [0], "last_token")
+        finally:
+            backend._engine_thread.close()
         assert result.hidden[0].shape == (1, 4)
-        assert llm.extra_args[0]["capture"]["mode"] == "all_tokens"
+        assert engine.extra_args[0]["capture"]["mode"] == "all_tokens"
 
     def test_steered_session_forwards_its_entries(self):
         from steerability.algorithms.core.execution.backend import SteeredSession

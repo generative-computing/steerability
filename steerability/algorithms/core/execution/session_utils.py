@@ -237,15 +237,15 @@ class ScopedSession:
                 "higher."
             )
 
-    def generate(self, items, params):
+    def generate(self, items, params, *, cancel_token=None):
         """Generate through the venue session; requires `ModelAccess.ROLLOUTS` or higher."""
         self._require_rollouts()
-        return self.inner.generate(items, params)
+        return self.inner.generate(items, params, cancel_token=cancel_token)
 
-    def score(self, items, params):
+    def score(self, items, params, *, cancel_token=None):
         """Score through the venue session; requires `ModelAccess.ROLLOUTS` or higher."""
         self._require_rollouts()
-        return self.inner.score(items, params)
+        return self.inner.score(items, params, cancel_token=cancel_token)
 
     def capture(self, prompts, layers, mode, location="layer_output"):
         """Capture through the venue session; requires `ModelAccess.CAPTURE` or higher."""

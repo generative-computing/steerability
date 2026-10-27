@@ -41,6 +41,7 @@ where the `ProviderOptions` dataclass contains the provider's configuration:
 - `on_unsupported_param`: the policy for `GenerateConfig` parameters the pipeline cannot honor (`"raise"` by
   default or `"warn"`)
 - `seed_scope`: how a seeded dispatch applies its seed to the rows of a batch (see below)
+- `max_concurrency`: selects per-request mode on the vLLM backends (see below)
 
 The provider decides how to deliver prompts to the pipeline when it is constructed. With a chat-templated
 tokenizer, prompts are dispatched as `messages=` and every input control participates as it does in
@@ -91,6 +92,32 @@ run requires `max_batch_size=1` and Inspect `max_connections=1`. Even greedy out
 batch compositions, since padded-batch numerics differ from single-item numerics on some kernels.
 Trial-to-trial variation under sampling is therefore measured rather than eliminated, which is the role
 of `num_trials` and the per-metric standard error.
+
+### Per-request mode
+
+On the vLLM backends we can instead set `max_concurrency` in `ProviderOptions`. The provider then dispatches each
+request at once as its own pipeline call, with at most `max_concurrency` calls in flight. The engine admits each
+request into its running batch as soon as there is room. This means that a short generation returns without
+waiting for the longest generation of a batch. Per-request mode applies when the pipeline's `supports_concurrent_generate` is
+`True`, i.e., on a vLLM backend without an enabled decoding driver. For other pipelines the provider logs at info
+level and keeps batching. The mode in effect is recorded as `dispatch_mode` in the run provenance.
+
+```python
+options = ProviderOptions(max_concurrency=64)
+model = as_inspect_model(pipeline, options=options)
+```
+
+The engine's `max_num_seqs` (an `engine_kwargs` entry) bounds the running batch, and the engine queues the requests
+beyond it. This means that `max_concurrency` should be at least `max_num_seqs` to keep the batch full. Note that
+`max_num_seqs` should be sized against the KV cache budget (`gpu_memory_utilization`, `max_model_len`), since a
+running batch that outgrows the cache preempts sequences. The engine's periodic stats log reports preemptions. It is
+on by default and can be turned off with `disable_log_stats=True` in `engine_kwargs`.
+
+Per-request mode changes the reproducibility contract. A seeded request samples under a seed derived from the base
+seed and the request itself (its prompt and per-sample runtime kwargs). This means that a seeded request reproduces
+regardless of concurrency and arrival order, and two requests with the same prompt and per-sample kwargs sample the
+same stream. The `seed_scope` setting has no effect in this mode, since every dispatch is one request. A request
+that Inspect cancels also aborts its generation on the engine.
 
 ## Suites and the runner
 

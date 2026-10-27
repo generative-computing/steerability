@@ -2,13 +2,15 @@
 (`"vllm-serve"`).
 
 This module holds the backend-side helpers (the artifact uploader, layout and tokenizer
-resolution, discovery reconciliation) and the two backend classes. It imports cleanly without
-vLLM installed: constructing `VLLMBackend` requires the `vllm` optional dependency (it boots an
-engine); `VLLMServeBackend` needs only a reachable vLLM server. Every `from vllm ...` and
-`from vllm_hook_plugins ...` import stays inside a function or method body.
+resolution, discovery reconciliation, the engine request coroutines) and the two backend classes.
+It imports cleanly without vLLM installed: constructing `VLLMBackend` requires the `vllm` optional
+dependency (it boots an engine); `VLLMServeBackend` needs only a reachable vLLM server. Every
+`from vllm ...` and `from vllm_hook_plugins ...` import stays inside a function or method body.
 """
+import concurrent.futures
 import gc
 import hashlib
+import itertools
 import json
 import logging
 import os
@@ -16,6 +18,8 @@ import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Any
 
 import torch
 
@@ -33,6 +37,7 @@ from steerability.algorithms.core.execution.staging import split_artifacts
 from steerability.algorithms.core.internals.fingerprint import config_digest_dict, is_absent_chat_template_fingerprint
 from steerability.algorithms.core.internals.model_layout import config_head_geometry, text_config
 from steerability.backends.vllm.capabilities import _intersect_with_discovery, _reconcile_discovery, _vllm_capabilities
+from steerability.backends.vllm.engine_thread import EngineThread
 from steerability.backends.vllm.environment import engine_boot_environment, engine_environment
 from steerability.backends.vllm.rendering import raise_for_spec_rejection
 from steerability.backends.vllm.session import VLLMOfflineSession, VLLMServeSession
@@ -133,6 +138,65 @@ def _client_tokenizer(source: str, trust_remote_code: bool = False):
     return ensure_pad_token(tokenizer)
 
 
+async def _construct_engine(model_ref: str, engine_kwargs: dict):
+    """An `AsyncLLM` built on the running loop, which the engine's own tasks then belong to.
+
+    The `LLM_CLASS` usage context is required for the offline scheduler defaults (`max_num_seqs`,
+    `max_num_batched_tokens`); `AsyncLLM.from_engine_args` otherwise uses `ENGINE_CONTEXT`, for
+    which vLLM applies its smaller generic `SchedulerConfig` defaults.
+    """
+    from vllm import AsyncEngineArgs
+    from vllm.usage.usage_lib import UsageContext
+    from vllm.v1.engine.async_llm import AsyncLLM
+
+    return AsyncLLM.from_engine_args(
+        AsyncEngineArgs(model=model_ref, **engine_kwargs), usage_context=UsageContext.LLM_CLASS,
+    )
+
+
+async def _final_output(engine, prompt, sampling_params, request_id: str, lora_request=None):
+    """The finished `RequestOutput` of one `AsyncLLM.generate` call."""
+    final = None
+    async for output in engine.generate(prompt, sampling_params, request_id, lora_request=lora_request):
+        final = output
+    return final
+
+
+async def _collective_rpc(engine, method: str):
+    """The per-worker replies of one collective RPC on the engine."""
+    return await engine.collective_rpc(method, None, (), None)
+
+
+async def _shutdown(engine) -> None:
+    """Shut the engine down on the loop its tasks belong to."""
+    engine.shutdown()
+
+
+@dataclass(frozen=True, slots=True)
+class RequestHandle:
+    """One engine request submitted through the backend's engine thread.
+
+    Attributes:
+        request_id: The request id the engine was given.
+        future: The future that resolves with the request's finished `RequestOutput`.
+    """
+
+    request_id: str
+    future: concurrent.futures.Future
+
+    def result(self, timeout: float | None = None) -> Any:
+        """Block until the request finishes and return its `RequestOutput`."""
+        return self.future.result(timeout)
+
+    def done(self) -> bool:
+        """Whether the request finished, failed, or was cancelled."""
+        return self.future.done()
+
+    def cancel(self) -> bool:
+        """Cancel the request, which aborts it on the engine; False when it already completed."""
+        return self.future.cancel()
+
+
 class _DiscoveryNegotiation:
     """The negotiated capabilities of a vLLM backend that may hold a discovery payload."""
 
@@ -149,15 +213,28 @@ class _DiscoveryNegotiation:
 class VLLMBackend(_DiscoveryNegotiation, Backend):
     """The offline vLLM engine backend.
 
-    Boots one engine per backend instance from the spec (`engine_kwargs` option forwarded to
-    `vllm.LLM`); requires the `vllm` optional dependency. The last `CheckpointArtifact` overrides
-    the served model reference, and the `LoRAArtifact` attaches as a LoRA request on every
-    generation.
-    When the spec declares `hook_plugin`, the unified worker is selected via
-    `VLLM_HOOK_WORKER=unified`, and the discovery payload is fetched from the engine at
-    construction and kept on the backend. `negotiated_capabilities()` narrows the spec's
-    advertisement to it, while `capabilities_for_spec` gives the spec's advertisement without
-    constructing the backend.
+    Boots one vLLM `AsyncLLM` engine per backend instance from the spec (`engine_kwargs` option
+    forwarded to `AsyncEngineArgs`); requires the `vllm` optional dependency. The engine runs on an
+    event loop that the backend owns on a daemon thread, and every engine operation is a coroutine
+    submitted to that loop. The engine's scheduler admits requests from any thread as they
+    arrive, and concurrent session calls therefore share one running batch. On a
+    `hook_plugin` engine, the plugin's patch of `AsyncLLM.generate` stages each request's
+    intervention and capture specs on the workers, attaches its capture payload, and clears its
+    state when the request finishes or is aborted.
+
+    The last `CheckpointArtifact` overrides the served model reference, and the `LoRAArtifact`
+    attaches as a LoRA request on every generation. When the spec declares `hook_plugin`, the
+    unified worker is selected via `VLLM_HOOK_WORKER=unified`, and the discovery payload is
+    fetched from the engine at construction and kept on the backend. `negotiated_capabilities()`
+    narrows the spec's advertisement to it, while `capabilities_for_spec` gives the spec's
+    advertisement without constructing the backend.
+
+    The engine is built under vLLM's `LLM_CLASS` usage context, which keeps the scheduler defaults
+    (`max_num_seqs`, `max_num_batched_tokens`) of an offline `vllm.LLM` engine. Without it vLLM
+    applies its smaller generic scheduler defaults. Per-request lifecycle logging is off by default
+    (`enable_log_requests=False`), and the engine's periodic stats logging keeps vLLM's default
+    (`disable_log_stats=False`), which reports preemptions. An explicit `enable_log_requests` or
+    `disable_log_stats` entry in `engine_kwargs` takes precedence.
     """
 
     def __init__(self, spec: BackendSpec, artifacts: Sequence[Artifact] = ()) -> None:
@@ -165,9 +242,10 @@ class VLLMBackend(_DiscoveryNegotiation, Backend):
             raise ValueError(f"VLLMBackend requires a 'vllm' spec; got kind {spec.kind!r}.")
         self.spec = spec
         self._released = False
+        self._engine = None
+        self._engine_thread: EngineThread | None = None
+        self._lora_request = None
         require("vllm")
-
-        from vllm import LLM
 
         checkpoint, lora = split_artifacts(artifacts)
         model_ref = checkpoint.path if checkpoint is not None else spec.model
@@ -188,17 +266,21 @@ class VLLMBackend(_DiscoveryNegotiation, Backend):
             # worker hooks do not run under CUDA-graph replay; spec construction rejects an
             # explicit False, so this only fills the default
             engine_kwargs.setdefault("enforce_eager", True)
+        # per-request lifecycle logging defaults off; stats logging keeps vLLM's default; caller kwargs win
+        engine_kwargs.setdefault("enable_log_requests", False)
 
-        # the boot environment is scoped to this engine's construction and restored afterwards,
-        # so a later plugin-free engine in the same process is unaffected
-        forced, defaults = engine_boot_environment(bool(spec.get_option("hook_plugin")))
-        with engine_environment(forced, defaults):
-            self._llm = LLM(model=model_ref, **engine_kwargs)
-
+        self._request_counter = itertools.count()
         # the pipeline records a backend only when the constructor returns, so a failure from
-        # here on must release the engine before propagating
+        # here on must release the engine thread and any engine before propagating
         try:
-            self._lora_request = None
+            self._engine_thread = EngineThread(name=f"vllm-{spec.spec_hash[:8]}")
+            self._engine_thread.start()
+            # the boot environment is scoped to this engine's construction and restored
+            # afterwards, so a later plugin-free engine in the same process is unaffected
+            forced, defaults = engine_boot_environment(bool(spec.get_option("hook_plugin")))
+            with engine_environment(forced, defaults):
+                self._engine = self._engine_thread.run(_construct_engine(model_ref, engine_kwargs))
+
             if lora is not None:
                 from vllm.lora.request import LoRARequest
 
@@ -228,17 +310,12 @@ class VLLMBackend(_DiscoveryNegotiation, Backend):
         self._artifact_uploader.upload_payloads(payloads)
 
     def _fetch_discovery(self) -> dict | None:
-        payload = None
-        for target in (self._llm, getattr(self._llm, "llm_engine", None)):
-            rpc = getattr(target, "collective_rpc", None)
-            if callable(rpc):
-                try:
-                    replies = rpc("hook_capabilities")
-                except Exception as error:
-                    logger.warning("vLLM-Hook discovery failed: %s", error)
-                    return None
-                payload = next((reply for reply in replies if reply), None)
-                break
+        try:
+            replies = self._engine_thread.run(_collective_rpc(self._engine, "hook_capabilities"))
+        except Exception as error:
+            logger.warning("vLLM-Hook discovery failed: %s", error)
+            return None
+        payload = next((reply for reply in replies or () if reply), None)
         if payload is None:
             logger.warning(
                 "vLLM-Hook discovery returned no payload; is VLLM_HOOK_WORKER=unified active?"
@@ -258,49 +335,73 @@ class VLLMBackend(_DiscoveryNegotiation, Backend):
         Raises:
             RuntimeError: If the backend has been released.
         """
-        self._require_llm()
+        self._require_engine()
         return VLLMOfflineSession(self)
 
-    def _require_llm(self):
-        """The live engine, or a `RuntimeError` when the backend has been released."""
-        if self._llm is None:
+    def _require_engine(self):
+        """The loaded engine, or a `RuntimeError` when the backend has been released."""
+        if self._engine is None:
             raise RuntimeError(
                 "This VLLMBackend was released; construct a new backend (or a new "
                 "SteeringPipeline operation, which reconstructs backends automatically)."
             )
-        return self._llm
+        return self._engine
+
+    def _submit_request(self, prompt, sampling_params, *, lora_request=None) -> RequestHandle:
+        """Submit one engine request through the engine thread and return its handle.
+
+        The request's output kind is set to final-only, which makes the engine return one output
+        when the request finishes. Request ids combine the spec hash with a per-backend counter.
+
+        Args:
+            prompt: The engine prompt (a `TokensPrompt`, with its `cache_salt` when salted).
+            sampling_params: The request's `SamplingParams`; its `output_kind` is overwritten.
+            lora_request: The LoRA request to serve the request under, or None.
+
+        Returns:
+            The `RequestHandle` whose future resolves with the finished `RequestOutput`.
+
+        Raises:
+            RuntimeError: If the backend has been released.
+            EngineClosedError: If the engine thread closes before the request is submitted.
+        """
+        engine = self._require_engine()
+        from vllm.sampling_params import RequestOutputKind
+
+        sampling_params.output_kind = RequestOutputKind.FINAL_ONLY
+        request_id = f"{self.spec.spec_hash[:8]}-{next(self._request_counter)}"
+        future = self._engine_thread.submit(
+            _final_output(engine, prompt, sampling_params, request_id, lora_request=lora_request)
+        )
+        return RequestHandle(request_id=request_id, future=future)
 
     def release(self) -> None:
         """Shut the engine down explicitly and mark the backend unusable.
 
+        In-flight requests are cancelled first, and their waiters raise `EngineClosedError`. The
+        engine is then shut down on its event loop, and the engine thread is stopped and joined.
         Release is idempotent; after it, a new backend must be constructed. The distributed-state
-        teardown is process-global, so release assumes no other live vLLM engine in the process.
+        teardown is process-global, so release assumes no other loaded vLLM engine in the process.
         Ray-based executors are out of scope. Engine-touching calls on any still-open session raise
-        after release.
+        `RuntimeError` after release.
         """
         if self._released:
             return
         self._released = True
-        llm = self._llm
-        self._llm = None
+        engine, self._engine = self._engine, None
+        engine_thread = self._engine_thread
         self._lora_request = None
 
-        for resolve in (
-            lambda: getattr(llm, "shutdown", None),
-            lambda: getattr(getattr(llm, "llm_engine", None), "shutdown", None),
-            lambda: getattr(
-                getattr(getattr(llm, "llm_engine", None), "engine_core", None), "shutdown", None
-            ),
-        ):
-            shutdown = resolve()
-            if callable(shutdown):
+        if engine_thread is not None:
+            engine_thread.cancel_pending()
+            if engine is not None:
                 try:
-                    shutdown()
+                    engine_thread.run(_shutdown(engine))
                 except Exception:
-                    logger.warning("vLLM engine shutdown hop failed; continuing.", exc_info=True)
-                break
+                    logger.warning("vLLM engine shutdown failed; continuing.", exc_info=True)
+            engine_thread.close()
 
-        del llm
+        del engine
         gc.collect()
 
         try:

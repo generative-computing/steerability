@@ -182,7 +182,7 @@ class _ScriptedReasonSession:
         self._continuation = continuation
         self._reason = reason
 
-    def generate(self, items, params):
+    def generate(self, items, params, *, cancel_token=None):
         return [
             ItemResult(index=index, output=Output(
                 output_ids=torch.tensor([self._continuation]), adapted_input_ids=item.prompt.token_ids,

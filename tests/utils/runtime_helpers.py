@@ -110,7 +110,7 @@ class ScriptedSession:
         self._fake_generate = fake_generate
         self.tokenizer = tokenizer
 
-    def generate(self, items, params):
+    def generate(self, items, params, *, cancel_token=None):
         from steerability.algorithms.core.execution.payloads import ItemResult
         from steerability.algorithms.core.output import Output
 
@@ -140,7 +140,7 @@ def script_session_generate(monkeypatch, fake_generate):
     """
     from steerability.backends.huggingface import ExclusiveSession
 
-    def generate(self, items, params):
+    def generate(self, items, params, *, cancel_token=None):
         return ScriptedSession(fake_generate, tokenizer=self.tokenizer).generate(items, params)
 
     monkeypatch.setattr(ExclusiveSession, "generate", generate)

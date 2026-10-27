@@ -81,10 +81,10 @@ class FakeEngineSession:
             mode=mode, location=location,
         )
 
-    def generate(self, items, params):
+    def generate(self, items, params, *, cancel_token=None):
         raise AssertionError("steer-phase mocks do not generate")
 
-    def score(self, items, params):
+    def score(self, items, params, *, cancel_token=None):
         raise AssertionError("steer-phase mocks do not score")
 
 

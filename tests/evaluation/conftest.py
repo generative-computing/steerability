@@ -74,6 +74,7 @@ class StubSteeringPipeline:
         calls: One dict per `generate` invocation with the received arguments.
         fail_above_batch_size: When set, a dispatch with more prompts than this raises.
         gate: Optional `threading.Event` the first dispatch waits on before returning.
+        supports_concurrent_generate: The value the provider reads to choose per-request mode.
     """
 
     def __init__(
@@ -81,11 +82,13 @@ class StubSteeringPipeline:
         *,
         tokenizer: StubTokenizer | None = None,
         supports_batching: bool = True,
+        supports_concurrent_generate: bool = False,
         controls: tuple = (),
         decode_texts: list[str] | None = None,
     ):
         self._is_steered = True
         self.supports_batching = supports_batching
+        self.supports_concurrent_generate = supports_concurrent_generate
         self.controls = controls
         self.tokenizer = tokenizer if tokenizer is not None else StubTokenizer(decode_texts=decode_texts)
         self.calls: list[dict[str, Any]] = []

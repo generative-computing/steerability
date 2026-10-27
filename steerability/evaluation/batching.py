@@ -1,13 +1,17 @@
-"""Lock-leader batching collator for the steering-pipeline model provider.
+"""Request dispatch for the steering-pipeline model provider: the lock-leader collator (batching
+mode) and the per-request dispatcher (per-request mode).
 
-Inspect issues one async request per sample, many concurrently; a `SteeringPipeline` is synchronous
-and permits one in-flight generation, but accepts batched calls. The collator turns concurrent
-requests into batched `pipeline.generate()` calls with no background task and no timer. One
-`anyio.Lock` guards pipeline access: every request enqueues its record and then acquires the lock;
-whoever holds it (the leader) takes its record plus the compatible queued records, dispatches one
-batched call in a worker thread, and completes every member. A waiter that wakes with its record
-already served returns without dispatching. The lock holder is the only caller of
-`pipeline.generate`, so the one-in-flight invariant holds by construction.
+Inspect issues one async request per sample, many concurrently, while a `SteeringPipeline` is
+synchronous. Both dispatchers admit requests the same way (validation, runtime-kwarg partitioning,
+and inert-kwarg accounting) and differ in how admitted requests reach `pipeline.generate()`.
+
+The lock-leader collator turns concurrent requests into batched `pipeline.generate()` calls with no
+background task and no timer, for a pipeline that runs one generation at a time. One `anyio.Lock`
+guards pipeline access: every request enqueues its record and then acquires the lock; whoever holds
+it (the leader) takes its record plus the compatible queued records, dispatches one batched call in
+a worker thread, and completes every member. A waiter that wakes with its record already served
+returns without dispatching. The lock holder is the only caller of `pipeline.generate`, so at most
+one generation is in flight by construction.
 
 An uncontended lock acquisition yields once to the event loop, so requests admitted in the same
 scheduling window enqueue before the first leader takes its batch, and while a batch is in flight
@@ -47,6 +51,26 @@ sample's dispatch membership and row index depend on async arrival timing, so bi
 stochastic sampling is not preserved under concurrency under either scope; a bitwise-reproducible stochastic
 run requires a batch ceiling of 1 and Inspect `max_connections=1`. Greedy decoding sidesteps seed sensitivity,
 with the one caveat that padded-batch numerics can differ from single-item numerics on some kernels.
+
+Per-request mode applies to a pipeline whose `supports_concurrent_generate` is True, when the provider is
+configured with `ProviderOptions.max_concurrency`. The per-request dispatcher issues one single-prompt
+`pipeline.generate()` call per admitted request, each in its own worker thread, with at most `max_concurrency`
+calls in flight. The pipeline serializes the calls' prompt phases and the engine admits each request into its
+running batch. A request therefore returns as soon as its own generation finishes. There is no queue, no batch key, and
+no poison isolation, since every dispatch is one request and its error is that request's own.
+
+In per-request mode a request's seed is a function of the base seed and the request. The dispatcher replaces a
+seeded request's `seed` with `derive_item_seed(seed, f"request:{digest}", 0)`, where `digest` is the SHA-256 of the
+canonical JSON of the request's prompt and its retained per-sample runtime kwargs. A seeded request therefore
+reproduces independently of concurrency and arrival order, distinct prompts sample distinct streams, and two
+requests with identical prompts and per-sample kwargs sample the same stream. `seed_scope` has no effect in
+per-request mode, since every dispatch is one item.
+
+In per-request mode a cancelled Inspect request aborts its generation. Each request carries its own `CancelToken`
+into `pipeline.generate()`, and the dispatcher cancels the token when the requesting task is cancelled. The task
+returns at once, and the worker thread ends with `GenerationCancelled` once the session observes the token (the
+offline vLLM session aborts the request on the engine). In batching mode one dispatch serves several records, and a
+cancelled record does not cancel its dispatch.
 """
 import hashlib
 import json
@@ -60,6 +84,8 @@ require("inspect_ai")  # anyio arrives through the eval extra
 import anyio
 import anyio.to_thread
 
+from steerability.algorithms.core.execution.cancellation import CancelToken
+from steerability.algorithms.core.execution.fanout import derive_item_seed
 from steerability.algorithms.core.identity import canonical_value
 from steerability.algorithms.core.output import Output
 
@@ -71,7 +97,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(eq=False, slots=True)
 class BatchRequest:
-    """One admitted generation request, queued for a batched dispatch.
+    """One admitted generation request.
 
     Attributes:
         prompt: One conversation (a list of chat-message dicts) on the messages path, or one
@@ -84,6 +110,7 @@ class BatchRequest:
         done: Event set by the leader once the record holds its result.
         output: The record's `Output` on success, else None.
         error: The record's exception on failure, else None.
+        cancel_token: The request's cancellation token in per-request mode, else None.
     """
 
     prompt: Any
@@ -94,19 +121,15 @@ class BatchRequest:
     done: anyio.Event = field(default_factory=anyio.Event)
     output: Output | None = None
     error: BaseException | None = None
+    cancel_token: CancelToken | None = None
 
 
-class LockLeaderCollator:
-    """Collate concurrent async requests into batched `pipeline.generate()` calls.
-
-    See the module docstring for the protocol, the batch-key semantics, poison isolation, and the
-    reproducibility contract. `admit()` validates and builds a record without enqueueing; the
-    async `serve()` enqueues it and runs the leader protocol.
+class _RequestAdmission:
+    """Request admission shared by the dispatchers: validation, runtime-kwarg partitioning by declared
+    scope, and inert-kwarg accounting.
 
     Args:
-        pipeline: The steered pipeline; the lock holder is its only caller.
-        max_batch_size: Dispatch ceiling; the caller passes the effective value (already clamped
-            to 1 when the pipeline does not support batching).
+        pipeline: The steered pipeline.
         prompt_path: `"messages"` to dispatch conversations via `messages=`, `"text"` to dispatch
             rendered strings via `text=`.
         declared_scopes: Runtime-kwarg names declared by the pipeline's enabled controls, mapped
@@ -121,22 +144,17 @@ class LockLeaderCollator:
         self,
         pipeline: "SteeringPipeline",
         *,
-        max_batch_size: int,
         prompt_path: Literal["messages", "text"],
         declared_scopes: Mapping[str, str],
         static_runtime_kwargs: Mapping[str, Any],
         chat_template_kwargs: Mapping[str, Any] | None = None,
     ) -> None:
         self._pipeline = pipeline
-        self._max_batch_size = int(max_batch_size)
         self._prompt_path = prompt_path
         self._declared_scopes = dict(declared_scopes)
         self._static_runtime_kwargs = dict(static_runtime_kwargs)
         self._chat_template_kwargs = dict(chat_template_kwargs) if chat_template_kwargs is not None else None
-        self._lock = anyio.Lock()
-        self._queue: list[BatchRequest] = []
         self._closed = False
-        self._batch_failures_logged: set[str] = set()
         self._inert_keys: set[str] = set()
 
         # static kwargs are partitioned once by declared scope; undeclared names are inert
@@ -153,11 +171,11 @@ class LockLeaderCollator:
 
     @property
     def closed(self) -> bool:
-        """Whether the collator has been closed."""
+        """Whether the dispatcher has been closed."""
         return self._closed
 
     def close(self) -> None:
-        """Refuse new admissions; an in-flight batch completes and delivers its results."""
+        """Refuse new admissions; an in-flight dispatch completes and delivers its results."""
         self._closed = True
 
     @property
@@ -166,7 +184,7 @@ class LockLeaderCollator:
         return frozenset(self._inert_keys)
 
     def _mark_inert(self, key: str, tier: str) -> None:
-        """Record a runtime kwarg no enabled control declares, logging it once per collator."""
+        """Record a runtime kwarg no enabled control declares, logging it once per dispatcher."""
         if key in self._inert_keys:
             return
         self._inert_keys.add(key)
@@ -198,7 +216,7 @@ class LockLeaderCollator:
             The admitted `BatchRequest`.
 
         Raises:
-            RuntimeError: If the collator is closed.
+            RuntimeError: If the dispatcher is closed.
             ValueError: If a per-sample key is also supplied statically, or is declared
                 `"call"`-scoped by an enabled control.
         """
@@ -247,6 +265,88 @@ class LockLeaderCollator:
             sort_keys=True,
         )
         return hashlib.sha256(payload.encode()).hexdigest()
+
+    def _run_batch(self, batch: list[BatchRequest]) -> list[Output]:
+        """Issue one `pipeline.generate` call for `batch`, returning one `Output` per record.
+
+        Raises:
+            RuntimeError: If the call returns a different number of outputs than records.
+        """
+        leader = batch[0]
+        runtime_kwargs = dict(self._static_call_kwargs)
+        for key, value in self._static_row_kwargs.items():
+            runtime_kwargs[key] = [value] * len(batch)
+        for key in leader.per_sample_runtime_kwargs:
+            runtime_kwargs[key] = [member.per_sample_runtime_kwargs[key] for member in batch]
+        gen_kwargs = dict(leader.gen_kwargs)
+        if self._chat_template_kwargs is not None:
+            gen_kwargs["chat_template_kwargs"] = dict(self._chat_template_kwargs)
+        if leader.cancel_token is not None:
+            gen_kwargs["cancel_token"] = leader.cancel_token
+        if leader.num_choices > 1:
+            prompt_kwargs = (
+                {"messages": leader.prompt} if self._prompt_path == "messages" else {"text": leader.prompt}
+            )
+            output = self._pipeline.generate(
+                runtime_kwargs=runtime_kwargs, return_output=True, n=leader.num_choices,
+                **prompt_kwargs, **gen_kwargs,
+            )
+            return [output]
+        prompts = [member.prompt for member in batch]
+        prompt_kwargs = {"messages": prompts} if self._prompt_path == "messages" else {"text": prompts}
+        outputs = list(self._pipeline.generate(
+            runtime_kwargs=runtime_kwargs, return_output=True, **prompt_kwargs, **gen_kwargs,
+        ))
+        if len(outputs) != len(batch):
+            raise RuntimeError(
+                f"pipeline.generate returned {len(outputs)} output(s) for a dispatch of {len(batch)} "
+                "prompt(s); one Output per prompt is required."
+            )
+        return outputs
+
+
+class LockLeaderCollator(_RequestAdmission):
+    """Collate concurrent async requests into batched `pipeline.generate()` calls.
+
+    See the module docstring for the protocol, the batch-key semantics, poison isolation, and the
+    reproducibility contract. `admit()` validates and builds a record without enqueueing; the
+    async `serve()` enqueues it and runs the leader protocol.
+
+    Args:
+        pipeline: The steered pipeline; the lock holder is its only caller.
+        max_batch_size: Dispatch ceiling; the caller passes the effective value (already clamped
+            to 1 when the pipeline does not support batching).
+        prompt_path: `"messages"` to dispatch conversations via `messages=`, `"text"` to dispatch
+            rendered strings via `text=`.
+        declared_scopes: Runtime-kwarg names declared by the pipeline's enabled controls, mapped
+            to their scope (`"row"` or `"call"`).
+        static_runtime_kwargs: Runtime kwargs applied to every dispatch: `"call"`-scoped values
+            pass through unchanged, `"row"`-scoped values are one row's value broadcast to every
+            row, undeclared names are inert. Shallow-copied and never mutated.
+        chat_template_kwargs: Forwarded to `apply_chat_template` on the messages path, or None.
+    """
+
+    def __init__(
+        self,
+        pipeline: "SteeringPipeline",
+        *,
+        max_batch_size: int,
+        prompt_path: Literal["messages", "text"],
+        declared_scopes: Mapping[str, str],
+        static_runtime_kwargs: Mapping[str, Any],
+        chat_template_kwargs: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            pipeline,
+            prompt_path=prompt_path,
+            declared_scopes=declared_scopes,
+            static_runtime_kwargs=static_runtime_kwargs,
+            chat_template_kwargs=chat_template_kwargs,
+        )
+        self._max_batch_size = int(max_batch_size)
+        self._lock = anyio.Lock()
+        self._queue: list[BatchRequest] = []
+        self._batch_failures_logged: set[str] = set()
 
     async def serve(self, record: BatchRequest) -> Output:
         """Enqueue one admitted record and run the leader protocol until it holds its result.
@@ -328,38 +428,106 @@ class LockLeaderCollator:
         for member, output in zip(batch, outputs):
             member.output = output
 
-    def _run_batch(self, batch: list[BatchRequest]) -> list[Output]:
-        """Issue one `pipeline.generate` call for `batch`, returning one `Output` per record.
+
+def request_seed(seed: int, prompt: Any, per_sample_runtime_kwargs: Mapping[str, Any]) -> int:
+    """The seed of one seeded request in per-request mode, a function of the base seed and the request.
+
+    Args:
+        seed: The request's base seed.
+        prompt: The request's prompt (a conversation or a rendered string).
+        per_sample_runtime_kwargs: The request's retained per-sample runtime kwargs.
+
+    Returns:
+        `derive_item_seed(seed, f"request:{digest}", 0)`, where `digest` is the SHA-256 of the
+        canonical JSON of the prompt and the per-sample runtime kwargs.
+    """
+    payload = json.dumps(
+        canonical_value({"prompt": prompt, "per_sample": dict(per_sample_runtime_kwargs)}), sort_keys=True,
+    )
+    digest = hashlib.sha256(payload.encode()).hexdigest()
+    return derive_item_seed(seed, f"request:{digest}", 0)
+
+
+class PerRequestDispatcher(_RequestAdmission):
+    """Dispatch each admitted request at once in its own worker thread, at most `max_concurrency` in flight.
+
+    Each request becomes one single-prompt (or, for multiple candidates, one bare-conversation)
+    `pipeline.generate()` call with its own `CancelToken`. A seeded request's seed is replaced by
+    `request_seed(...)`. See the module docstring for the per-request contract. `admit()` validates
+    and builds a record; the async `serve()` dispatches it.
+
+    Args:
+        pipeline: The steered pipeline; its `supports_concurrent_generate` is True.
+        max_concurrency: Maximum number of `pipeline.generate()` calls in flight (at least 1).
+        prompt_path: `"messages"` to dispatch conversations via `messages=`, `"text"` to dispatch
+            rendered strings via `text=`.
+        declared_scopes: Runtime-kwarg names declared by the pipeline's enabled controls, mapped
+            to their scope (`"row"` or `"call"`).
+        static_runtime_kwargs: Runtime kwargs applied to every dispatch: `"call"`-scoped values
+            pass through unchanged, `"row"`-scoped values are one row's value, undeclared names
+            are inert. Shallow-copied and never mutated.
+        chat_template_kwargs: Forwarded to `apply_chat_template` on the messages path, or None.
+    """
+
+    def __init__(
+        self,
+        pipeline: "SteeringPipeline",
+        *,
+        max_concurrency: int,
+        prompt_path: Literal["messages", "text"],
+        declared_scopes: Mapping[str, str],
+        static_runtime_kwargs: Mapping[str, Any],
+        chat_template_kwargs: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            pipeline,
+            prompt_path=prompt_path,
+            declared_scopes=declared_scopes,
+            static_runtime_kwargs=static_runtime_kwargs,
+            chat_template_kwargs=chat_template_kwargs,
+        )
+        if int(max_concurrency) < 1:
+            raise ValueError(f"max_concurrency must be >= 1; got {max_concurrency}.")
+        self._limiter = anyio.CapacityLimiter(int(max_concurrency))
+
+    async def serve(self, record: BatchRequest) -> Output:
+        """Dispatch one admitted record in a worker thread and return its result.
+
+        Cancelling the requesting task cancels the record's `CancelToken` and returns at once; the
+        worker thread ends when the session observes the token, and its result is discarded.
+
+        Args:
+            record: A record built by `admit()`.
+
+        Returns:
+            The record's `Output`.
 
         Raises:
-            RuntimeError: If the call returns a different number of outputs than records.
+            Exception: The record's own dispatch exception, re-raised on the requesting task.
         """
-        leader = batch[0]
-        runtime_kwargs = dict(self._static_call_kwargs)
-        for key, value in self._static_row_kwargs.items():
-            runtime_kwargs[key] = [value] * len(batch)
-        for key in leader.per_sample_runtime_kwargs:
-            runtime_kwargs[key] = [member.per_sample_runtime_kwargs[key] for member in batch]
-        gen_kwargs = dict(leader.gen_kwargs)
-        if self._chat_template_kwargs is not None:
-            gen_kwargs["chat_template_kwargs"] = dict(self._chat_template_kwargs)
-        if leader.num_choices > 1:
-            prompt_kwargs = (
-                {"messages": leader.prompt} if self._prompt_path == "messages" else {"text": leader.prompt}
+        record.cancel_token = CancelToken()
+        try:
+            await anyio.to_thread.run_sync(
+                self._run_request, record, limiter=self._limiter, abandon_on_cancel=True,
             )
-            output = self._pipeline.generate(
-                runtime_kwargs=runtime_kwargs, return_output=True, n=leader.num_choices,
-                **prompt_kwargs, **gen_kwargs,
-            )
-            return [output]
-        prompts = [member.prompt for member in batch]
-        prompt_kwargs = {"messages": prompts} if self._prompt_path == "messages" else {"text": prompts}
-        outputs = list(self._pipeline.generate(
-            runtime_kwargs=runtime_kwargs, return_output=True, **prompt_kwargs, **gen_kwargs,
-        ))
-        if len(outputs) != len(batch):
-            raise RuntimeError(
-                f"pipeline.generate returned {len(outputs)} output(s) for a dispatch of {len(batch)} "
-                "prompt(s); one Output per prompt is required."
-            )
-        return outputs
+        except anyio.get_cancelled_exc_class():
+            record.cancel_token.cancel()
+            raise
+        if record.error is not None:
+            raise record.error
+        return record.output
+
+    def _run_request(self, record: BatchRequest) -> None:
+        """Run one record's `pipeline.generate` call in the worker thread, filling its result slot.
+
+        Never raises; the call's exception lands on the record.
+        """
+        try:
+            record.cancel_token.raise_if_cancelled()
+            if record.gen_kwargs.get("seed") is not None:
+                record.gen_kwargs["seed"] = request_seed(
+                    int(record.gen_kwargs["seed"]), record.prompt, record.per_sample_runtime_kwargs,
+                )
+            record.output = self._run_batch([record])[0]
+        except Exception as error:
+            record.error = error

@@ -4,7 +4,9 @@
 through `pipeline.generate()`: on the messages path prompts enter as structured chat messages, so
 the pipeline owns chat templating and message-phase input controls fire exactly as in deployment;
 tokenizers without a chat template evaluate through the text path instead. Concurrent Inspect
-requests collate into batched pipeline calls through the lock-leader collator in `batching`.
+requests collate into batched pipeline calls through the lock-leader collator in `batching`, or,
+in per-request mode (`ProviderOptions.max_concurrency` on a pipeline that supports concurrent
+generation), each request is dispatched as its own pipeline call.
 
 The provider is generation-only by design. Logprob-based scoring (including prompt-logprob
 perplexity) is structurally unsupported, since a pipeline's decoding-time controls are not
@@ -36,9 +38,11 @@ from inspect_ai.model import (
     modelapi,
 )
 
+from steerability.algorithms.core.execution.spec import BackendSpec
 from steerability.algorithms.core.output import Output, truncate_at_stop_strings
+from steerability.algorithms.core.utils.assembly import resolve_decoding_driver
 from steerability.algorithms.core.utils.controls import runtime_kwargs_schema
-from steerability.evaluation.batching import LockLeaderCollator
+from steerability.evaluation.batching import LockLeaderCollator, PerRequestDispatcher
 from steerability.utils.rendering import has_chat_template, join_message_contents
 from steerability.utils.thinking import (
     DEFAULT_THINK_TAGS,
@@ -125,7 +129,15 @@ class ProviderOptions:
             across prompts). With `"item"`, each row derives its own seed and the rows are decoded one
             at a time. The collator groups requests by arrival time, which makes per-row
             reproducibility unattainable under either setting. `"item"` therefore only makes decoding
-            serial. The setting has no effect on the vLLM backends.
+            serial. The setting has no effect on the vLLM backends or in per-request mode.
+        max_concurrency: Selects per-request mode when set (at least 1). When the pipeline's
+            `supports_concurrent_generate` is True, each request is dispatched at once as its own
+            single-prompt `pipeline.generate()` call in a worker thread, with at most
+            `max_concurrency` calls in flight, and `max_connections()` returns `max_concurrency`.
+            A seeded request then samples under a seed derived from the base seed and the request
+            (its prompt and per-sample runtime kwargs), and a cancelled request aborts its
+            generation. When the pipeline does not support concurrent generation, the provider
+            logs at info level and keeps batching mode. None (default) selects batching mode.
     """
 
     runtime_kwargs: Mapping[str, Any] = field(default_factory=dict)
@@ -137,6 +149,7 @@ class ProviderOptions:
     reasoning_split: Literal["auto", "text", "tokens"] = "auto"
     on_unsupported_param: Literal["raise", "warn"] = "raise"
     seed_scope: Literal["item", "dispatch"] = "dispatch"
+    max_concurrency: int | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.runtime_kwargs, Mapping):
@@ -161,6 +174,8 @@ class ProviderOptions:
             raise ValueError(f"on_unsupported_param must be 'raise' or 'warn'; got {self.on_unsupported_param!r}.")
         if self.seed_scope not in ("item", "dispatch"):
             raise ValueError(f"seed_scope must be 'item' or 'dispatch'; got {self.seed_scope!r}.")
+        if self.max_concurrency is not None and int(self.max_concurrency) < 1:
+            raise ValueError(f"max_concurrency must be >= 1 or None; got {self.max_concurrency}.")
 
 
 class SteeringPipelineModelAPI(ModelAPI):
@@ -252,21 +267,40 @@ class SteeringPipelineModelAPI(ModelAPI):
             )
         self._effective_max_batch = effective_max_batch
 
+        self._per_request = self._options.max_concurrency is not None and pipeline.supports_concurrent_generate
+        if self._options.max_concurrency is not None and not self._per_request:
+            logger.info(
+                "max_concurrency=%d is set, but the pipeline does not support concurrent generation (%s); "
+                "requests are dispatched in batching mode.",
+                self._options.max_concurrency, _concurrency_blocker(pipeline),
+            )
+
         schema = runtime_kwargs_schema(pipeline.controls)
         declared_scopes = {name: entry["scope"] for name, entry in schema.items()}
-        self._collator = LockLeaderCollator(
-            pipeline,
-            max_batch_size=effective_max_batch,
+        common: dict[str, Any] = dict(
             prompt_path=self._prompt_path,
             declared_scopes=declared_scopes,
             static_runtime_kwargs=self._options.runtime_kwargs,
             chat_template_kwargs=self._options.chat_template_kwargs,
         )
+        self._collator: LockLeaderCollator | PerRequestDispatcher
+        if self._per_request:
+            self._collator = PerRequestDispatcher(
+                pipeline, max_concurrency=int(self._options.max_concurrency), **common,
+            )
+        else:
+            self._collator = LockLeaderCollator(pipeline, max_batch_size=effective_max_batch, **common)
 
     @property
     def prompt_path(self) -> Literal["messages", "text"]:
         """`"messages"` when the tokenizer has a chat template, `"text"` otherwise."""
         return self._prompt_path
+
+    @property
+    def dispatch_mode(self) -> Literal["batched", "per_request"]:
+        """`"per_request"` when each request is dispatched as its own pipeline call, `"batched"` when
+        the lock-leader collator combines requests into batched calls."""
+        return "per_request" if self._per_request else "batched"
 
     @property
     def effective_max_batch(self) -> int:
@@ -525,7 +559,10 @@ class SteeringPipelineModelAPI(ModelAPI):
         return self._options.default_max_tokens
 
     def max_connections(self) -> int:
-        """Advertised concurrency; equals the effective batch ceiling so batches self-fill."""
+        """Advertised concurrency: `max_concurrency` in per-request mode, else the effective batch
+        ceiling so batches fill."""
+        if self._per_request:
+            return int(self._options.max_concurrency)
         return self._effective_max_batch
 
     def connection_key(self) -> str:
@@ -557,6 +594,16 @@ class SteeringPipelineModelAPI(ModelAPI):
 def steerability_provider() -> type[SteeringPipelineModelAPI]:
     """The registered provider behind `steerability/<model_name>`."""
     return SteeringPipelineModelAPI
+
+
+def _concurrency_blocker(pipeline: "SteeringPipeline") -> str:
+    """The condition that keeps `pipeline` from concurrent generation, for the fallback log."""
+    driver = resolve_decoding_driver(getattr(pipeline, "output_controls", ()))
+    if driver is not None:
+        return f"decoding driver {type(driver).__name__} is enabled"
+    backend = getattr(pipeline, "backend", None)
+    kind = backend.kind if isinstance(backend, BackendSpec) else (backend or "huggingface")
+    return f"backend kind {kind!r} runs in process"
 
 
 def _count_non_pad(ids: torch.Tensor | None, pad_token_id: int | None) -> int:

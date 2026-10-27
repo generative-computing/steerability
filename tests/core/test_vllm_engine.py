@@ -157,3 +157,123 @@ class TestConstraintParityOnEngine:
         assert parsed("engine", engine_text) is not None
         assert parsed("hf", hf_text) is not None
         assert engine_text == hf_text
+
+
+def _greedy_item(tokenizer, text: str) -> GenerationItem:
+    encoded = tokenizer(text, return_tensors="pt")
+    return GenerationItem(prompt=PreparedPrompt.from_token_ids(encoded["input_ids"]))
+
+
+class TestPerRequestEngine:
+    """Per-request admission through the engine thread: concurrent calls share the running batch, a
+    short request returns before a long one, and cancellation and release abort in-flight requests."""
+
+    def test_score_matches_the_hugging_face_reference(self, engine_backend):
+        tokenizer = _tokenizer()
+        model = AutoModelForCausalLM.from_pretrained(TINY_MODEL, dtype=torch.float32)
+        prompt_ids = tokenizer("The capital of France is", return_tensors="pt")["input_ids"]
+        ref = tokenizer(" Paris", add_special_tokens=False, return_tensors="pt")["input_ids"]
+        with torch.no_grad():
+            logits = model(torch.cat([prompt_ids, ref], dim=1)).logits
+        positions = torch.arange(prompt_ids.size(1) - 1, prompt_ids.size(1) - 1 + ref.size(1))
+        reference = torch.log_softmax(logits[0, positions], dim=-1).gather(-1, ref[0].unsqueeze(-1)).squeeze(-1)
+
+        item = ScoringItem(prompt=PreparedPrompt.from_token_ids(prompt_ids), ref_output_ids=ref)
+        with engine_backend.open_session() as session:
+            scored = session.score([item], GenerationParams())
+        # the engine and the in-process forward use different attention kernels, which differ by
+        # about 1e-3 in float32
+        assert torch.allclose(scored[0], reference, atol=1e-2)
+
+    def test_concurrent_calls_share_the_engine_and_the_short_one_returns_first(self, engine_backend):
+        import threading
+        import time
+
+        tokenizer = engine_backend.tokenizer
+        short_item = _greedy_item(tokenizer, "The capital of France is")
+        long_item = _greedy_item(tokenizer, "Once upon a time")
+        short_params = GenerationParams(max_new_tokens=4, greedy=True)
+        long_params = GenerationParams(max_new_tokens=400, min_new_tokens=400, greedy=True)
+
+        with engine_backend.open_session() as session:
+            serial_short = session.generate([short_item], short_params)[0].output.output_ids.tolist()
+            serial_long = session.generate([long_item], long_params)[0].output.output_ids.tolist()
+
+        finished: dict[str, float] = {}
+        outputs: dict[str, list] = {}
+
+        def run(name, item, params):
+            with engine_backend.open_session() as session:
+                outputs[name] = session.generate([item], params)[0].output.output_ids.tolist()
+            finished[name] = time.monotonic()
+
+        long_thread = threading.Thread(target=run, args=("long", long_item, long_params))
+        short_thread = threading.Thread(target=run, args=("short", short_item, short_params))
+        long_thread.start()
+        time.sleep(0.05)
+        short_thread.start()
+        long_thread.join(120)
+        short_thread.join(120)
+
+        assert finished["short"] < finished["long"]
+        assert outputs["short"] == serial_short
+        assert outputs["long"] == serial_long
+
+    def test_cancelling_a_token_aborts_the_engine_request(self, engine_backend):
+        import threading
+        import time
+
+        from steerability.algorithms.core.execution import CancelToken, GenerationCancelled
+
+        item = _greedy_item(engine_backend.tokenizer, "Once upon a time")
+        params = GenerationParams(max_new_tokens=480, min_new_tokens=480, greedy=True)
+        token = CancelToken()
+        errors = []
+
+        def run():
+            try:
+                with engine_backend.open_session() as session:
+                    session.generate([item], params, cancel_token=token)
+            except BaseException as error:
+                errors.append(error)
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        time.sleep(0.3)
+        token.cancel()
+        thread.join(60)
+
+        assert len(errors) == 1 and isinstance(errors[0], GenerationCancelled)
+        deadline = time.monotonic() + 10
+        while engine_backend._engine.output_processor.get_num_unfinished_requests() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert engine_backend._engine.output_processor.get_num_unfinished_requests() == 0
+
+    def test_pipeline_generate_with_a_cancelled_token_raises(self, engine_backend):
+        import threading
+        import time
+
+        from steerability.algorithms.core.execution import CancelToken, GenerationCancelled
+
+        pipeline = SteeringPipeline(backend=engine_backend.spec, tokenizer=_tokenizer())
+        pipeline._backends[engine_backend.spec] = engine_backend
+        pipeline.steer()
+        assert pipeline.supports_concurrent_generate
+        token = CancelToken()
+        errors = []
+
+        def run():
+            try:
+                pipeline.generate(
+                    text="Once upon a time", max_new_tokens=480, min_new_tokens=480, do_sample=False,
+                    cancel_token=token,
+                )
+            except BaseException as error:
+                errors.append(error)
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        time.sleep(0.3)
+        token.cancel()
+        thread.join(60)
+        assert len(errors) == 1 and isinstance(errors[0], GenerationCancelled)

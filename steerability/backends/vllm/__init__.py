@@ -4,9 +4,11 @@
 This package imports cleanly without vLLM installed. The capability tables (`capabilities.py`)
 are static data used by `check()`; the strict parameter-rendering table and the request/response
 mapping helpers (`rendering.py`) are plain functions; the two backend classes and their
-backend-side helpers live in `backend.py`, and the request sessions in `session.py`. Constructing
-`VLLMBackend` requires the `vllm` optional dependency (it boots an engine); `VLLMServeBackend`
-needs only a reachable vLLM server.
+backend-side helpers live in `backend.py`, and the request sessions in `session.py`. The offline
+backend runs its `AsyncLLM` engine on the event-loop thread in `engine_thread.py`, and its
+sessions submit one engine request per item, which lets concurrent calls share the engine's
+running batch. Constructing `VLLMBackend` requires the `vllm` optional dependency (it boots an
+engine); `VLLMServeBackend` needs only a reachable vLLM server.
 """
 from steerability.backends.vllm.backend import VLLMBackend, VLLMServeBackend
 from steerability.backends.vllm.capabilities import VLLM_BASELINE_CAPABILITIES

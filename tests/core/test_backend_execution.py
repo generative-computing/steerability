@@ -1131,7 +1131,7 @@ class _FakeInnerSession:
         self._row_ids = row_ids
         self.tokenizer = type("_T", (), {"pad_token_id": pad_token_id})()
 
-    def generate(self, items, params):
+    def generate(self, items, params, *, cancel_token=None):
         from steerability.algorithms.core.execution.payloads import ItemResult
 
         return [

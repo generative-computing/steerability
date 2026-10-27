@@ -176,7 +176,7 @@ class TestWireAnchorRewrite:
         captured = {}
 
         class _ProbeSession:
-            def generate(self, items, params):
+            def generate(self, items, params, *, cancel_token=None):
                 captured["items"] = items
                 return []
 
