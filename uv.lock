@@ -7707,7 +7707,7 @@ wheels = [
 [[package]]
 name = "vllm-hook-plugins"
 version = "0.4.0"
-source = { git = "https://github.com/IBM/vLLM-Hook.git?subdirectory=vllm_hook_plugins&rev=steerability-challenge#825440323db1cd18af2da9b89b150fde2bc60cfe" }
+source = { git = "https://github.com/IBM/vLLM-Hook.git?subdirectory=vllm_hook_plugins&rev=steerability-challenge#b479aed90ae9c43e74be2c907dcfea9a182e5dfa" }
 dependencies = [
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
