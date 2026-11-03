@@ -47,11 +47,8 @@ class CPOArgs(BaseArgs):
     )
 
     trust_remote_code: bool = field(
-        default=True,
-        metadata={"help": (
-            "Trust remote code when loading `embedding_model`. Defaults to True for the default "
-            "encoder, which ships custom modeling code. Set False for standard encoders."
-        )},
+        default=False,
+        metadata={"help": "Trust remote code when loading `embedding_model`."},
     )
 
     pca_query_dim: int = field(
