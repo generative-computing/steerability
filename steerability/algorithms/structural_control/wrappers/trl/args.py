@@ -49,7 +49,7 @@ class TRLArgs(BaseArgs):
     logging_steps: int = 10
     report_to: str | None = None
     seed: int | None = None
-    resume_from_checkpoint: str | None = None  # checkpoint directory passed to trainer.train(); unsupported by PPO
+    resume_from_checkpoint: str | None = None  # checkpoint directory passed to trainer.train()
 
     # PEFT knobs
     use_peft: bool = False

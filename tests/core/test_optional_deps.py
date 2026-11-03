@@ -71,11 +71,11 @@ def test_optional_map_matches_pyproject():
         )
 
 
-def test_all_extra_is_eval():
-    """`all` is every extra that coexists on every platform; today that is eval alone."""
+def test_all_extra_is_eval_and_merging():
+    """`all` is every extra that coexists on every platform, i.e., eval and merging."""
     with PYPROJECT.open("rb") as handle:
         pyproject = tomllib.load(handle)
 
     declared = set(pyproject["project"]["optional-dependencies"]["all"])
 
-    assert declared == {"steerability[eval]"}
+    assert declared == {"steerability[eval,merging]"}

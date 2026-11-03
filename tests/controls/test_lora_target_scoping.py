@@ -20,8 +20,6 @@ from steerability.algorithms.structural_control.wrappers.trl.dpotrainer import D
 from steerability.algorithms.structural_control.wrappers.trl.dpotrainer import base_mixin as dpo_mixin
 from steerability.algorithms.structural_control.wrappers.trl.grpotrainer import GRPO
 from steerability.algorithms.structural_control.wrappers.trl.grpotrainer import base_mixin as grpo_mixin
-from steerability.algorithms.structural_control.wrappers.trl.ppotrainer import PPO
-from steerability.algorithms.structural_control.wrappers.trl.ppotrainer import base_mixin as ppo_mixin
 from steerability.algorithms.structural_control.wrappers.trl.sfttrainer import SFT
 from steerability.algorithms.structural_control.wrappers.trl.sfttrainer import base_mixin as sft_mixin
 from tests.utils.tiny_models import tiny_gemma3_conditional, tiny_gpt2, tiny_llama, tiny_lora
@@ -188,14 +186,6 @@ class _RecordingTrainer:
         pass
 
 
-class _ScoringModelStub(nn.Module):
-    """A sequence-classification stand-in for PPO's reward and value models."""
-
-    def __init__(self, vocab_size: int) -> None:
-        super().__init__()
-        self.config = SimpleNamespace(vocab_size=vocab_size)
-
-
 @pytest.fixture
 def recorder(monkeypatch):
     """The recording trainer, with a cleared log, installed into every TRL mixin module."""
@@ -203,13 +193,7 @@ def recorder(monkeypatch):
     monkeypatch.setattr(sft_mixin, "SFTTrainer", _RecordingTrainer)
     monkeypatch.setattr(dpo_mixin, "DPOTrainer", _RecordingTrainer)
     monkeypatch.setattr(grpo_mixin, "GRPOTrainer", _RecordingTrainer)
-    monkeypatch.setattr(ppo_mixin, "PPOTrainer", _RecordingTrainer)
     monkeypatch.setattr(dpo_mixin, "standardize_preference_dataset", lambda dataset, **kwargs: dataset)
-    monkeypatch.setattr(
-        ppo_mixin.AutoModelForSequenceClassification,
-        "from_pretrained",
-        classmethod(lambda cls, path, **kwargs: _ScoringModelStub(vocab_size=10_000)),
-    )
     return _RecordingTrainer
 
 
@@ -238,18 +222,13 @@ def _controls(tmp_path):
             per_device_train_batch_size=2,
             **common,
         ),
-        "ppo": PPO(
-            train_dataset=Dataset.from_list([{"prompt": "p"}]),
-            reward_model_name_or_path="reward/path",
-            **common,
-        ),
     }
 
 
 class TestMixinWiring:
     """Every TRL wrapper hands the trainer a config scoped to the resolved decoder stack."""
 
-    @pytest.mark.parametrize("wrapper", ["sft", "dpo", "grpo", "ppo"])
+    @pytest.mark.parametrize("wrapper", ["sft", "dpo", "grpo"])
     def test_peft_config_targets_the_decoder_stack(self, wrapper, recorder, mock_tokenizer, tmp_path):
         control = _controls(tmp_path)[wrapper]
         control.steer(tiny_gemma3_conditional(), tokenizer=mock_tokenizer)
@@ -257,7 +236,7 @@ class TestMixinWiring:
         assert len(recorder.configs) == 1
         assert recorder.configs[0].target_modules == GEMMA_PATTERN
 
-    @pytest.mark.parametrize("wrapper", ["sft", "dpo", "grpo", "ppo"])
+    @pytest.mark.parametrize("wrapper", ["sft", "dpo", "grpo"])
     def test_declared_target_modules_are_unchanged(self, wrapper, recorder, mock_tokenizer, tmp_path):
         control = _controls(tmp_path)[wrapper]
         control.steer(tiny_gemma3_conditional(), tokenizer=mock_tokenizer)

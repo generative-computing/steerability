@@ -1,4 +1,4 @@
-"""The resume_from_checkpoint path reaches trainer.train() for SFT/DPO/GRPO and is rejected by PPO.
+"""The resume_from_checkpoint path reaches trainer.train() for SFT/DPO/GRPO.
 
 Model-free and CPU-only: the trainer class in each mixin module is replaced with a recording stub
 that captures the resume_from_checkpoint value passed to train(), the model is a plain
@@ -16,7 +16,6 @@ from steerability.algorithms.structural_control.wrappers.trl.dpotrainer import D
 from steerability.algorithms.structural_control.wrappers.trl.dpotrainer import base_mixin as dpo_mixin
 from steerability.algorithms.structural_control.wrappers.trl.grpotrainer import GRPO
 from steerability.algorithms.structural_control.wrappers.trl.grpotrainer import base_mixin as grpo_mixin
-from steerability.algorithms.structural_control.wrappers.trl.ppotrainer import PPO
 from steerability.algorithms.structural_control.wrappers.trl.sfttrainer import SFT
 from steerability.algorithms.structural_control.wrappers.trl.sfttrainer import base_mixin as sft_mixin
 
@@ -103,18 +102,6 @@ def test_unset_resume_records_none(recorder, mock_tokenizer, tmp_path):
     )
     control.steer(_model(), tokenizer=mock_tokenizer)
     assert recorder.calls == [None]
-
-
-def test_ppo_rejects_resume_before_trainer(mock_tokenizer, tmp_path):
-    control = PPO(
-        train_dataset=Dataset.from_list([{"prompt": "p"}]),
-        reward_model_name_or_path="x",
-        resume_from_checkpoint="ckpt",
-        output_dir=str(tmp_path),
-        training_args={"use_cpu": True},
-    )
-    with pytest.raises(ValueError, match="resume_from_checkpoint"):
-        control.steer(_model(), tokenizer=mock_tokenizer)
 
 
 class _ConfigRecordingTrainer(_RecordingTrainer):

@@ -25,17 +25,8 @@ from steerability.algorithms.structural_control.wrappers.trl.base_mixin import r
 from steerability.algorithms.structural_control.wrappers.trl.dpotrainer import DPO
 from steerability.algorithms.structural_control.wrappers.trl.dpotrainer.args import DPOArgs
 from steerability.algorithms.structural_control.wrappers.trl.grpotrainer.args import GRPOArgs
-from steerability.algorithms.structural_control.wrappers.trl.ppotrainer.args import PPOArgs
 from steerability.algorithms.structural_control.wrappers.trl.sfttrainer.args import SFTArgs
 from steerability.algorithms.structural_control.wrappers.trl.sfttrainer.control import SFT
-
-try:
-    from trl.experimental.ppo import PPOConfig
-
-    _PPO_CONFIG_AVAILABLE = True
-except ImportError:
-    PPOConfig = None
-    _PPO_CONFIG_AVAILABLE = False
 
 
 def _reward_stub(prompts, completions, **kwargs):
@@ -73,13 +64,6 @@ def _audit_cases():
             },
         ),
     ]
-    ppo_case = (PPOArgs, PPOConfig, {"reward_model_name_or_path": "x"})
-    cases.append(
-        pytest.param(
-            *ppo_case,
-            marks=pytest.mark.skipif(not _PPO_CONFIG_AVAILABLE, reason="trl.experimental.ppo not importable"),
-        )
-    )
     return cases
 
 

@@ -21,7 +21,6 @@ import torch
 from steerability.algorithms.structural_control.wrappers.trl.apotrainer import APO
 from steerability.algorithms.structural_control.wrappers.trl.dpotrainer import DPO
 from steerability.algorithms.structural_control.wrappers.trl.grpotrainer import GRPO
-from steerability.algorithms.structural_control.wrappers.trl.ppotrainer import PPO
 from steerability.algorithms.structural_control.wrappers.trl.sfttrainer import SFT
 from tests.utils.tiny_models import tiny_llama, wordlevel_tokenizer
 
@@ -34,31 +33,7 @@ def _reward_stub(prompts, completions, **kwargs):
     return [float(len(c)) for c in completions]
 
 
-@pytest.fixture(scope="session")
-def tiny_reward_dir(tmp_path_factory):
-    """A saved tiny sequence-classification model, loadable as PPO's reward/value reference.
-
-    `vocab_size` matches the word-level tokenizer's length so PPO's reward/value vocab check passes,
-    and `num_labels=1` matches the wrapper's `from_pretrained(num_labels=1)` so the scoring head is
-    not reinitialized.
-    """
-    from transformers import LlamaConfig, LlamaForSequenceClassification
-
-    path = tmp_path_factory.mktemp("tiny-reward")
-    config = LlamaConfig(
-        num_hidden_layers=1,
-        hidden_size=16,
-        num_attention_heads=2,
-        intermediate_size=32,
-        vocab_size=len(wordlevel_tokenizer()),
-        num_labels=1,
-        pad_token_id=2,
-    )
-    LlamaForSequenceClassification(config).save_pretrained(path)
-    return str(path)
-
-
-def _make_control(name, tiny_reward_dir):
+def _make_control(name):
     if name == "SFT":
         return SFT(train_dataset=None, load_best_model_at_end=False, training_args=dict(CPU_TRAINING_ARGS))
     if name == "DPO":
@@ -73,19 +48,12 @@ def _make_control(name, tiny_reward_dir):
             per_device_train_batch_size=2,
             training_args=dict(CPU_TRAINING_ARGS),
         )
-    if name == "PPO":
-        return PPO(
-            train_dataset=None,
-            reward_model_name_or_path=tiny_reward_dir,
-            load_best_model_at_end=False,
-            training_args=dict(CPU_TRAINING_ARGS),
-        )
     raise AssertionError(f"unknown control {name}")
 
 
-@pytest.mark.parametrize("name", ["SFT", "DPO", "APO", "GRPO", "PPO"])
-def test_no_train_steer_releases_the_model(name, tiny_reward_dir):
-    control = _make_control(name, tiny_reward_dir)
+@pytest.mark.parametrize("name", ["SFT", "DPO", "APO", "GRPO"])
+def test_no_train_steer_releases_the_model(name):
+    control = _make_control(name)
     tokenizer = wordlevel_tokenizer()
 
     model = tiny_llama()
@@ -103,7 +71,7 @@ def test_no_train_steer_releases_the_model(name, tiny_reward_dir):
     # the model is collectable once every local reference is dropped, which is exactly what the
     # pipeline's free protocol checks after it releases its own reference (see verify_stage_released)
     assert ref() is None, f"{name} leaked the staged model (weakref still alive after gc)"
-    # blanket: catches a retained trainer / ref model / value model, which is a different object than
+    # blanket: catches a retained trainer / ref model, which is a different object than
     # the staged policy and so invisible to an identity check, but the same residency leak
     module_attrs = [key for key, value in vars(control).items() if isinstance(value, torch.nn.Module)]
     assert module_attrs == [], f"{name} retained nn.Module attribute(s): {module_attrs}"
