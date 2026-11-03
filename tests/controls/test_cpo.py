@@ -444,14 +444,14 @@ class TestCPOMemoryRoundTrip:
 
 
 class TestCPOTrustRemoteCode:
-    """CPO is the documented exception: `trust_remote_code` defaults to True for the paper-default encoder."""
+    """`trust_remote_code` defaults to False; the default encoder loads through the `transformers` model class."""
 
-    def test_args_default_true(self, offline_rows):
-        assert CPOArgs(seed_prompt="x", offline_data=offline_rows).trust_remote_code is True
+    def test_args_default_false(self, offline_rows):
+        assert CPOArgs(seed_prompt="x", offline_data=offline_rows).trust_remote_code is False
 
-    def test_args_opt_out_false(self, offline_rows):
-        args = CPOArgs(seed_prompt="x", offline_data=offline_rows, trust_remote_code=False)
-        assert args.trust_remote_code is False
+    def test_args_opt_in_true(self, offline_rows):
+        args = CPOArgs(seed_prompt="x", offline_data=offline_rows, trust_remote_code=True)
+        assert args.trust_remote_code is True
 
 
 class TestCPOBackendPosture:

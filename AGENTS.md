@@ -64,7 +64,7 @@ steerability/
 │   │   └── common/             # building blocks: drivers, processors, scorers, values, criteria, kv_cache,
 │   │                            # candidates
 │   └── structural_control/      # load_checkpoint/ and load_lora/ (artifact loaders; frozen forms of trained
-│       └── wrappers/            # structural controls); wrappers/: trl/ (sft, dpo, ppo, grpo, apo) and mergekit/
+│       └── wrappers/            # structural controls); wrappers/: trl/ (sft, dpo, grpo, apo) and mergekit/
 ├── spipe/                       # .spipe serialization: SPipe, manifest format, value codec,
 │                                # content-addressed artifact store, freeze orchestration
 ├── backends/                    # huggingface/ (HFBackend, ExclusiveSession); vllm/ (VLLMBackend, VLLMServeBackend)
@@ -100,15 +100,13 @@ Optional extras, in three tiers:
   stays inside trl's supported vLLM range
 - workflows: `eval`, the Inspect AI evaluation stack plus matplotlib and seaborn for `evaluation/plotting.py`
 - method-specific: `merging` (MergeKit)
-- `all`: `eval`
+- `all`: `eval` and `merging`
 
 Contributor tooling lives in `[dependency-groups]`: `dev` (pytest, pre-commit, the plugin core, and the `notebooks`
 group), `notebooks` (notebook, ipywidgets, textstat, nltk), and `docs` (site tooling). `uv sync` installs `dev` by
 default; add `--group docs` or `--group notebooks` as needed.
 
-`merging` cannot share an environment with `eval` (MergeKit pins an older pydantic than Inspect requires), so it stays
-out of `all` and `vllm`; `pyproject.toml` declares these as `[tool.uv] conflicts`. The optional-module-to-extra mapping
-lives in `OPTIONAL_MODULE_EXTRAS` (`steerability/utils/optional.py`).
+The optional-module-to-extra mapping lives in `OPTIONAL_MODULE_EXTRAS` (`steerability/utils/optional.py`).
 
 Hugging Face access uses the standard mechanism: `hf auth login` once, or `HF_TOKEN=hf_***` in the environment. Some
 models (e.g. `meta-llama/*`) are gated; the account behind the token needs access on the model's Hub page. Never commit
@@ -202,8 +200,7 @@ The registered names at the time of writing:
   `deal`, `dexperts`, `phased_decoding`, `rad`, `routed_decoding`, `sasa`, `search_decoding`, `stopping_rules`,
   `value_guidance`
 - structural: `load_checkpoint`, `load_lora` (artifact loaders, also the frozen forms of trained structural controls
-  in a `.spipe`), `mergekit`, `sft`, `dpo`, `ppo`, `grpo`, `apo` (MergeKit and TRL wrappers; `ppo` is registered
-  only when the installed TRL provides `trl.experimental.ppo`)
+  in a `.spipe`), `mergekit`, `sft`, `dpo`, `grpo`, `apo` (MergeKit and TRL wrappers)
 
 ### Pipeline semantics
 

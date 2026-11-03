@@ -23,7 +23,7 @@ class TextEncoder:
         self,
         model_name_or_path: str,
         device: str | torch.device | None = None,
-        trust_remote_code: bool = True,
+        trust_remote_code: bool = False,
     ) -> None:
         self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
         self.model = AutoModel.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)

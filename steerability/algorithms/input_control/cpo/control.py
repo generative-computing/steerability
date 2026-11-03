@@ -95,7 +95,7 @@ class CPO(InputControl):
     offline_data: list[dict] | None = None
     n_prompts_per_query: int = 200
     embedding_model: str = "nomic-ai/nomic-embed-text-v1.5"
-    trust_remote_code: bool = True
+    trust_remote_code: bool = False
     pca_query_dim: int = 40
     pca_prompt_dim: int = 15
     prompt_lm: Any = None

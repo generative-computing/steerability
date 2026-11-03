@@ -45,15 +45,13 @@ grouped in three tiers:
 - Backends: `vllm`, the vLLM execution backends (offline engine or server) plus the `vllm_hook_plugins` core. This
   extra pulls in `trl[vllm]` such that the resolved vLLM version stays inside TRL's supported range.
 - Workflows: `eval`, the Inspect AI evaluation stack and the plotting utilities in `evaluation/plotting.py`.
-- Method-specific: `merging`, the MergeKit structural control, isolated because MergeKit pins an older pydantic than
-  Inspect requires.
+- Method-specific: `merging`, the MergeKit structural control.
 
 Constrained decoding on the Hugging Face backend uses xgrammar, which is a core dependency; on vLLM backends the
 constraint lowers to native structured outputs.
 
-The umbrella `all` extra currently installs `eval`; it is the stable name for every extra that can share one
-environment. Install `merging` and `vllm` by name, e.g., `uv pip install '.[vllm]'`. Note that `merging` cannot share
-an environment with `eval`; `pyproject.toml` declares this as a `[tool.uv]` conflict.
+The umbrella `all` extra installs `eval` and `merging`; it is the stable name for every extra that can share one
+environment on every platform. Install `vllm` by name, e.g., `uv pip install '.[vllm]'`.
 
 Contributors install with `uv sync --extra all`, which creates the environment, installs the toolkit in editable mode,
 and adds the `dev` dependency group (pytest, pre-commit, notebook tooling). Add `--group docs` to build the

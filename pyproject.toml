@@ -51,9 +51,9 @@ dependencies = [
 # optional extras: vllm, eval, merging
 [project.optional-dependencies]
 vllm = [
-    "vllm>=0.26.0,<1.0.0",
+    "vllm>=0.32.0,<1.0.0",
     # keeps the resolved vLLM inside trl's supported range
-    "trl[vllm]",
+    "trl[vllm]>=1.17.0",
     "vllm-hook-plugins @ git+https://github.com/IBM/vLLM-Hook.git@steerability-challenge#subdirectory=vllm_hook_plugins",
 ]
 eval = [
@@ -63,20 +63,18 @@ eval = [
     "seaborn>=0.13.0,<0.14.0",
     "tqdm>=4.66.5,<5.0.0",
 ]
-# pinned main commit: 0.1.4 on PyPI never calls `model_rebuild()` on its torch-typed
-# pydantic models and fails at merge time
 merging = [
-    "mergekit @ git+https://github.com/arcee-ai/mergekit.git@a6e402884ba9bc30da7f23e8304a35f19485de95",
+    "mergekit>=0.1.5,<0.2.0",
 ]
 # every extra that coexists in one environment on every platform
 all = [
-    "steerability[eval]",
+    "steerability[eval,merging]",
 ]
 
 # contributor tooling; `uv sync` installs `dev` by default
 [dependency-groups]
 dev = [
-    "pytest>=8.3.2,<9.0.0",
+    "pytest>=9.0.3,<10.0.0",
     "pre-commit>=4.3.0",
     "vllm-hook-plugins @ git+https://github.com/IBM/vLLM-Hook.git@steerability-challenge#subdirectory=vllm_hook_plugins",
     { include-group = "notebooks" },
@@ -107,13 +105,6 @@ docs = [
 
 # tools
 [tool.uv]
-# mergekit pins pydantic~=2.10, which cannot import under the pydantic>=2.13 that inspect-ai
-# requires; its safetensors pin (~=0.5) conflicts with vllm's (>=0.6.2)
-conflicts = [
-    [{ extra = "merging" }, { extra = "eval" }],
-    [{ extra = "merging" }, { extra = "all" }],
-    [{ extra = "merging" }, { extra = "vllm" }],
-]
 # aiohttp is a transitive dependency; releases before 3.14.4 have unbounded memory/CPU use
 # (GHSA-2g87-pp6c-29x5)
 constraint-dependencies = ["aiohttp>=3.14.4"]

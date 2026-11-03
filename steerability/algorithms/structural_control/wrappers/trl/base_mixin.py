@@ -22,7 +22,7 @@ def resolve_config_kwargs(config_cls: type, training_args: dict[str, Any]) -> di
     does not declare would otherwise be passed to a constructor that does not accept it.
 
     Args:
-        config_cls: A TRL config dataclass (`DPOConfig`, `SFTConfig`, `GRPOConfig`, `PPOConfig`).
+        config_cls: A TRL config dataclass (`DPOConfig`, `SFTConfig`, `GRPOConfig`).
         training_args: The composed training arguments.
 
     Returns:
